@@ -18,6 +18,11 @@ test('tool names accept common model aliases', () => {
   const tools = new ToolExecutor({ projectPath: process.cwd() });
 
   assert.equal(tools.normalizeToolName('read_file'), 'Read');
+  assert.equal(tools.normalizeToolName('write_to_file'), 'Write');
+  assert.equal(tools.normalizeToolName('replace_in_file'), 'Edit');
+  assert.equal(tools.normalizeToolName('execute_command'), 'Bash');
+  assert.equal(tools.normalizeToolName('list_files'), 'Glob');
+  assert.equal(tools.normalizeToolName('search_files'), 'Grep');
   assert.equal(tools.normalizeToolName('shell'), 'Bash');
   assert.equal(tools.normalizeToolName('web-search'), 'WebSearch');
 });
