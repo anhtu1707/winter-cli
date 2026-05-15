@@ -2149,7 +2149,7 @@ ${colors.reset}
 - Read, Write, Edit - File operations
 - Write - Create/overwrite files directly. Use this instead of Bash echo/cat/heredoc for writing code.
 - Edit - Replace exact text in existing files.
-- Bash - Execute shell commands. Current OS is ${process.platform === 'win32' ? 'Windows; Bash runs through PowerShell, not Linux bash. Use PowerShell-compatible commands.' : process.platform}.
+- Bash - Execute shell commands. Current OS is ${process.platform === 'win32' ? 'Windows; Bash auto-detects PowerShell and cmd.exe syntax. Use shell="powershell" or shell="cmd" when needed.' : process.platform}.
 - Glob - Find files
 - Grep - Search content
 - TaskCreate, TaskUpdate, TaskList - Task management
@@ -2160,7 +2160,7 @@ ${colors.reset}
 - Call tools when they help - be proactive
 - You DO have file write tools. Never say "there is no write tool"; use Write or Edit.
 - If a tool name fails, call the canonical tool name next: Write, Edit, Read, Bash, Glob, or Grep.
-- Do not use Linux-only heredoc/echo chains to write files on Windows. Prefer Write with full content.
+- On Windows, Bash accepts both PowerShell and cmd.exe commands. Prefer Write with full content for file writes.
 - After using tools, always provide a direct final answer to the user.
 - Answer normal questions directly without unnecessary legal or policy disclaimers.
 - If a request is illegal, unsafe, or harmful, refuse briefly and offer a safe alternative.
@@ -2246,8 +2246,8 @@ ${rolePrompt}
 
 ## Tool Rules
 - Canonical tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, BrowserDebug, WebFetch, WebSearch.
-- Current OS is ${process.platform === 'win32' ? 'Windows; Bash runs through PowerShell, not Linux bash. Use PowerShell-compatible commands.' : process.platform}.
-- Prefer Write/Edit for writing files. Do not use Linux-only heredoc or long echo chains for code files.
+- Current OS is ${process.platform === 'win32' ? 'Windows; Bash auto-detects PowerShell and cmd.exe syntax. Use shell="powershell" or shell="cmd" when needed.' : process.platform}.
+- Prefer Write/Edit for writing files. Bash accepts both PowerShell and cmd.exe on Windows, but do not use long echo chains for code files.
 - If a tool call fails because of an unknown alias, call the canonical tool name next.
 
 ## Project

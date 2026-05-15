@@ -72,6 +72,46 @@ test('Windows Bash runs PowerShell commands and translates ls flags', async (t) 
   assert.match(ps.stdout, /a\.txt/);
 });
 
+test('Windows Bash accepts explicit cmd and PowerShell shells', async (t) => {
+  if (process.platform !== 'win32') {
+    t.skip('Windows-only shell behavior');
+    return;
+  }
+
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-shells-'));
+  const tools = new ToolExecutor({ projectPath: root });
+
+  const cmd = await tools.execute('Bash', {
+    shell: 'cmd',
+    command: 'echo hello>cmd.txt && type cmd.txt',
+  });
+  assert.equal(cmd.success, true);
+  assert.match(cmd.stdout, /hello/);
+
+  const ps = await tools.execute('Bash', {
+    shell: 'powershell',
+    command: "Set-Content -LiteralPath ps.txt -Value 'world'; Get-Content -LiteralPath ps.txt",
+  });
+  assert.equal(ps.success, true);
+  assert.match(ps.stdout, /world/);
+});
+
+test('Windows Bash auto-detects cmd chaining syntax', async (t) => {
+  if (process.platform !== 'win32') {
+    t.skip('Windows-only shell behavior');
+    return;
+  }
+
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-cmd-auto-'));
+  const tools = new ToolExecutor({ projectPath: root });
+  const result = await tools.execute('Bash', {
+    command: 'echo auto>auto.txt && type auto.txt',
+  });
+
+  assert.equal(result.success, true);
+  assert.match(result.stdout, /auto/);
+});
+
 test('Read lists directories instead of failing on directory paths', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'winter-tools-'));
   await mkdir(path.join(root, 'sub'));

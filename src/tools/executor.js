@@ -64,13 +64,14 @@ export class ToolExecutor {
       {
         type: 'function',
         name: 'Bash',
-        description: 'Execute a shell command. On Windows this runs in PowerShell, not Linux bash. Prefer Write/Edit for file writes.',
+        description: 'Execute a shell command. On Windows, shell auto-detects PowerShell or cmd.exe syntax. Prefer Write/Edit for file writes.',
         parameters: {
           type: 'object',
           properties: {
             command: { type: 'string', description: 'Shell command to execute' },
             cwd: { type: 'string', description: 'Working directory' },
-            timeout: { type: 'number', description: 'Timeout in ms (default: 60000)' }
+            timeout: { type: 'number', description: 'Timeout in ms (default: 60000)' },
+            shell: { type: 'string', description: 'Windows shell: auto, powershell, or cmd' }
           },
           required: ['command']
         }
@@ -216,7 +217,7 @@ export class ToolExecutor {
           newStr
         );
       case 'Bash':
-        return await this.bash(input.command ?? input.cmd, input.cwd || cwd, input.timeout);
+        return await this.bash(input.command ?? input.cmd, input.cwd || cwd, input.timeout, input.shell);
       case 'Glob':
         return await this.glob(input.pattern ?? input.glob ?? '**/*', input.cwd || input.path || cwd);
       case 'Grep':
@@ -444,7 +445,7 @@ export class ToolExecutor {
     }
   }
 
-  async bash(command, cwd, timeout = 60000) {
+  async bash(command, cwd, timeout = 60000, shell = 'auto') {
     if (typeof command !== 'string' || command.trim() === '') {
       return { success: false, error: 'command is required', exitCode: 1 };
     }
@@ -455,7 +456,10 @@ export class ToolExecutor {
     const heredocResult = await this.tryHandleHeredocWrite(command, cwd);
     if (heredocResult) return heredocResult;
 
-    command = await this.translateWindowsCommand(command);
+    let requestedShell = this.normalizeWindowsShell(shell);
+    const translated = await this.translateWindowsCommand(command);
+    command = translated.command;
+    if (requestedShell === 'auto' && translated.shell) requestedShell = translated.shell;
 
     // Security check
     const lowerCommand = command.toLowerCase();
@@ -467,12 +471,7 @@ export class ToolExecutor {
 
     try {
       const { stdout, stderr } = process.platform === 'win32'
-        ? await execFileAsync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command], {
-            cwd,
-            timeout,
-            windowsHide: true,
-            maxBuffer: 10 * 1024 * 1024,
-          })
+        ? await this.execWindowsCommand(command, cwd, timeout, requestedShell)
         : await execAsync(command, { cwd, timeout, shell: true, maxBuffer: 10 * 1024 * 1024 });
       return {
         success: true,
@@ -489,6 +488,50 @@ export class ToolExecutor {
         exitCode: error.code || 1
       };
     }
+  }
+
+  normalizeWindowsShell(shell) {
+    const value = String(shell || 'auto').toLowerCase();
+    if (['cmd', 'cmd.exe', 'commandprompt', 'command-prompt'].includes(value)) return 'cmd';
+    if (['powershell', 'pwsh', 'ps', 'powershell.exe'].includes(value)) return 'powershell';
+    return 'auto';
+  }
+
+  async execWindowsCommand(command, cwd, timeout, requestedShell = 'auto') {
+    const shell = requestedShell === 'auto' ? this.detectWindowsShell(command) : requestedShell;
+    if (shell === 'cmd') {
+      return await execFileAsync('cmd.exe', ['/d', '/s', '/c', command], {
+        cwd,
+        timeout,
+        windowsHide: true,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+    }
+
+    return await execFileAsync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command], {
+      cwd,
+      timeout,
+      windowsHide: true,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  }
+
+  detectWindowsShell(command) {
+    const trimmed = String(command || '').trim();
+    if (this.looksLikePowerShell(trimmed)) return 'powershell';
+    if (this.looksLikeCmd(trimmed)) return 'cmd';
+    return 'powershell';
+  }
+
+  looksLikePowerShell(command) {
+    return /(^|[;&|]\s*)(Get-|Set-|New-|Remove-|Copy-|Move-|Select-|Where-|ForEach-|Test-Path|Out-File|Write-Host|powershell(?:\.exe)?\b|pwsh\b)/i.test(command);
+  }
+
+  looksLikeCmd(command) {
+    return /\s(&&|\|\|)\s/.test(command)
+      || /(^|[&]\s*)(dir|copy|xcopy|del|erase|move|ren|type|echo|set|if|for|mkdir|rmdir)\b/i.test(command)
+      || /^\s*@?echo\s+/i.test(command)
+      || /(^|\s)(\/b|\/s|\/q|\/y)\b/i.test(command);
   }
 
   async glob(pattern, cwd) {
@@ -571,7 +614,7 @@ export class ToolExecutor {
   }
 
   async translateWindowsCommand(command) {
-    if (process.platform !== 'win32') return command;
+    if (process.platform !== 'win32') return { command };
 
     const trimmed = command.trim();
     const ls = trimmed.match(/^ls(?:\s+(.+))?$/i);
@@ -584,7 +627,10 @@ export class ToolExecutor {
       const fields = long
         ? 'Mode,Length,LastWriteTime,Name'
         : 'Name';
-      return `Get-ChildItem -LiteralPath ${this.quotePowerShellString(target)}${recurse ? ' -Recurse' : ''}${force ? ' -Force' : ''} | Select-Object ${fields}`;
+      return {
+        command: `Get-ChildItem -LiteralPath ${this.quotePowerShellString(target)}${recurse ? ' -Recurse' : ''}${force ? ' -Force' : ''} | Select-Object ${fields}`,
+        shell: 'powershell',
+      };
     }
 
     const cat = trimmed.match(/^cat\s+(.+)$/i);
@@ -594,13 +640,19 @@ export class ToolExecutor {
       try {
         const stat = await fs.stat(normalizedTarget);
         if (stat.isDirectory()) {
-          return `Get-ChildItem -LiteralPath ${this.quotePowerShellString(target)} -Force | Select-Object -ExpandProperty Name`;
+          return {
+            command: `Get-ChildItem -LiteralPath ${this.quotePowerShellString(target)} -Force | Select-Object -ExpandProperty Name`,
+            shell: 'powershell',
+          };
         }
       } catch {}
-      return `Get-Content -LiteralPath ${this.quotePowerShellString(target)}`;
+      return {
+        command: `Get-Content -LiteralPath ${this.quotePowerShellString(target)}`,
+        shell: 'powershell',
+      };
     }
 
-    return command;
+    return { command };
   }
 
   async tryHandleHeredocWrite(command, cwd) {
