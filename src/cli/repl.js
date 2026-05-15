@@ -1094,12 +1094,18 @@ export class WinterREPL {
       // Provider commands
       case '/provider':
         if (args[0]) {
-          const providerName = args[0];
-          if (this.ai.setProvider(providerName)) {
-            await this.config.setDefaultProvider(providerName);
-            console.log(`${colors.green}✓ Provider: ${providerName}${colors.reset}`);
+          const providerName = args[0].trim().toLowerCase();
+          const switched = typeof this.ai.switchProvider === 'function'
+            ? await this.ai.switchProvider(providerName)
+            : (this.ai.setProvider(providerName) ? providerName : null);
+
+          if (switched) {
+            await this.config.setDefaultProvider(switched);
+            console.log(`${colors.green}✓ Provider: ${switched}${colors.reset}`);
           } else {
+            const available = this.ai.listProviders().map(p => p.name).join(', ') || 'none';
             console.log(`${colors.red}Unknown provider: ${providerName}${colors.reset}`);
+            console.log(`${colors.dim}Available providers: ${available}${colors.reset}`);
           }
         } else {
           console.log(`${colors.cyan}Provider: ${this.ai.getActiveProvider()}${colors.reset}`);

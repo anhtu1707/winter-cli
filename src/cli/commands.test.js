@@ -93,6 +93,69 @@ test('skill and plugin commands default to list output', async () => {
   assert(logs.some(line => line.includes('Installed Plugins')));
 });
 
+test('slash provider command switches and persists provider', async () => {
+  const session = {
+    getSessionId: () => '12345678-1234-1234-1234-123456789abc',
+    addToMemory: async () => {},
+    getMemory: () => [],
+    getPlans: () => [],
+  };
+  const saved = [];
+  const ai = {
+    active: 'ollama',
+    providers: {
+      custom: { model: 'custom-model', ready: true },
+      ollama: { model: 'llama3', ready: true },
+    },
+    async switchProvider(name) {
+      if (!this.providers[name]) return null;
+      this.active = name;
+      return name;
+    },
+    getActiveProvider() {
+      return this.active;
+    },
+    listProviders() {
+      return Object.entries(this.providers).map(([name, provider]) => ({ name, ...provider }));
+    },
+  };
+  const parser = new CommandParser({
+    session,
+    ai,
+    config: {
+      setDefaultProvider: async provider => saved.push(provider),
+    },
+  });
+
+  await parser.parse(['/provider', 'custom']);
+
+  assert.equal(ai.getActiveProvider(), 'custom');
+  assert.deepEqual(saved, ['custom']);
+});
+
+test('slash providers command lists available providers', async () => {
+  const parser = createParser();
+  parser.ai = {
+    init: async () => {},
+    getActiveProvider: () => 'custom',
+    listProviders: () => [
+      { name: 'custom', ready: true, model: 'custom-model' },
+    ],
+  };
+  const logs = [];
+  const originalLog = console.log;
+
+  console.log = (...args) => logs.push(args.join(' '));
+  try {
+    await parser.parse(['/providers']);
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert(logs.some(line => line.includes('custom')));
+  assert(logs.some(line => line.includes('custom-model')));
+});
+
 test('plugin manager loads local plugin files via file URLs', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'winter-plugin-load-'));
   const pluginsDir = path.join(root, '.winter', 'plugins');

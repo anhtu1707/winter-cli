@@ -17,3 +17,6 @@ logs/
 *.log
 *.tmp
 *.temp
+*.rar
+*.zip
+*.tgz

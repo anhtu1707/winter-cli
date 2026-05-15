@@ -10,6 +10,9 @@ logs/
 *.temp
 *.sqlite
 *.sqlite3
+*.rar
+*.zip
+*.tgz
 
 # Local secrets
 .npmrc

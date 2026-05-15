@@ -100,3 +100,38 @@ test('callAllProviders calls every ready configured provider', async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test('switchProvider reloads config before rejecting a provider', async () => {
+  let cfg = {
+    defaultProvider: 'ollama',
+    ollama: {
+      baseURL: 'http://ollama.test/v1',
+      model: 'llama3',
+    },
+  };
+
+  const ai = new AIProviderManager({
+    async load() {
+      return cfg;
+    },
+  });
+  ai.loadAuthToken = async () => null;
+
+  await ai.init();
+  assert.equal(ai.getActiveProvider(), 'ollama');
+
+  cfg = {
+    ...cfg,
+    custom: {
+      baseURL: 'http://custom.test/v1',
+      apiKey: 'not-required',
+      model: 'custom-model',
+    },
+  };
+
+  const switched = await ai.switchProvider(' CUSTOM ');
+
+  assert.equal(switched, 'custom');
+  assert.equal(ai.getActiveProvider(), 'custom');
+  assert.equal(ai.providers.custom.model, 'custom-model');
+});

@@ -169,6 +169,37 @@ test('readCachedModels returns bundled cache model ids', async () => {
   assert(!models.includes('priority'));
 });
 
+test('provider slash command switches and persists configured provider', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  const saved = [];
+  repl.config = {
+    setDefaultProvider: async provider => saved.push(provider),
+  };
+  repl.ai = {
+    active: 'ollama',
+    providers: {
+      custom: { model: 'custom-model', ready: true },
+      ollama: { model: 'llama3', ready: true },
+    },
+    async switchProvider(name) {
+      if (!this.providers[name]) return null;
+      this.active = name;
+      return name;
+    },
+    getActiveProvider() {
+      return this.active;
+    },
+    listProviders() {
+      return Object.entries(this.providers).map(([name, provider]) => ({ name, ...provider }));
+    },
+  };
+
+  await repl.handleSlashCommand('/provider custom');
+
+  assert.equal(repl.ai.getActiveProvider(), 'custom');
+  assert.deepEqual(saved, ['custom']);
+});
+
 test('shouldUseTools keeps agent mode enabled by default', () => {
   const repl = new WinterREPL({ projectPath: process.cwd() });
 

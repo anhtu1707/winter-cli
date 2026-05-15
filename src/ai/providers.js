@@ -129,12 +129,36 @@ export class AIProviderManager {
     return null;
   }
 
+  normalizeProviderName(name) {
+    return String(name || '').trim().toLowerCase();
+  }
+
+  async reload() {
+    this.providers = {};
+    this.activeProvider = null;
+    this.initialized = false;
+    await this.init();
+  }
+
   setProvider(name) {
-    if (this.providers[name]) {
-      this.activeProvider = name;
+    const providerName = this.normalizeProviderName(name);
+    if (this.providers[providerName]) {
+      this.activeProvider = providerName;
       return true;
     }
     return false;
+  }
+
+  async switchProvider(name) {
+    const providerName = this.normalizeProviderName(name);
+    await this.init();
+
+    if (this.setProvider(providerName)) {
+      return providerName;
+    }
+
+    await this.reload();
+    return this.setProvider(providerName) ? providerName : null;
   }
 
   getActiveProvider() {

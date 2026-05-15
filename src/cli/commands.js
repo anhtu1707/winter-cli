@@ -86,6 +86,8 @@ export class CommandParser {
       '/memories': () => this.showMemories(),
       '/plans': () => this.showPlans(),
       '/cache': () => this.handleCache(args),
+      '/provider': () => this.handleProvider(args),
+      '/providers': () => this.showProviders(),
       '/exit': () => process.exit(0),
     };
 
@@ -278,6 +280,41 @@ export class CommandParser {
       default:
         console.log(`${colors.yellow}Usage: /cache <clear|stats>${colors.reset}`);
     }
+  }
+
+  async handleProvider(args) {
+    const providerName = args[0]?.trim().toLowerCase();
+
+    if (!providerName) {
+      await this.ai.init?.();
+      console.log(`${colors.cyan}Provider: ${this.ai.getActiveProvider()}${colors.reset}`);
+      return;
+    }
+
+    const switched = typeof this.ai.switchProvider === 'function'
+      ? await this.ai.switchProvider(providerName)
+      : (this.ai.setProvider(providerName) ? providerName : null);
+
+    if (switched) {
+      await this.config.setDefaultProvider(switched);
+      console.log(`${statusIcons.success} Provider: ${switched}`);
+      return;
+    }
+
+    const available = this.ai.listProviders?.().map(p => p.name).join(', ') || 'none';
+    console.log(`${colors.red}${statusIcons.error} Unknown provider: ${providerName}${colors.reset}`);
+    console.log(`${colors.dim}Available providers: ${available}${colors.reset}`);
+  }
+
+  async showProviders() {
+    await this.ai.init?.();
+    const providers = this.ai.listProviders?.() || [];
+    console.log(`\n${colors.cyan}Providers:${colors.reset}`);
+    providers.forEach(p => {
+      const status = p.ready ? statusIcons.online : statusIcons.offline;
+      const active = p.name === this.ai.getActiveProvider?.() ? ` ${colors.green}< active${colors.reset}` : '';
+      console.log(`  ${status} ${p.name} (${p.model})${active}`);
+    });
   }
 
   async showMemories() {
