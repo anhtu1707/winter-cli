@@ -165,3 +165,53 @@ test('runConversation executes streamed tool calls then streams final answer', a
   assert.equal(answer, 'Done');
   assert.deepEqual(executed, [{ name: 'Read', args: { file_path: 'README.md' } }]);
 });
+
+test('runConversation reports malformed tool arguments instead of executing empty args', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+
+  let streamCount = 0;
+  const executed = [];
+  repl.ai = {
+    tools: [],
+    providers: { custom: { model: 'test-model' } },
+    getActiveProvider: () => 'custom',
+    setTools(tools) {
+      this.tools = tools;
+    },
+    async *streamRequest() {
+      streamCount++;
+      if (streamCount === 1) {
+        yield {
+          raw: {
+            choices: [{
+              delta: {
+                tool_calls: [{
+                  index: 0,
+                  id: 'call-bad',
+                  type: 'function',
+                  function: { name: 'Bash', arguments: '{"command":' },
+                }],
+              },
+              finish_reason: 'tool_calls',
+            }],
+          },
+        };
+        return;
+      }
+
+      yield { content: 'Recovered' };
+    },
+  };
+  repl.tools = {
+    normalizeToolName: name => name,
+    async execute(name, args) {
+      executed.push({ name, args });
+      return { success: true };
+    },
+  };
+
+  const answer = await repl.runConversation([{ role: 'user', content: 'run it' }], 'Test', [{ name: 'Bash' }]);
+
+  assert.equal(answer, 'Recovered');
+  assert.deepEqual(executed, []);
+});

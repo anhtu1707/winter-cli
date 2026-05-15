@@ -1374,13 +1374,14 @@ ${colors.reset}
         for (const tc of toolCalls) {
           const { toolName, toolArgs } = tc;
           const canonicalToolName = this.tools.normalizeToolName(toolName);
-          const enrichedArgs = this.enrichToolArgs(canonicalToolName, toolArgs, messages);
+          const argParseError = toolArgs?.__toolArgParseError;
+          const enrichedArgs = argParseError ? {} : this.enrichToolArgs(canonicalToolName, toolArgs, messages);
 
           const icon = canonicalToolName === 'Bash' ? '⚙' : canonicalToolName === 'Read' ? '📖' : canonicalToolName === 'Write' ? '✏️' : canonicalToolName === 'Edit' ? '🔧' : canonicalToolName === 'Grep' ? '🔍' : canonicalToolName === 'Glob' ? '📂' : '⚡';
           console.log(`${colors.magenta}│${colors.reset} ${icon} ${colors.cyan}${colors.bright}${toolName}${colors.reset}`);
 
           let proceed = true;
-          if (canonicalToolName === 'Bash') {
+          if (canonicalToolName === 'Bash' && !argParseError) {
             const cmd = enrichedArgs.command || enrichedArgs.cmd || 'unknown';
             process.stdout.write(`${colors.magenta}│${colors.reset}   ${colors.yellow}⚠  AI muốn chạy: ${colors.bright}${cmd}${colors.reset}\n`);
             proceed = await new Promise(resolve => {
@@ -1394,7 +1395,13 @@ ${colors.reset}
           }
 
           let result;
-          if (!proceed) {
+          if (argParseError) {
+            result = {
+              success: false,
+              error: `Invalid ${canonicalToolName} tool arguments JSON: ${toolArgs.__toolArgParseError}`,
+              rawArgs: toolArgs.__rawToolArgs,
+            };
+          } else if (!proceed) {
             result = { success: false, error: 'User denied permission to execute this command.' };
           } else {
             result = toolName
@@ -1922,11 +1929,57 @@ ${colors.reset}
     if (typeof rawArgs === 'object') return rawArgs;
     if (typeof rawArgs !== 'string') return {};
 
+    const text = rawArgs.trim();
+    if (!text) return {};
+
     try {
-      return JSON.parse(rawArgs);
-    } catch {
-      return {};
+      return JSON.parse(text);
+    } catch (error) {
+      const extracted = this.extractFirstJsonObject(text);
+      if (extracted && extracted !== text) {
+        try {
+          return JSON.parse(extracted);
+        } catch {}
+      }
+
+      return {
+        __toolArgParseError: error.message,
+        __rawToolArgs: text.length > 800 ? `${text.slice(0, 800)}...` : text,
+      };
     }
+  }
+
+  extractFirstJsonObject(text) {
+    const start = text.indexOf('{');
+    if (start === -1) return null;
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (inString) continue;
+      if (ch === '{') depth++;
+      if (ch === '}') {
+        depth--;
+        if (depth === 0) return text.slice(start, i + 1);
+      }
+    }
+
+    return null;
   }
 
   formatToolCallsForMessage(toolCalls) {
