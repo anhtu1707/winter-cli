@@ -4,7 +4,6 @@ Winter is a powerful, AI-driven CLI coding assistant designed to supercharge you
 
 *Winter la mot tro ly lap trinh CLI manh me duoc dieu khien boi AI, duoc thiet ke de tang toc quy trinh phat trien cua ban truc tiep tu terminal. Lay cam hung tu cac cong cu hang dau nhu Claude Code, Winter mang den giao dien Cyberpunk dep mat, quan ly phien lam viec thong minh va kha nang chay agent tu tri vao moi truong cuc bo cua ban.*
 
-![Winter CLI Banner Mockup](C:\Users\PHUCANSOLUTIONS\.gemini\antigravity\brain\6c7f90f7-bffc-4e81-9012-c72f42905042\winter_banner_mockup_1778819268823.png)
 
 ## Key Features / Tinh nang noi bat
 
