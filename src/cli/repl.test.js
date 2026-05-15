@@ -49,6 +49,14 @@ test('readCachedModels returns bundled cache model ids', async () => {
   assert(!models.includes('priority'));
 });
 
+test('shouldUseTools keeps simple chat on the fast path', () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+
+  assert.equal(repl.shouldUseTools('trả lời đúng một từ: ok'), false);
+  assert.equal(repl.shouldUseTools('sửa lỗi trong src/cli/repl.js rồi chạy test'), true);
+  assert.equal(repl.shouldUseTools('git push lên github đi'), true);
+});
+
 test('runConversation streams direct assistant answers', async () => {
   const repl = new WinterREPL({ projectPath: process.cwd() });
   repl.simulateTyping = async (text) => {

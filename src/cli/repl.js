@@ -1479,6 +1479,7 @@ ${colors.reset}
     let content = '';
     const toolCallParts = [];
     let finishReason = null;
+    let printed = false;
 
     for await (const chunk of this.ai.streamRequest(messages, options)) {
       if (chunk.usage) this.addUsage(totalUsage, chunk.usage);
@@ -1505,11 +1506,18 @@ ${colors.reset}
       }
 
       if (chunk.content) {
+        if (!printed) {
+          if (this.spinner) this.spinner.stop();
+          process.stdout.write(`\n${colors.white}`);
+          printed = true;
+        }
         content += chunk.content;
+        process.stdout.write(chunk.content);
       }
     }
 
     if (this.spinner) this.spinner.stop();
+    if (printed) process.stdout.write(colors.reset);
 
     const rawToolCalls = toolCallParts
       .filter(Boolean)
@@ -1520,7 +1528,6 @@ ${colors.reset}
     const toolCalls = this.normalizeToolCalls(rawToolCalls);
 
     if (toolCalls.length === 0 && content) {
-      await this.simulateTyping(content);
       console.log(`\n${colors.dim}${this.formatAnswerFooter(startedAt, totalUsage)}${colors.reset}\n`);
       return {
         assistantMsg: { content },
@@ -1529,9 +1536,7 @@ ${colors.reset}
         finishReason,
       };
     } else if (content) {
-      process.stdout.write(`\n\x1b[36m🧠 Suy nghĩ:\x1b[0m \x1b[2m\x1b[3m`);
-      process.stdout.write(content.replace(/\n/g, '\n  '));
-      process.stdout.write('\x1b[0m\n');
+      process.stdout.write('\n');
     }
 
     return {
@@ -1546,11 +1551,7 @@ ${colors.reset}
 
   async simulateTyping(text, color = colors.white) {
     process.stdout.write(`\n${color}`);
-    const parts = text.split(/(\s+)/);
-    for (const part of parts) {
-      process.stdout.write(part);
-      await new Promise(r => setTimeout(r, 15 + Math.random() * 20));
-    }
+    process.stdout.write(text);
     process.stdout.write(colors.reset);
   }
 
@@ -1941,12 +1942,17 @@ ${colors.reset}
 
   async chat(message, imageAttachments = []) {
     try {
-      const context = await this.getProjectContext();
+      const needsTools = this.shouldUseTools(message, imageAttachments);
+      const context = needsTools ? await this.getProjectContext() : '';
       const messages = [
-        { role: 'system', content: this.getSystemPrompt(context) }
+        { role: 'system', content: needsTools ? this.getSystemPrompt(context) : this.getFastSystemPrompt() }
       ];
 
-      const history = this.session.getHistory(20);
+      const history = this.getPromptHistory({
+        limit: needsTools ? 20 : 4,
+        maxEntryChars: needsTools ? 2000 : 350,
+        maxTotalChars: needsTools ? 12000 : 900,
+      });
       for (const entry of history) {
         messages.push({ role: entry.role, content: entry.content });
       }
@@ -1966,7 +1972,7 @@ ${colors.reset}
         messages.push({ role: 'user', content: message });
       }
 
-      const tools = this.getAgentTools('general');
+      const tools = needsTools ? this.getAgentTools('general') : [];
       const finalContent = await this.runConversation(messages, 'Thinking', tools);
 
       await this.session.addToHistory({ role: 'user', content: message });
@@ -1975,6 +1981,36 @@ ${colors.reset}
     } catch (error) {
       console.log(`\n${colors.red}✖ Error: ${error.message}${colors.reset}\n`);
     }
+  }
+
+  shouldUseTools(message = '', imageAttachments = []) {
+    if (imageAttachments.length > 0) return false;
+    const text = String(message || '').toLowerCase();
+    if (/[a-z]:[\\/]|\.([cm]?[jt]sx?|json|md|css|html|py|java|go|rs|php|rb|toml|ya?ml)\b/i.test(text)) {
+      return true;
+    }
+    return /\b(read|write|edit|file|folder|repo|project|code|bug|fix|debug|test|build|run|git|commit|push|pull|npm|node|install|create|delete|copy|move|refactor|grep|glob|bash|terminal|powershell|deploy)\b|sửa|lỗi|đọc|thư mục|dự án|mã|kiểm tra|chạy|tạo|xóa|giao diện|ảnh|màn hình|đẩy|cài|build|test/i.test(text);
+  }
+
+  getPromptHistory({ limit = 20, maxEntryChars = 2000, maxTotalChars = 12000 } = {}) {
+    const raw = this.session.getHistory(limit);
+    const selected = [];
+    let total = 0;
+
+    for (let i = raw.length - 1; i >= 0; i--) {
+      const entry = raw[i];
+      if (!entry || typeof entry.content !== 'string') continue;
+
+      const trimmed = entry.content.length > maxEntryChars
+        ? `${entry.content.slice(0, maxEntryChars)}\n[history truncated]`
+        : entry.content;
+      if (total + trimmed.length > maxTotalChars && selected.length > 0) break;
+
+      selected.unshift({ role: entry.role, content: trimmed });
+      total += trimmed.length;
+    }
+
+    return selected;
   }
 
   async runAgent(role, task) {
@@ -2083,6 +2119,17 @@ ${memoryStr}${plansStr}
 ${context ? `\n## Project Context\n${context}` : ''}
 
 Be helpful, be precise, and get things done. Always respond in Vietnamese.`;
+  }
+
+  getFastSystemPrompt() {
+    const memories = this.session.getMemory();
+    const memoryStr = memories.length > 0
+      ? `\nContext nhớ ngắn:\n${memories.slice(-8).map(m => `- ${m.text}`).join('\n')}`
+      : '';
+
+    return `Bạn là Winter, trợ lý AI trả lời ngắn gọn bằng tiếng Việt.
+Trả lời trực tiếp, không gọi tool, không tự bịa thông tin.
+Nếu người dùng yêu cầu sửa file/chạy lệnh/đọc dự án thì nói ngắn rằng cần dùng chế độ tool.${memoryStr}`;
   }
 
   // Tab completion

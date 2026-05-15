@@ -1,11 +1,11 @@
 {
-  "name": "winter-cli",
+  "name": "winter-super-cli",
   "version": "2026.5.15",
   "description": "❄️ AI-Powered Development CLI with Interactive REPL",
   "type": "module",
   "main": "bin/winter.js",
   "bin": {
-    "winter": "./bin/winter.js"
+    "winter": "bin/winter.js"
   },
   "scripts": {
     "start": "node bin/winter.js",
