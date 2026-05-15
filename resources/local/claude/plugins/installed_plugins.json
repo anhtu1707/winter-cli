@@ -1,0 +1,37 @@
+{
+  "version": 2,
+  "plugins": {
+    "document-skills@anthropic-agent-skills": [
+      {
+        "scope": "project",
+        "installPath": "C:\\Users\\PHUCANSOLUTIONS\\.claude\\plugins\\cache\\anthropic-agent-skills\\document-skills\\d230a6dd6eb1",
+        "version": "d230a6dd6eb1",
+        "installedAt": "2026-05-05T03:05:46.462Z",
+        "lastUpdated": "2026-05-14T11:17:35.049Z",
+        "gitCommitSha": "d230a6dd6eb1a0dbee9fec55e2f00a96e28dff81",
+        "projectPath": "C:\\Users\\PHUCANSOLUTIONS"
+      }
+    ],
+    "example-skills@anthropic-agent-skills": [
+      {
+        "scope": "project",
+        "installPath": "C:\\Users\\PHUCANSOLUTIONS\\.claude\\plugins\\cache\\anthropic-agent-skills\\example-skills\\d230a6dd6eb1",
+        "version": "d230a6dd6eb1",
+        "installedAt": "2026-05-05T03:05:46.462Z",
+        "lastUpdated": "2026-05-14T11:17:35.049Z",
+        "gitCommitSha": "d230a6dd6eb1a0dbee9fec55e2f00a96e28dff81",
+        "projectPath": "C:\\Users\\PHUCANSOLUTIONS"
+      }
+    ],
+    "rust-analyzer-lsp@claude-plugins-official": [
+      {
+        "scope": "project",
+        "installPath": "C:\\Users\\PHUCANSOLUTIONS\\.claude\\plugins\\cache\\claude-plugins-official\\rust-analyzer-lsp\\1.0.0",
+        "version": "1.0.0",
+        "installedAt": "2026-05-13T09:27:15.963Z",
+        "lastUpdated": "2026-05-14T11:17:35.049Z",
+        "projectPath": "C:\\Users\\PHUCANSOLUTIONS"
+      }
+    ]
+  }
+}

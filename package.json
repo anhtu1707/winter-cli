@@ -1,0 +1,33 @@
+{
+  "name": "winter-cli",
+  "version": "2026.5.15",
+  "description": "❄️ AI-Powered Development CLI with Interactive REPL",
+  "type": "module",
+  "main": "bin/winter.js",
+  "bin": {
+    "winter": "./bin/winter.js"
+  },
+  "scripts": {
+    "start": "node bin/winter.js",
+    "dev": "node bin/winter.js",
+    "test": "node --test src/**/*.test.js"
+  },
+  "keywords": [
+    "cli",
+    "ai",
+    "coding",
+    "assistant",
+    "interactive",
+    "repl"
+  ],
+  "author": "Winter CLI",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "cli-highlight": "^2.1.11",
+    "diff": "^9.0.0",
+    "puppeteer": "^24.43.1"
+  }
+}

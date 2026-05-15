@@ -1,0 +1,84 @@
+model = "gpt-5.5"
+model_reasoning_effort = "medium"
+personality = "pragmatic"
+[mcp_servers]
+
+[windows]
+sandbox = "elevated"
+
+[features]
+multi_agent = true
+memories = true
+
+[projects.'E:\\dev\\28.01\\app']
+trust_level = "trusted"
+
+[projects.'E:\\dev\\07.03']
+trust_level = "trusted"
+
+[projects.'E:\\dev\\quản trị hệ thống']
+trust_level = "trusted"
+
+[projects.'E:\\dev\\18.03\\my-translator']
+trust_level = "trusted"
+
+[projects.'C:\\']
+trust_level = "trusted"
+
+[projects.'e:\\dev\\video-platform']
+trust_level = "trusted"
+
+[projects.'e:\\dev\\openclaw\\openclaw-dock']
+trust_level = "trusted"
+
+[projects.'e:\\dev\\web-book']
+trust_level = "trusted"
+
+[projects.'e:\\dev\\openclaw\\openclaw-dock\\openclaw-workspace']
+trust_level = "trusted"
+
+[projects.'e:\\dev\\autoipupdate']
+trust_level = "trusted"
+
+[projects.'e:\\dev\\24.03']
+trust_level = "trusted"
+
+[projects.'e:\\dev\\game']
+trust_level = "trusted"
+
+[projects.'e:\\dev\\app\\chakra']
+trust_level = "trusted"
+
+[projects.'e:\\dev\\app\\check-crack']
+trust_level = "trusted"
+
+[projects.'c:\\users\\phucansolutions']
+trust_level = "trusted"
+
+[projects.'e:\dev\app\winter']
+trust_level = "trusted"
+
+[tui.model_availability_nux]
+"gpt-5.5" = 4
+
+[marketplaces.openai-bundled]
+last_updated = "2026-05-06T10:19:28Z"
+source_type = "local"
+source = '\\\\?\\C:\\Users\\PHUCANSOLUTIONS\\.codex\\.tmp\\bundled-marketplaces\\openai-bundled'
+
+[marketplaces.openai-primary-runtime]
+last_updated = "2026-05-06T10:20:35Z"
+source_type = "local"
+source = '\\\\?\\C:\\Users\\PHUCANSOLUTIONS\\.cache\\codex-runtimes\\codex-primary-runtime\\plugins\\openai-primary-runtime'
+
+[plugins."browser-use@openai-bundled"]
+enabled = true
+
+[plugins."documents@openai-primary-runtime"]
+enabled = true
+
+[plugins."spreadsheets@openai-primary-runtime"]
+enabled = true
+
+[plugins."presentations@openai-primary-runtime"]
+enabled = true

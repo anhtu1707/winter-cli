@@ -1,0 +1,57 @@
+{
+    "generatedAt":  "2026-05-14T18:37:11.5585557+07:00",
+    "root":  "E:\\dev\\app\\winter\\resources\\local",
+    "localResources":  [
+                           {
+                               "name":  "agents.md",
+                               "path":  "E:\\dev\\app\\winter\\resources\\local\\agents.md",
+                               "files":  90,
+                               "bytes":  2546038
+                           },
+                           {
+                               "name":  "awesome-design-md",
+                               "path":  "E:\\dev\\app\\winter\\resources\\local\\awesome-design-md",
+                               "files":  142,
+                               "bytes":  1912402
+                           },
+                           {
+                               "name":  "claude",
+                               "path":  "E:\\dev\\app\\winter\\resources\\local\\claude",
+                               "files":  971,
+                               "bytes":  17626519
+                           },
+                           {
+                               "name":  "codex",
+                               "path":  "E:\\dev\\app\\winter\\resources\\local\\codex",
+                               "files":  259,
+                               "bytes":  3425257
+                           },
+                           {
+                               "name":  "karpathy-tools",
+                               "path":  "E:\\dev\\app\\winter\\resources\\local\\karpathy-tools",
+                               "files":  2,
+                               "bytes":  6068
+                           },
+                           {
+                               "name":  "manifest.json",
+                               "path":  "E:\\dev\\app\\winter\\resources\\local\\manifest.json",
+                               "files":  1,
+                               "bytes":  2936
+                           }
+                       ],
+    "excludedForSafety":  [
+                              "C:\\Users\\PHUCANSOLUTIONS\\.codex\\auth.json",
+                              "C:\\Users\\PHUCANSOLUTIONS\\.codex\\sessions",
+                              "C:\\Users\\PHUCANSOLUTIONS\\.codex\\history.jsonl",
+                              "C:\\Users\\PHUCANSOLUTIONS\\.codex\\*.sqlite*",
+                              "C:\\Users\\PHUCANSOLUTIONS\\.codex\\log and tmp/cache runtime folders",
+                              "C:\\Users\\PHUCANSOLUTIONS\\.claude\\history.jsonl",
+                              "C:\\Users\\PHUCANSOLUTIONS\\.claude\\sessions",
+                              "C:\\Users\\PHUCANSOLUTIONS\\.claude\\projects",
+                              "C:\\Users\\PHUCANSOLUTIONS\\.claude\\plugins\\cache",
+                              "runtime logs, tmp, cache, auth, local settings, and session state"
+                          ],
+    "redacted":  [
+                     "resources/local/claude/settings.json: ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN"
+                 ]
+}

@@ -1,0 +1,33 @@
+node_modules/
+
+# Runtime state
+.winter/
+.claude/
+sessions/
+logs/
+*.log
+*.tmp
+*.temp
+*.sqlite
+*.sqlite3
+
+# Local secrets
+.env
+.env.*
+!.env.example
+auth.json
+history.jsonl
+
+# Build and cache output
+dist/
+build/
+coverage/
+.cache/
+.parcel-cache/
+.turbo/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
