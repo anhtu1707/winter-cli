@@ -80,6 +80,7 @@ Check for these files in order:
 
 ### Tool Guidelines
 - Call tools proactively - don't just describe, DO
+- CHỦ ĐỘNG TÌM KIẾM: Khi người dùng yêu cầu sửa đổi hoặc thêm tính năng mà không chỉ định file cụ thể, AI PHẢI TỰ DÙNG các công cụ như `list_dir` hoặc `grep_search` để tìm kiếm file liên quan trong dự án. TUYỆT ĐỐI KHÔNG ĐƯỢC hỏi xin code hoặc xin đường dẫn file từ người dùng nếu có thể tự tìm thấy!
 - Prefer Read over describing code
 - Use Edit for small changes, Write for new files
 - Verify changes after execution

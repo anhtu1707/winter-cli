@@ -1422,17 +1422,25 @@ ${colors.reset}
             const maxLen = BOX_WIDTH - 8;
             const lines = summary.split('\n');
             for (const line of lines) {
-              if (line.length <= maxLen) {
-                console.log(`${colors.magenta}│${colors.reset}   ${statusIcon} ${colors.dim}${line}${colors.reset}`);
+              // Loại bỏ mã màu ANSI để tính toán độ dài và cắt dòng chuẩn xác
+              const cleanLine = line.replace(/\x1b\[[0-9;]*m/g, '');
+              
+              if (cleanLine.length <= maxLen) {
+                const padLen = BOX_WIDTH - 7 - cleanLine.length;
+                const padding = ' '.repeat(Math.max(0, padLen));
+                console.log(`${colors.magenta}│${colors.reset}   ${statusIcon} ${colors.dim}${cleanLine}${colors.reset}${padding}${colors.magenta}│${colors.reset}`);
               } else {
                 // Word wrap
-                let remaining = line;
+                let remaining = cleanLine;
                 let first = true;
                 while (remaining.length > 0) {
                   const chunk = remaining.substring(0, maxLen);
                   remaining = remaining.substring(maxLen);
                   const prefix = first ? statusIcon : ' ';
-                  console.log(`${colors.magenta}│${colors.reset}   ${prefix} ${colors.dim}${chunk}${colors.reset}`);
+                  
+                  const padLen = BOX_WIDTH - 7 - chunk.length;
+                  const padding = ' '.repeat(Math.max(0, padLen));
+                  console.log(`${colors.magenta}│${colors.reset}   ${prefix} ${colors.dim}${chunk}${colors.reset}${padding}${colors.magenta}│${colors.reset}`);
                   first = false;
                 }
               }
@@ -1676,19 +1684,41 @@ ${colors.reset}
 
     if (this.slashMenu.printedLines) {
       readline.moveCursor(process.stdout, 0, -this.slashMenu.printedLines);
-      readline.clearScreenDown(process.stdout);
     }
 
     process.stdout.write('\n');
+    readline.clearLine(process.stdout, 1);
     process.stdout.write(`${colors.dim}Commands${colors.reset}\n`);
-    matches.forEach((item, index) => {
+    
+    const maxDisplay = 5;
+    const displayedMatches = matches.slice(0, maxDisplay);
+
+    displayedMatches.forEach((item, index) => {
+      readline.clearLine(process.stdout, 1);
       const usage = item.usage ? ` ${colors.dim}${item.usage}${colors.reset}` : '';
       const pointer = index === this.slashMenu.selected ? `${colors.green}>${colors.reset}` : ' ';
       process.stdout.write(`${pointer} ${colors.cyan}${item.cmd}${colors.reset} ${colors.dim}${item.desc}${colors.reset}${usage}\n`);
     });
+
+    if (matches.length > maxDisplay) {
+      readline.clearLine(process.stdout, 1);
+      process.stdout.write(`  ${colors.dim}... và ${matches.length - maxDisplay} lệnh khác (gõ tiếp để lọc)${colors.reset}\n`);
+    }
+
+    readline.clearLine(process.stdout, 1);
     process.stdout.write(`${colors.dim}↑/↓ chọn · Enter/Tab dùng · Esc đóng${colors.reset}\n`);
 
-    this.slashMenu.printedLines = matches.length + 3;
+    // Xóa các dòng thừa nếu số lượng dòng mới ít hơn số lượng dòng cũ
+    const currentLines = Math.min(matches.length, maxDisplay) + 3 + (matches.length > maxDisplay ? 1 : 0);
+    if (this.slashMenu.printedLines > currentLines) {
+      for (let i = 0; i < this.slashMenu.printedLines - currentLines; i++) {
+        readline.clearLine(process.stdout, 1);
+        process.stdout.write('\n');
+      }
+      readline.moveCursor(process.stdout, 0, -(this.slashMenu.printedLines - currentLines));
+    }
+
+    this.slashMenu.printedLines = currentLines;
     this.rl.prompt(true);
   }
 
