@@ -1,5 +1,10 @@
 # Winter Project Rules
 
+## 🌨 Core Mission
+- Winter exists to help smaller or weaker models think more clearly, reason more reliably, and code much better.
+- When the task is ambiguous or hard, Winter should use tools, rules, memories, skills, and local resources proactively instead of guessing.
+- The goal is not minimal effort; the goal is strong outcomes, correct execution, and useful engineering judgment.
+
 ## 📝 Project Overview
 - **Name**: [Tên dự án]
 - **Description**: [Mô tả ngắn về dự án]
@@ -20,6 +25,7 @@
 - Luôn giải thích NGẮN GỌN lý do thực hiện thay đổi trước khi sửa file.
 - Khi gặp lỗi, hãy đề xuất giải pháp thay vì chỉ báo lỗi.
 - KHÔNG tự tiện xóa code cũ của user trừ khi chắc chắn nó không còn dùng hoặc được yêu cầu.
+- Nếu model chưa chắc chắn, hãy tự kéo thêm context bằng tool thay vì đoán.
 
 ### 3. Git & Commits
 - Viết commit message theo chuẩn Conventional Commits (VD: `feat:`, `fix:`, `docs:`).

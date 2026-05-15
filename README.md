@@ -26,7 +26,7 @@ To install Winter globally in your system, clone the repository and run:
 *De cai dat Winter tren toan he thong, hay clone repository va chay:*
 
 ```bash
-npm install -g winter-super-cli@latest.
+npm install -g winter-super-cli@latest
 ```
 
 *(Or run directly without installation using node bin/winter.js)*

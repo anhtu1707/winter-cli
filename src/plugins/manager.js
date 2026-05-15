@@ -6,6 +6,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { homedir } from 'os';
+import { pathToFileURL } from 'url';
 import { colors, statusIcons } from '../cli/snowflake-logo.js';
 
 export class PluginManager {
@@ -61,7 +62,8 @@ export class PluginManager {
       for (const file of files) {
         if (file.endsWith('.js')) {
           try {
-            const plugin = await import(path.join(this.pluginsDir, file));
+            const pluginPath = pathToFileURL(path.join(this.pluginsDir, file)).href;
+            const plugin = await import(pluginPath);
             plugins.push({
               name: plugin.default?.name || file.replace('.js', ''),
               version: plugin.default?.version || '1.0.0',

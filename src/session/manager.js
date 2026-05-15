@@ -33,6 +33,7 @@ export class SessionManager {
     if (options.sessionId) {
       const success = await this.loadSession(options.sessionId);
       if (success) {
+        await this.rememberProject(this.currentSession?.project || options.project || process.cwd());
         this.initialized = true;
         return;
       }
@@ -41,6 +42,7 @@ export class SessionManager {
 
     // Luôn tạo session mới nếu không yêu cầu load hoặc load thất bại
     await this.newSession(options);
+    await this.rememberProject(options.project || this.currentSession?.project || process.cwd());
     this.initialized = true;
   }
 
@@ -85,6 +87,8 @@ export class SessionManager {
     this.context = session.context;
     this.plans = session.plans;
     this.memory = session.memory;
+
+    await this.rememberProject(session.project || options.project || process.cwd());
 
     // Update current session pointer
     const currentPath = path.join(this.sessionsDir, 'active', 'current.json');
@@ -146,6 +150,27 @@ export class SessionManager {
       sessionId: this.currentSession?.id,
     });
     await this.saveSession();
+  }
+
+  // Backwards-compatible alias used by other modules
+  async addMemory(text, type = 'info') {
+    return this.addToMemory(text, type);
+  }
+
+  // Replace previous memory entries that start with a given prefix
+  // Handles both legacy string entries and object entries with `text`.
+  async replaceMemory(prefix, content, type = 'info') {
+    const mem = this.memory || [];
+    const filtered = mem.filter(m => {
+      if (!m) return true;
+      if (typeof m === 'string') return !m.startsWith(prefix);
+      if (typeof m === 'object' && m.text) return !m.text.startsWith(prefix);
+      return true;
+    });
+
+    this.memory = filtered;
+    await this.addToMemory(`${prefix}:
+${content}`, type);
   }
 
   async updateContext(key, value) {
@@ -269,8 +294,27 @@ export class SessionManager {
     this.plans = session.plans || [];
     this.memory = session.memory || [];
 
+    await this.rememberProject(session.project || process.cwd());
+
     await this.saveSession();
     return session;
+  }
+
+  async rememberProject(projectPath) {
+    if (!projectPath) return;
+
+    if (this.config?.setProjectCurrent) {
+      await this.config.setProjectCurrent(projectPath);
+      return;
+    }
+
+    if (this.config?.load && this.config?.save) {
+      const config = await this.config.load();
+      config.project = config.project || {};
+      config.project.current = projectPath;
+      config.project.lastOpenedAt = new Date().toISOString();
+      await this.config.save(config);
+    }
   }
 
   getSessionId() {

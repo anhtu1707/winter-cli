@@ -86,20 +86,47 @@ export class AIProviderManager {
   }
 
   async loadAuthToken() {
+    // 1) Honor explicit environment variables (highest priority)
+    const envToken = process.env.CLAUDE_AUTH_TOKEN || process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_TOKEN || null;
+    if (envToken) return envToken;
+
+    // 2) Look into user home directories (platform-agnostic, no hardcoded username)
     try {
       const fs = await import('fs');
-      const authPath = 'C:\\Users\\PHUCANSOLUTIONS\\.codex\\auth.json';
-      const data = JSON.parse(fs.readFileSync(authPath, 'utf8'));
-      return data.tokens?.access_token || null;
-    } catch {
-      // Try Claude's auth
-      try {
-        const fs = await import('fs');
-        const authPath = 'C:\\Users\\PHUCANSOLUTIONS\\.claude\\sessions\\*\\auth.json';
-        // This won't work with glob, so skip
-      } catch {}
-      return null;
+      const path = await import('path');
+      const os = await import('os');
+      const home = os.homedir();
+
+      // Try ~/.codex/auth.json
+      const codexAuth = path.join(home, '.codex', 'auth.json');
+      if (fs.existsSync(codexAuth)) {
+        try {
+          const data = JSON.parse(fs.readFileSync(codexAuth, 'utf8'));
+          return data.tokens?.access_token || data.access_token || null;
+        } catch {}
+      }
+
+      // Try ~/.claude/sessions/*/auth.json
+      const claudeSessionsDir = path.join(home, '.claude', 'sessions');
+      if (fs.existsSync(claudeSessionsDir)) {
+        const entries = await fs.promises.readdir(claudeSessionsDir, { withFileTypes: true });
+        for (const e of entries) {
+          if (!e.isDirectory()) continue;
+          const candidate = path.join(claudeSessionsDir, e.name, 'auth.json');
+          if (fs.existsSync(candidate)) {
+            try {
+              const data = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+              return data.tokens?.access_token || data.access_token || null;
+            } catch {}
+          }
+        }
+      }
+    } catch (err) {
+      // ignore and fall through
     }
+
+    // No token found
+    return null;
   }
 
   setProvider(name) {

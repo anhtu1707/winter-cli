@@ -27,6 +27,10 @@ export class ConfigLoader {
   getDefaults() {
     return {
       defaultProvider: 'ollama',
+      project: {
+        current: '',
+        lastOpenedAt: '',
+      },
       anthropic: {
         apiKey: '',
         model: 'claude-sonnet-4-20250514',
@@ -89,6 +93,14 @@ export class ConfigLoader {
     const config = await this.load();
     config[provider] = config[provider] || {};
     config[provider].model = model;
+    await this.save(config);
+  }
+
+  async setProjectCurrent(projectPath) {
+    const config = await this.load();
+    config.project = config.project || {};
+    config.project.current = projectPath;
+    config.project.lastOpenedAt = new Date().toISOString();
     await this.save(config);
   }
 }

@@ -10,6 +10,25 @@ import { DesignCommands } from '../design/commands.js';
 import { SkillManager } from '../skills/manager.js';
 import { PluginManager } from '../plugins/manager.js';
 
+const SECRET_KEY_PATTERN = /(api[-_]?key|auth[-_]?token|access[-_]?token|refresh[-_]?token|secret|password)/i;
+
+export function redactSecrets(value) {
+  if (Array.isArray(value)) {
+    return value.map(item => redactSecrets(item));
+  }
+
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      SECRET_KEY_PATTERN.test(key) ? '[redacted]' : redactSecrets(entry),
+    ])
+  );
+}
+
 export class CommandParser {
   constructor({ session, ai, config }) {
     this.session = session;
@@ -177,6 +196,7 @@ export class CommandParser {
     const [action, ...rest] = args;
 
     switch (action) {
+      case undefined:
       case 'list':
         const skills = await this.skills.listSkills();
         console.log(`\n${colors.cyan}Available Skills:${colors.reset}`);
@@ -199,16 +219,17 @@ export class CommandParser {
     const [action, ...rest] = args;
 
     switch (action) {
+      case undefined:
       case 'list':
         const plugins = await this.plugins.listPlugins();
         console.log(`\n${colors.cyan}Installed Plugins:${colors.reset}`);
         plugins.forEach(p => console.log(`  ${p.icon} ${p.name} v${p.version}`));
         break;
       case 'install':
-        console.log(`${statusIcons.success} Installing plugin: ${rest[0]}`);
+        await this.plugins.installPlugin(rest[0]);
         break;
       case 'remove':
-        console.log(`${statusIcons.success} Removed plugin: ${rest[0]}`);
+        await this.plugins.removePlugin(rest[0]);
         break;
       default:
         console.log(`${colors.yellow}Usage: winter plugin <list|install|remove>${colors.reset}`);
@@ -231,7 +252,7 @@ export class CommandParser {
   async handleConfig(args) {
     const config = await this.config.load();
     console.log(`\n${colors.cyan}Current Configuration:${colors.reset}`);
-    console.log(JSON.stringify(config, null, 2));
+    console.log(JSON.stringify(redactSecrets(config), null, 2));
   }
 
   async handleInit(args) {

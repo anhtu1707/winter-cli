@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 import { WinterREPL } from './repl.js';
 
@@ -23,6 +26,104 @@ test('resource paths point at bundled project resources', () => {
   assert.equal(paths.designs, 'E:\\dev\\app\\winter\\resources\\local\\awesome-design-md\\design-md');
 });
 
+test('project context includes winter.md rules', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-context-'));
+  await writeFile(
+    path.join(root, 'winter.md'),
+    '# Winter Rules\n\n- Always use Vietnamese\n- Keep changes surgical\n'
+  );
+
+  const repl = new WinterREPL({ projectPath: root });
+  const context = await repl.getProjectContext();
+
+  assert.match(context, /\[winter\.md\]/);
+  assert.match(context, /Always use Vietnamese/);
+  assert.match(context, /Keep changes surgical/);
+});
+
+test('project context includes local resource manifest summary', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  const context = await repl.getProjectContext();
+
+  assert.match(context, /\[Local Resources\]/);
+  assert.match(context, /agents\.md/);
+  assert.match(context, /awesome-design-md/);
+  assert.match(context, /codex/);
+});
+
+test('local resource context indexes Claude and Codex resource roots', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  const context = await repl.getLocalResourceContext();
+
+  assert.match(context, /Claude skills/);
+  assert.match(context, /skill-creator/);
+  assert.match(context, /vercel-react-best-practices/);
+  assert.match(context, /Codex skills/);
+  assert.match(context, /vibefigma/);
+  assert.match(context, /Codex memories/);
+});
+
+test('inferStartupSkills promotes design skills for React-like projects', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  repl.getStartupSkillCatalog = async () => new Set([
+    'coding',
+    'debug',
+    'refactor',
+    'test',
+    'design',
+    'web-design-guidelines',
+    'vercel-react-best-practices',
+  ]);
+  repl.getProjectSignals = async () => ['react', 'next', 'tsx', 'ui'];
+
+  const snapshot = await repl.inferStartupSkills();
+
+  assert(snapshot.activeSkills.includes('coding'));
+  assert(snapshot.activeSkills.includes('web-design-guidelines'));
+  assert(snapshot.activeSkills.includes('vercel-react-best-practices'));
+  assert(snapshot.activeSkills.includes('design'));
+});
+
+test('bootstrapProjectCapabilities creates a startup plan and stores skills', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  repl.getStartupSkillCatalog = async () => new Set(['coding', 'debug', 'refactor', 'test']);
+  repl.getProjectSignals = async () => ['node', 'cli'];
+
+  const contextStore = {};
+  const plans = [];
+  const memoryWrites = [];
+  repl.session = {
+    getContext: () => contextStore,
+    getPlans: () => plans,
+    createPlan: async (title, description) => {
+      const plan = { id: 'plan-1', title, description };
+      plans.push(plan);
+      return plan;
+    },
+    addPlanStep: async () => {},
+    updateContext: async (key, value) => {
+      contextStore[key] = value;
+    },
+    replaceMemory: async (prefix, content) => {
+      memoryWrites.push({ prefix, content });
+    },
+  };
+
+  await repl.bootstrapProjectCapabilities();
+
+  assert.equal(plans.length, 1);
+  assert.equal(contextStore.bootstrapPlan.title, 'Bootstrap project context');
+  assert.deepEqual(contextStore.activeSkills, ['coding', 'debug', 'refactor', 'test']);
+  assert.match(memoryWrites[0].content, /Auto-applied skills/);
+});
+
+test('shouldUseTools keeps agent mode enabled by default', () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+
+  assert.equal(repl.shouldUseTools('hello'), true);
+  assert.equal(repl.shouldUseTools('just chat'), true);
+});
+
 test('extractModelIdsFromCache reads model slugs without service tier ids', () => {
   const repl = new WinterREPL({ projectPath: process.cwd() });
   const raw = JSON.stringify({
@@ -41,6 +142,25 @@ test('extractModelIdsFromCache reads model slugs without service tier ids', () =
   ]);
 });
 
+test('system prompt compresses oversized memories and project context', () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  repl.session = {
+    getSessionId: () => 'test-session',
+    getMemory: () => Array.from({ length: 24 }, (_, index) => ({
+      text: `Memory ${index + 1}: ${'x'.repeat(2500)}`,
+    })),
+    getPlans: () => [{ status: 'pending', title: 'Huge plan', description: 'y'.repeat(1200) }],
+    getContext: () => ({ activeSkills: ['coding', 'debug'], bootstrapPlan: { title: 'Bootstrap', description: 'Inspect everything' } }),
+  };
+
+  const prompt = repl.getSystemPrompt('Project context ' + 'z'.repeat(18000));
+
+  assert(prompt.length < 30000);
+  assert.match(prompt, /Memories \(Important Context\)/);
+  assert.match(prompt, /truncated/i);
+  assert.match(prompt, /project context truncated/i);
+});
+
 test('readCachedModels returns bundled cache model ids', async () => {
   const repl = new WinterREPL({ projectPath: process.cwd() });
   const models = await repl.readCachedModels(repl.getResourcePaths().codex.models);
@@ -49,10 +169,10 @@ test('readCachedModels returns bundled cache model ids', async () => {
   assert(!models.includes('priority'));
 });
 
-test('shouldUseTools keeps simple chat on the fast path', () => {
+test('shouldUseTools keeps agent mode enabled by default', () => {
   const repl = new WinterREPL({ projectPath: process.cwd() });
 
-  assert.equal(repl.shouldUseTools('trả lời đúng một từ: ok'), false);
+  assert.equal(repl.shouldUseTools('trả lời đúng một từ: ok'), true);
   assert.equal(repl.shouldUseTools('sửa lỗi trong src/cli/repl.js rồi chạy test'), true);
   assert.equal(repl.shouldUseTools('git push lên github đi'), true);
 });
@@ -164,6 +284,87 @@ test('runConversation executes streamed tool calls then streams final answer', a
 
   assert.equal(answer, 'Done');
   assert.deepEqual(executed, [{ name: 'Read', args: { file_path: 'README.md' } }]);
+});
+
+test('runConversation executes multiple tool calls across multiple turns before answering', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  repl.simulateTyping = async (text) => {
+    process.stdout.write(text);
+  };
+
+  let streamCount = 0;
+  const executed = [];
+  repl.ai = {
+    tools: [],
+    providers: { custom: { model: 'test-model' } },
+    getActiveProvider: () => 'custom',
+    setTools(tools) {
+      this.tools = tools;
+    },
+    async *streamRequest() {
+      streamCount++;
+      if (streamCount === 1) {
+        yield {
+          raw: {
+            choices: [{
+              delta: {
+                tool_calls: [{
+                  index: 0,
+                  id: 'call-read',
+                  type: 'function',
+                  function: { name: 'Read', arguments: '{"file_path":"README.md"}' },
+                }],
+              },
+              finish_reason: 'tool_calls',
+            }],
+          },
+        };
+        return;
+      }
+
+      if (streamCount === 2) {
+        yield {
+          raw: {
+            choices: [{
+              delta: {
+                tool_calls: [{
+                  index: 0,
+                  id: 'call-grep',
+                  type: 'function',
+                  function: { name: 'Grep', arguments: '{"pattern":"Winter","path":"README.md"}' },
+                }],
+              },
+              finish_reason: 'tool_calls',
+            }],
+          },
+        };
+        return;
+      }
+
+      yield { content: 'Finished', usage: { prompt_tokens: 6, completion_tokens: 2, total_tokens: 8 } };
+    },
+  };
+  repl.tools = {
+    normalizeToolName: name => name,
+    async execute(name, args) {
+      executed.push({ name, args });
+      if (name === 'Read') {
+        return { success: true, path: args.file_path, content: 'Winter CLI\n', lines: 1, size: 10 };
+      }
+      if (name === 'Grep') {
+        return { success: true, pattern: args.pattern, path: args.path, matches: ['README.md:1:Winter CLI'], count: 1 };
+      }
+      return { success: true };
+    },
+  };
+
+  const answer = await repl.runConversation([{ role: 'user', content: 'analyze README and search it' }], 'Test', [{ name: 'Read' }, { name: 'Grep' }]);
+
+  assert.equal(answer, 'Finished');
+  assert.deepEqual(executed, [
+    { name: 'Read', args: { file_path: 'README.md' } },
+    { name: 'Grep', args: { pattern: 'Winter', path: 'README.md' } },
+  ]);
 });
 
 test('runConversation reports malformed tool arguments instead of executing empty args', async () => {

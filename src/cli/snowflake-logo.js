@@ -1,3 +1,5 @@
+import { renderBox, terminalWidth } from './terminal-ui.js';
+
 export const colors = {
   reset: '\x1b[0m',
   bright: '\x1b[1m',
@@ -52,7 +54,6 @@ export function welcomeBanner(version, info = {}) {
   // Tính toán chiều rộng động (nhỏ hơn 5% cửa sổ, tối thiểu 60, tối đa 100 cho đẹp)
   const columns = process.stdout.columns || 80;
   const W = Math.max(60, Math.min(Math.floor(columns * 0.95), 100));
-  const line = '═'.repeat(W);
   const dot = `${colors.green}●${colors.reset}`;
 
   // Căn giữa Snowflake Art
@@ -69,16 +70,23 @@ export function welcomeBanner(version, info = {}) {
   const subtitle = `Build by Atus | fb: iam.anhtu | github: anhtu1707`;
   const subPadding = Math.max(0, Math.floor((W - subtitle.length) / 2));
 
+  const infoWidth = Math.max(60, Math.min(terminalWidth(60, 100, 80), 100));
   const banner = `${colors.cyan}${centeredArt}${colors.reset}
 
 ${' '.repeat(titlePadding)}${colors.bright}${colors.magenta}W I N T E R${colors.reset}  ${colors.dim}v${version}${colors.reset}
 ${' '.repeat(subPadding)}${colors.dim}${subtitle}${colors.reset}
-${colors.blue}${line}${colors.reset}
-  ${dot} ${colors.cyan}Project:${colors.reset} ${colors.green}${displayPath}${colors.reset}
-  ${dot} ${colors.cyan}Model:  ${colors.reset} ${model} ${colors.dim}(${provider})${colors.reset}
-  ${dot} ${colors.cyan}Session:${colors.reset} ${colors.yellow}${pId}${colors.reset}
-${colors.blue}${line}${colors.reset}
-${colors.dim}Gõ ${colors.cyan}/help${colors.dim} để xem lệnh · ${colors.cyan}/auto${colors.dim} chế độ tự sửa · ${colors.cyan}ESC${colors.dim} để hủy${colors.reset}
+${renderBox({
+  title: '',
+  width: infoWidth,
+  borderColor: colors.blue,
+  titleColor: colors.blue,
+  body: [
+    `${dot} ${colors.cyan}Project:${colors.reset} ${colors.green}${displayPath}${colors.reset}`,
+    `${dot} ${colors.cyan}Model:  ${colors.reset} ${model} ${colors.dim}(${provider})${colors.reset}`,
+    `${dot} ${colors.cyan}Session:${colors.reset} ${colors.yellow}${pId}${colors.reset}`,
+    `${colors.dim}Gõ ${colors.cyan}/help${colors.dim} để xem lệnh · ${colors.cyan}/auto${colors.dim} chế độ tự sửa · ${colors.cyan}ESC${colors.dim} để hủy${colors.reset}`,
+  ],
+})}
 `;
   return banner;
 }

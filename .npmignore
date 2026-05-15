@@ -1,0 +1,19 @@
+# Local package manager/auth files
+.npmrc
+
+# Runtime state and local user context copied into bundled resources.
+resources/local/codex/config.toml
+resources/local/codex/memories/
+resources/local/claude/settings.json
+resources/local/claude/tasks/
+resources/local/claude/todos/
+
+# Non-package noise
+.git/
+.winter/
+.claude/
+sessions/
+logs/
+*.log
+*.tmp
+*.temp

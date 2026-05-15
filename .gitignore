@@ -12,6 +12,7 @@ logs/
 *.sqlite3
 
 # Local secrets
+.npmrc
 .env
 .env.*
 !.env.example

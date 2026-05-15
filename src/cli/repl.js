@@ -7,6 +7,7 @@ import readline from 'readline';
 import { promises as fs } from 'fs';
 import { homedir } from 'os';
 import { welcomeBanner, colors } from './snowflake-logo.js';
+import { renderBox, terminalWidth, stripAnsi, visibleWidth, wrapText, padVisible } from './terminal-ui.js';
 import { ToolExecutor } from '../tools/executor.js';
 import { SessionManager } from '../session/manager.js';
 import { AIProviderManager } from '../ai/providers.js';
@@ -84,12 +85,16 @@ function formatMarkdown(text) {
       // Fallback
     }
 
-    const columns = process.stdout.columns || 80;
-    const W = Math.max(60, Math.min(Math.floor(columns * 0.95), 100));
-    const headerLine = '─'.repeat(Math.max(0, W - label.length - 4));
-    const bottomLine = '─'.repeat(W);
+    const boxWidth = Math.max(60, Math.min(terminalWidth(60, 100, 80), 100));
+    const body = wrapText(coloredCode, boxWidth - 4);
 
-    return `\n${colors.dim}┌─ ${label} ${headerLine}${colors.reset}\n${coloredCode}\n${colors.dim}└${bottomLine}${colors.reset}\n${colors.white}`;
+    return `\n${renderBox({
+      title: label,
+      width: boxWidth,
+      borderColor: colors.dim,
+      titleColor: colors.dim,
+      body,
+    })}\n${colors.white}`;
   });
 
   // Bold
@@ -164,51 +169,106 @@ export class WinterREPL {
     this.isCancelled = false;
   }
 
+  getProjectInstructionFiles() {
+    return ['winter.md', 'WINTER.md', 'CLAUDE.md', '.claude/CLAUDE.md'];
+  }
+
+  async readProjectInstructionFiles() {
+    const fsPromises = await import('fs/promises');
+    const files = [];
+    const seen = new Set();
+
+    for (const relativePath of this.getProjectInstructionFiles()) {
+      const filePath = path.join(this.projectPath, relativePath);
+      const normalizedPath = path.normalize(filePath).toLowerCase();
+
+      if (seen.has(normalizedPath)) continue;
+      seen.add(normalizedPath);
+
+      try {
+        const stat = await fsPromises.stat(filePath).catch(() => null);
+        if (!stat || !stat.isFile()) continue;
+
+        const content = await fsPromises.readFile(filePath, 'utf8');
+        files.push({ relativePath, filePath, content });
+      } catch {
+        // Ignore unreadable instruction files.
+      }
+    }
+
+    return files;
+  }
+
   async start() {
     await this.session.init({ project: this.projectPath, sessionId: this.sessionId });
     await this.ai.init();
 
-    // Tự động đọc và ghi nhớ 3 file hệ thống theo yêu cầu của user
-    const filesToAutoLoad = [
-      'e:\\\\dev\\\\app\\\\winter\\\\resources\\\\local\\\\agents.md',
-      'e:\\\\dev\\\\app\\\\winter\\\\resources\\\\local\\\\awesome-design-md',
-      'e:\\\\dev\\\\app\\\\winter\\\\resources\\\\local\\\\karpathy-tools'
-    ];
+    await this.session.updateContext('projectAnchor', {
+      path: this.projectPath,
+      name: path.basename(this.projectPath),
+      openedAt: new Date().toISOString(),
+    });
+    await this.session.replaceMemory('[Project Anchor]', `Current project is ${this.projectPath}. Treat this path as the canonical working directory for the session.`, 'info');
 
+    // Tự động đọc và ghi nhớ một số tài nguyên cục bộ (an toàn): chỉ nạp file hoặc README trong thư mục
     const fsPromises = await import('fs/promises');
-    const path = await import('path');
+    const resourcePaths = this.getResourcePaths();
+    const autoLoadTargets = [resourcePaths.agents, resourcePaths.designs, resourcePaths.karpathy];
 
-    for (const filePath of filesToAutoLoad) {
+    for (const targetPath of autoLoadTargets) {
       try {
-        const content = await fsPromises.readFile(filePath, 'utf8');
-        const fileName = path.basename(filePath);
-        const memoryKey = `[Tự động ghi nhớ file ${fileName}]`;
+        const stat = await fsPromises.stat(targetPath).catch(() => null);
+        if (!stat) continue;
 
-        // Xóa memory cũ về file này để cập nhật nội dung mới nhất (tránh trùng lặp)
-        const currentMemories = this.session.getMemory() || [];
-        const filteredMemories = currentMemories.filter(m => !m.startsWith(memoryKey));
+        if (stat.isFile()) {
+          const content = await fsPromises.readFile(targetPath, 'utf8');
+          const fileName = path.basename(targetPath);
+          const memoryKey = `[Tự động ghi nhớ file ${fileName}]`;
+          await this.session.replaceMemory(memoryKey, content);
+          console.log(`${colors.dim}ℹ Đã tự động nạp và ghi nhớ file ${fileName}${colors.reset}`);
+          continue;
+        }
 
-        // Cập nhật lại mảng memory trong session
-        this.session.memory = filteredMemories;
+        if (stat.isDirectory()) {
+          // Try README.md, index.md, or manifest.json inside the directory
+          const candidates = ['README.md', 'README.MD', 'index.md', 'manifest.json'];
+          let loaded = false;
+          for (const c of candidates) {
+            const p = path.join(targetPath, c);
+            try {
+              const cstat = await fsPromises.stat(p).catch(() => null);
+              if (cstat && cstat.isFile()) {
+                const content = await fsPromises.readFile(p, 'utf8');
+                const memoryKey = `[Tự động ghi nhớ file ${path.basename(targetPath)}/${c}]`;
+                await this.session.replaceMemory(memoryKey, content);
+                console.log(`${colors.dim}ℹ Đã tự động nạp và ghi nhớ ${path.basename(targetPath)}/${c}${colors.reset}`);
+                loaded = true;
+                break;
+              }
+            } catch (e) {
+              // continue
+            }
+          }
 
-        // Thêm nội dung mới vào bộ nhớ
-        this.session.addMemory(`${memoryKey}:\n${content}`);
-        console.log(`${colors.dim}ℹ Đã tự động nạp và ghi nhớ file ${fileName}${colors.reset}`);
+          if (!loaded) {
+            // nothing to load
+          }
+        }
       } catch (e) {
-        // Bỏ qua nếu không đọc được file
+        // Ignore read errors for resources
       }
     }
 
-    // Kiểm tra và nạp file winter.md của dự án
-    const projectWinterMd = path.join(this.projectPath, 'winter.md');
+    // Nạp các file quy tắc dự án theo thứ tự ưu tiên.
+    const projectInstructionFiles = await this.readProjectInstructionFiles();
     try {
-      await fsPromises.access(projectWinterMd);
-      const content = await fsPromises.readFile(projectWinterMd, 'utf8');
-      
-      const memoryKey = `[Quy tắc dự án từ winter.md]`;
-      this.session.memory = (this.session.getMemory() || []).filter(m => !m.startsWith(memoryKey));
-      this.session.addMemory(`${memoryKey}:\n${content}`);
-      console.log(`${colors.dim}ℹ Đã nạp quy tắc dự án từ winter.md${colors.reset}`);
+      if (projectInstructionFiles.length > 0) {
+        for (const file of projectInstructionFiles) {
+          const memoryKey = `[Quy tắc dự án từ ${file.relativePath}]`;
+          await this.session.replaceMemory(memoryKey, file.content);
+          console.log(`${colors.dim}ℹ Đã nạp quy tắc dự án từ ${file.relativePath}${colors.reset}`);
+        }
+      }
     } catch (e) {
       // Nếu không có, tự động tạo file mẫu!
       const template = `# Winter Project Rules
@@ -243,16 +303,19 @@ export class WinterREPL {
 - Luôn đảm bảo file không bị lỗi cú pháp sau khi sửa.
 `;
       try {
+        const projectWinterMd = path.join(this.projectPath, 'winter.md');
         await fsPromises.writeFile(projectWinterMd, template, 'utf8');
         console.log(`\n${colors.green}✓ Đã tự động tạo file winter.md mẫu cho dự án mới!${colors.reset}`);
         console.log(`${colors.dim}Bạn có thể chỉnh sửa file này để dạy AI các quy tắc riêng của dự án.${colors.reset}\n`);
         
         // Nạp luôn vào memory
-        this.session.addMemory(`[Quy tắc dự án từ winter.md]:\n${template}`);
+        await this.session.replaceMemory(`[Quy tắc dự án từ winter.md]`, template);
       } catch (err) {
         // Bỏ qua nếu không ghi được file
       }
     }
+
+    await this.bootstrapProjectCapabilities();
 
     const activeProvider = this.ai.getActiveProvider();
     const info = {
@@ -1109,48 +1172,50 @@ export class WinterREPL {
 
   showCommandMenu() {
     const c = colors;
-    const W = 78;
-    const line = '─'.repeat(W - 2);
-    const dline = '═'.repeat(W - 2);
-    const row = (l, r) => {
-      const ll = l.replace(/\x1b\[[0-9;]*m/g, '');
-      const rl = r.replace(/\x1b\[[0-9;]*m/g, '');
-      const pad = W - 4 - ll.length - rl.length;
-      return `${c.magenta}│${c.reset} ${l}${' '.repeat(Math.max(1, pad))}${r} ${c.magenta}│${c.reset}`;
+    const width = terminalWidth(72, 112, 92);
+    const innerWidth = width - 4;
+    const split = Math.floor(innerWidth * 0.54);
+    const rightWidth = innerWidth - split - 1;
+    const row = (left, right = '') => {
+      if (!right) return left;
+      return `${padVisible(left, split)} ${padVisible(right, rightWidth)}`;
     };
-    const header = (text) => {
-      const tl = text.replace(/\x1b\[[0-9;]*m/g, '').length;
-      const pad = W - 4 - tl;
-      return `${c.magenta}│${c.reset} ${text}${' '.repeat(Math.max(0, pad))} ${c.magenta}│${c.reset}`;
-    };
-    const sep = `${c.magenta}├${line}┤${c.reset}`;
+
+    const body = [
+      `${c.bright}${c.cyan}❄ WINTER COMMANDS${c.reset}`,
+      '',
+      `${c.bright}Dự án & Phiên làm việc${c.reset}`,
+      row(`${c.yellow}/pwd${c.reset}     Thư mục hiện tại`, `${c.yellow}/session${c.reset}  Phiên làm việc`),
+      row(`${c.yellow}/cd${c.reset}      Đổi thư mục`, `${c.yellow}/clear${c.reset}    Xóa màn hình`),
+      row(`${c.yellow}/config${c.reset}  Xem cấu hình`, `${c.yellow}/exit${c.reset}     Thoát`),
+      '',
+      `${c.bright}AI & Công cụ${c.reset}`,
+      row(`${c.yellow}/auto${c.reset}    TDD tự sửa lỗi`, `${c.yellow}/agent${c.reset}   Chạy sub-agent`),
+      row(`${c.yellow}/read${c.reset}    Đọc file`, `${c.yellow}/write${c.reset}   Ghi file`),
+      row(`${c.yellow}/bash${c.reset}    Chạy lệnh terminal`, `${c.yellow}/grep${c.reset}    Tìm trong file`),
+      row(`${c.yellow}/glob${c.reset}    Tìm file theo pattern`, `${c.yellow}/image${c.reset}   Phân tích UI`),
+      row(`${c.yellow}/paste${c.reset}   Dán từ clipboard`, `${c.yellow}/plan${c.reset}    Lập kế hoạch`),
+      '',
+      `${c.bright}Git Auto-Pilot${c.reset}`,
+      row(`${c.yellow}/commit${c.reset}  AI tự viết commit`, `${c.yellow}/review${c.reset}  AI review code thay đổi`),
+      '',
+      `${c.bright}Cấu hình Model${c.reset}`,
+      row(`${c.yellow}/provider${c.reset} Đổi provider AI`, `${c.yellow}/model${c.reset}    Đổi model`),
+      row(`${c.yellow}/providers${c.reset} Danh sách provider`, `${c.yellow}/models${c.reset}   Danh sách model`),
+      '',
+      `${c.bright}Bộ nhớ & Kỹ năng${c.reset}`,
+      row(`${c.yellow}/remember${c.reset} Lưu vào bộ nhớ`, `${c.yellow}/memories${c.reset} Xem bộ nhớ`),
+      row(`${c.yellow}/skills${c.reset}  Danh sách kỹ năng`, `${c.yellow}/designs${c.reset}  Hệ thống thiết kế`),
+    ];
+
     console.log(`
-${c.magenta}╭${line}╮${c.reset}
-${header(`${c.bright}${c.cyan}❄ WINTER COMMANDS${c.reset}`)}
-${sep}
-${header(`${c.bright}Dự án & Phiên làm việc${c.reset}`)}
-${row(`${c.yellow}/pwd${c.reset}     Thư mục hiện tại`, `${c.yellow}/session${c.reset}  Phiên làm việc`)}
-${row(`${c.yellow}/cd${c.reset}      Đổi thư mục`, `${c.yellow}/clear${c.reset}    Xóa màn hình`)}
-${row(`${c.yellow}/config${c.reset}  Xem cấu hình`, `${c.yellow}/exit${c.reset}     Thoát`)}
-${sep}
-${header(`${c.bright}AI & Công cụ${c.reset}`)}
-${row(`${c.yellow}/auto${c.reset}    TDD tự sửa lỗi`, `${c.yellow}/agent${c.reset}   Chạy sub-agent`)}
-${row(`${c.yellow}/read${c.reset}    Đọc file`, `${c.yellow}/write${c.reset}   Ghi file`)}
-${row(`${c.yellow}/bash${c.reset}    Chạy lệnh terminal`, `${c.yellow}/grep${c.reset}    Tìm trong file`)}
-${row(`${c.yellow}/glob${c.reset}    Tìm file theo pattern`, `${c.yellow}/image${c.reset}   Phân tích UI`)}
-${row(`${c.yellow}/paste${c.reset}   Dán từ clipboard`, `${c.yellow}/plan${c.reset}    Lập kế hoạch`)}
-${sep}
-${header(`${c.bright}Git Auto-Pilot${c.reset}`)}
-${row(`${c.yellow}/commit${c.reset}  AI tự viết commit`, `${c.yellow}/review${c.reset}  AI review code thay đổi`)}
-${sep}
-${header(`${c.bright}Cấu hình Model${c.reset}`)}
-${row(`${c.yellow}/provider${c.reset} Đổi provider AI`, `${c.yellow}/model${c.reset}    Đổi model`)}
-${row(`${c.yellow}/providers${c.reset} Danh sách provider`, `${c.yellow}/models${c.reset}   Danh sách model`)}
-${sep}
-${header(`${c.bright}Bộ nhớ & Kỹ năng${c.reset}`)}
-${row(`${c.yellow}/remember${c.reset} Lưu vào bộ nhớ`, `${c.yellow}/memories${c.reset} Xem bộ nhớ`)}
-${row(`${c.yellow}/skills${c.reset}  Danh sách kỹ năng`, `${c.yellow}/designs${c.reset}  Hệ thống thiết kế`)}
-${c.magenta}╰${line}╯${c.reset}
+${renderBox({
+      title: `${c.bright}${c.cyan}WINTER COMMANDS${c.reset}`,
+      width,
+      borderColor: c.magenta,
+      titleColor: c.cyan,
+      body,
+    })}
 ${c.dim}Gõ tin nhắn trực tiếp để chat · ESC để hủy · Prompt tự xếp hàng chờ${c.reset}
 `);
   }
@@ -1358,13 +1423,15 @@ ${colors.reset}
         usedTools = true;
         if (this.spinner) this.spinner.stop();
 
-        const BOX_WIDTH = 80;
-        const topLabel = ' AGENT TOOLS EXECUTION ';
-        const topLeft = '╭─';
-        const topRight = '─╮';
-        const topPadLen = BOX_WIDTH - topLeft.length - topRight.length - topLabel.length;
-        const topLine = `${topLeft}${colors.bright}${topLabel}${colors.reset}${colors.magenta}${'─'.repeat(Math.max(0, topPadLen))}${topRight}`;
-        console.log(`\n${colors.magenta}${topLine}${colors.reset}`);
+        const BOX_WIDTH = terminalWidth(76, 116, 92);
+        const innerWidth = BOX_WIDTH - 2;
+        const title = ' AGENT TOOLS EXECUTION ';
+        const titlePad = Math.max(0, innerWidth - visibleWidth(title));
+        const leftPad = Math.floor(titlePad / 2);
+        const rightPad = titlePad - leftPad;
+        console.log(`\n${colors.magenta}╭${'─'.repeat(innerWidth)}╮${colors.reset}`);
+        console.log(`${colors.magenta}│${colors.reset}${' '.repeat(leftPad)}${colors.bright}${title}${colors.reset}${' '.repeat(rightPad)}${colors.magenta}│${colors.reset}`);
+        console.log(`${colors.magenta}├${'─'.repeat(innerWidth)}┤${colors.reset}`);
         messages.push({
           role: 'assistant',
           content: assistantMsg.content || '',
@@ -1420,34 +1487,16 @@ ${colors.reset}
             const statusIcon = result.success === false ? `${colors.red}✖${colors.reset}` : `${colors.green}✓${colors.reset}`;
 
             const maxLen = BOX_WIDTH - 8;
-            const lines = summary.split('\n');
-            for (const line of lines) {
-              // Loại bỏ mã màu ANSI để tính toán độ dài và cắt dòng chuẩn xác
-              const cleanLine = line.replace(/\x1b\[[0-9;]*m/g, '');
-              
-              if (cleanLine.length <= maxLen) {
-                const padLen = BOX_WIDTH - 7 - cleanLine.length;
-                const padding = ' '.repeat(Math.max(0, padLen));
-                console.log(`${colors.magenta}│${colors.reset}   ${statusIcon} ${colors.dim}${cleanLine}${colors.reset}${padding}${colors.magenta}│${colors.reset}`);
-              } else {
-                // Word wrap
-                let remaining = cleanLine;
-                let first = true;
-                while (remaining.length > 0) {
-                  const chunk = remaining.substring(0, maxLen);
-                  remaining = remaining.substring(maxLen);
-                  const prefix = first ? statusIcon : ' ';
-                  
-                  const padLen = BOX_WIDTH - 7 - chunk.length;
-                  const padding = ' '.repeat(Math.max(0, padLen));
-                  console.log(`${colors.magenta}│${colors.reset}   ${prefix} ${colors.dim}${chunk}${colors.reset}${padding}${colors.magenta}│${colors.reset}`);
-                  first = false;
-                }
-              }
+            const wrappedLines = summary.split('\n').flatMap(line => wrapText(line, maxLen));
+            for (const [index, line] of wrappedLines.entries()) {
+              const prefix = index === 0 ? statusIcon : ' ';
+              const cleanLine = stripAnsi(line);
+              const padding = ' '.repeat(Math.max(0, maxLen - visibleWidth(cleanLine)));
+              console.log(`${colors.magenta}│${colors.reset}   ${prefix} ${colors.dim}${cleanLine}${colors.reset}${padding}${colors.magenta}│${colors.reset}`);
             }
           }
         }
-        console.log(`${colors.magenta}╰${'─'.repeat(BOX_WIDTH - 1)}╯${colors.reset}\n`);
+        console.log(`${colors.magenta}╰${'─'.repeat(innerWidth)}╯${colors.reset}\n`);
       }
 
       if (usedTools && !finalContent) {
@@ -2079,16 +2128,16 @@ ${colors.reset}
 
   async chat(message, imageAttachments = []) {
     try {
-      const needsTools = this.shouldUseTools(message, imageAttachments);
-      const context = needsTools ? await this.getProjectContext() : '';
+      const needsTools = true;
+      const context = await this.getProjectContext();
       const messages = [
-        { role: 'system', content: needsTools ? this.getSystemPrompt(context) : this.getFastSystemPrompt() }
+        { role: 'system', content: this.getSystemPrompt(context) }
       ];
 
       const history = this.getPromptHistory({
-        limit: needsTools ? 20 : 4,
-        maxEntryChars: needsTools ? 2000 : 350,
-        maxTotalChars: needsTools ? 12000 : 900,
+        limit: 20,
+        maxEntryChars: 2000,
+        maxTotalChars: 12000,
       });
       for (const entry of history) {
         messages.push({ role: entry.role, content: entry.content });
@@ -2109,7 +2158,7 @@ ${colors.reset}
         messages.push({ role: 'user', content: message });
       }
 
-      const tools = needsTools ? this.getAgentTools('general') : [];
+      const tools = this.getAgentTools('general');
       const finalContent = await this.runConversation(messages, 'Thinking', tools);
 
       await this.session.addToHistory({ role: 'user', content: message });
@@ -2121,12 +2170,7 @@ ${colors.reset}
   }
 
   shouldUseTools(message = '', imageAttachments = []) {
-    if (imageAttachments.length > 0) return false;
-    const text = String(message || '').toLowerCase();
-    if (/[a-z]:[\\/]|\.([cm]?[jt]sx?|json|md|css|html|py|java|go|rs|php|rb|toml|ya?ml)\b/i.test(text)) {
-      return true;
-    }
-    return /\b(read|write|edit|file|folder|repo|project|code|bug|fix|debug|test|build|run|git|commit|push|pull|npm|node|install|create|delete|copy|move|refactor|grep|glob|bash|terminal|powershell|deploy)\b|sửa|lỗi|đọc|thư mục|dự án|mã|kiểm tra|chạy|tạo|xóa|giao diện|ảnh|màn hình|đẩy|cài|build|test/i.test(text);
+    return true;
   }
 
   getPromptHistory({ limit = 20, maxEntryChars = 2000, maxTotalChars = 12000 } = {}) {
@@ -2171,17 +2215,27 @@ ${colors.reset}
 
   async getProjectContext() {
     const context = [];
-    const projectFiles = ['CLAUDE.md', 'WINTER.md', '.claude/CLAUDE.md', 'package.json'];
+    const projectInstructionFiles = await this.readProjectInstructionFiles();
 
-    for (const file of projectFiles) {
+    for (const file of projectInstructionFiles) {
       try {
-        const filePath = path.join(this.projectPath, file);
-        const stat = await fs.stat(filePath);
-        if (stat.isFile()) {
-          const content = await fs.readFile(filePath, 'utf-8');
-          context.push(`[${file}]\n${content.substring(0, 300)}...`);
-        }
+        const preview = this.compactText(file.content, 900, 'project instruction');
+        context.push(`[${file.relativePath}]\n${preview}`);
       } catch { }
+    }
+
+    try {
+      const packageJsonPath = path.join(this.projectPath, 'package.json');
+      const stat = await fs.stat(packageJsonPath);
+      if (stat.isFile()) {
+        const content = await fs.readFile(packageJsonPath, 'utf-8');
+        context.push(`[package.json]\n${this.compactText(content, 1200, 'package.json')}`);
+      }
+    } catch { }
+
+    const localResources = await this.getLocalResourceContext();
+    if (localResources) {
+      context.push(localResources);
     }
 
     // Git Context
@@ -2191,34 +2245,239 @@ ${colors.reset}
       if (gitStatus) {
         context.push(`[Git Status]\n${gitStatus}`);
 
+        const gitSummary = execSync('git diff --stat --summary', { cwd: this.projectPath, encoding: 'utf8', stdio: 'pipe', maxBuffer: 1024 * 50 }).trim();
+        if (gitSummary) {
+          context.push(`[Git Summary]\n${this.compactText(gitSummary, 1200, 'git summary')}`);
+        }
+
         // Get brief git diff for context
-        const gitDiff = execSync('git diff', { cwd: this.projectPath, encoding: 'utf8', stdio: 'pipe', maxBuffer: 1024 * 50 }).trim().split('\n').slice(0, 50).join('\n');
+        const gitDiff = execSync('git diff', { cwd: this.projectPath, encoding: 'utf8', stdio: 'pipe', maxBuffer: 1024 * 50 }).trim().split('\n').slice(0, 30).join('\n');
         if (gitDiff) {
-          context.push(`[Git Diff]\n${gitDiff}\n...`);
+          context.push(`[Git Diff]\n${this.compactText(gitDiff, 1800, 'git diff')}`);
         }
       }
     } catch (e) {
       // Not a git repo or git not installed
     }
 
-    return context.join('\n\n') || 'No project context found.';
+    return this.compactText(context.join('\n\n') || 'No project context found.', 9000, 'project context');
+  }
+
+  async getLocalResourceContext() {
+    try {
+      const manifestPath = this.getResourcePaths().manifest;
+      const raw = await fs.readFile(manifestPath, 'utf8');
+      const manifest = JSON.parse(raw.replace(/^\uFEFF/, ''));
+      const paths = this.getResourcePaths();
+      const [claudeSkills, codexSkills, claudePlugins, codexMemories] = await Promise.all([
+        this.listPathEntries(paths.claude.skills, 20),
+        this.listPathEntries(paths.codex.skills, 20),
+        this.listPathEntries(paths.claude.plugins, 20),
+        this.listPathEntries(paths.codex.memories, 20),
+      ]);
+
+      const lines = [];
+      lines.push('[Local Resources]');
+      lines.push(`- Root: ${manifest.root || this.getResourcePaths().localRoot}`);
+
+      for (const resource of manifest.localResources || []) {
+        lines.push(`- ${resource.name}: ${resource.files} files, ${(resource.bytes / 1024 / 1024).toFixed(2)} MB`);
+      }
+
+      if (manifest.redacted?.length) {
+        lines.push(`- Redacted: ${manifest.redacted.join('; ')}`);
+      }
+
+      lines.push('- Use Read/Grep/Glob to inspect any local resource when it matters for the task.');
+      lines.push('- Local resource families: agents.md, awesome-design-md, claude, codex, karpathy-tools.');
+
+      if (claudeSkills.length > 0) {
+        lines.push(`- Claude skills: ${claudeSkills.slice(0, 10).map(item => item.name).join(', ')}${claudeSkills.length > 10 ? ', ...' : ''}`);
+      }
+
+      if (claudePlugins.length > 0) {
+        lines.push(`- Claude plugin roots: ${claudePlugins.slice(0, 10).map(item => item.name).join(', ')}${claudePlugins.length > 10 ? ', ...' : ''}`);
+      }
+
+      if (codexSkills.length > 0) {
+        lines.push(`- Codex skills: ${codexSkills.slice(0, 10).map(item => item.name).join(', ')}${codexSkills.length > 10 ? ', ...' : ''}`);
+      }
+
+      if (codexMemories.length > 0) {
+        lines.push(`- Codex memories: ${codexMemories.slice(0, 10).map(item => item.name).join(', ')}${codexMemories.length > 10 ? ', ...' : ''}`);
+      }
+
+      return lines.join('\n');
+    } catch {
+      return '';
+    }
+  }
+
+  async bootstrapProjectCapabilities() {
+    const sessionContext = this.session.getContext() || {};
+
+    if (!sessionContext.bootstrapPlan?.id && this.session.getPlans().length === 0) {
+      const plan = await this.session.createPlan(
+        'Bootstrap project context',
+        'Inspect rules, resources, and likely skills before doing any task work.'
+      );
+      await this.session.addPlanStep(plan.id, {
+        description: 'Read project rules, local resources, and attached skill libraries.',
+      });
+      await this.session.addPlanStep(plan.id, {
+        description: 'Choose the smallest relevant skill set before making changes.',
+      });
+      await this.session.updateContext('bootstrapPlan', {
+        id: plan.id,
+        title: plan.title,
+        description: plan.description,
+      });
+    }
+
+    const skillSnapshot = await this.inferStartupSkills();
+    await this.session.updateContext('availableSkillCatalog', skillSnapshot.availableSkills);
+    await this.session.updateContext('activeSkills', skillSnapshot.activeSkills);
+
+    const appliedText = skillSnapshot.activeSkills.length > 0
+      ? `Auto-applied skills: ${skillSnapshot.activeSkills.join(', ')}`
+      : 'Auto-applied skills: none';
+    await this.session.replaceMemory('[Auto-applied skills]', appliedText, 'skill');
+  }
+
+  async inferStartupSkills() {
+    const catalog = await this.getStartupSkillCatalog();
+    const signals = await this.getProjectSignals();
+    const normalizedSignals = new Set(signals.map(value => value.toLowerCase()));
+
+    const hasAny = (...items) => items.some(item => normalizedSignals.has(item));
+    const activeSkills = new Set([
+      'coding',
+      'debug',
+      'refactor',
+      'test',
+    ]);
+
+    if (hasAny('react', 'next', 'nextjs', 'tsx', 'jsx', 'vue', 'svelte', 'vite')) {
+      ['vercel-react-best-practices', 'web-design-guidelines', 'frontend-design', 'design'].forEach(skill => activeSkills.add(skill));
+    }
+
+    if (hasAny('design', 'ui', 'ux', 'css', 'tailwind', 'styled-components', 'scss', 'style', 'component')) {
+      ['web-design-guidelines', 'frontend-design', 'design'].forEach(skill => activeSkills.add(skill));
+    }
+
+    if (hasAny('claude', 'agent', 'mcp', 'plugin', 'skill', 'automation', 'workflow')) {
+      ['skill-creator', 'claude-automation-recommender', 'claude-md-improver', 'agent-development', 'hook-development', 'command-development', 'plugin-dev'].forEach(skill => activeSkills.add(skill));
+    }
+
+    if (hasAny('docs', 'markdown', 'md', 'readme', 'documentation')) {
+      ['claude-md-improver', 'docs', 'writing-rules'].forEach(skill => activeSkills.add(skill));
+    }
+
+    if (hasAny('figma', 'design-md', 'brand', 'brand-guidelines', 'style-guide')) {
+      ['vibefigma', 'web-design-guidelines'].forEach(skill => activeSkills.add(skill));
+    }
+
+    const filtered = [...activeSkills].filter(skill => catalog.has(skill));
+    return {
+      availableSkills: [...catalog],
+      activeSkills: filtered,
+    };
+  }
+
+  async getStartupSkillCatalog() {
+    const catalog = new Set(['coding', 'design', 'debug', 'refactor', 'test', 'security', 'performance']);
+    const resourcePaths = this.getResourcePaths();
+    const folders = [resourcePaths.claude.skills, resourcePaths.codex.skills];
+
+    for (const folder of folders) {
+      const entries = await this.listPathEntries(folder, 200);
+      for (const entry of entries) {
+        catalog.add(entry.name);
+      }
+    }
+
+    return catalog;
+  }
+
+  async getProjectSignals() {
+    const signals = [];
+
+    try {
+      const packageJsonPath = path.join(this.projectPath, 'package.json');
+      const raw = await fs.readFile(packageJsonPath, 'utf8');
+      const pkg = JSON.parse(raw);
+
+      signals.push(String(pkg.name || '').toLowerCase());
+      signals.push(String(pkg.description || '').toLowerCase());
+
+      for (const key of ['dependencies', 'devDependencies', 'peerDependencies']) {
+        const deps = pkg[key] || {};
+        for (const depName of Object.keys(deps)) {
+          signals.push(depName.toLowerCase());
+        }
+      }
+
+      for (const script of Object.values(pkg.scripts || {})) {
+        signals.push(String(script).toLowerCase());
+      }
+    } catch {
+      // Ignore package.json parsing issues.
+    }
+
+    try {
+      const entries = await fs.readdir(this.projectPath, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        signals.push(path.extname(entry.name).toLowerCase().slice(1));
+        signals.push(entry.name.toLowerCase());
+      }
+    } catch {
+      // Ignore directory scan issues.
+    }
+
+    return signals.filter(Boolean);
   }
 
   getSystemPrompt(context = '') {
     const memories = this.session.getMemory();
     const plans = this.session.getPlans();
+    const sessionContext = this.session.getContext() || {};
 
-    let memoryStr = memories.length > 0 ? `\n## Memories (Important Context)\n${memories.map(m => `- ${m.text}`).join('\n')}` : '';
-    let plansStr = plans.length > 0 ? `\n## Active Plans & Tasks\n${plans.map(p => `- [${p.status}] ${p.title}: ${p.description}`).join('\n')}` : '';
+    let memoryStr = memories.length > 0 ? `\n## Memories (Important Context)\n${this.summarizePromptList(memories, {
+      limit: 8,
+      maxEntryChars: 220,
+      maxTotalChars: 1600,
+      mapper: memory => memory.text,
+    })}` : '';
+    let plansStr = plans.length > 0 ? `\n## Active Plans & Tasks\n${this.summarizePromptList(plans, {
+      limit: 6,
+      maxEntryChars: 260,
+      maxTotalChars: 1600,
+      mapper: plan => `[${plan.status}] ${plan.title}: ${plan.description}`,
+    })}` : '';
+    let skillsStr = Array.isArray(sessionContext.activeSkills) && sessionContext.activeSkills.length > 0
+      ? `\n## Auto-applied Skills\n${sessionContext.activeSkills.slice(0, 12).map(skill => `- ${skill}`).join('\n')}${sessionContext.activeSkills.length > 12 ? '\n- ...' : ''}`
+      : '';
+    let startupPlanStr = sessionContext.bootstrapPlan?.title
+      ? `\n## Startup Plan\n- ${sessionContext.bootstrapPlan.title}: ${sessionContext.bootstrapPlan.description}`
+      : '';
 
     return `You are Winter, an expert AI coding assistant.
 
 ## CRITICAL AI RULES (MUST FOLLOW STRICTLY):
-1. [THINKING BEFORE CODING]: Always output your thought process briefly before generating code. Think about edge cases, design structure, and syntax correctness.
+1. [THINKING BEFORE CODING]: State assumptions, constraints, and a brief plan before making changes. Be thorough enough to be useful, and do not invent facts.
 2. [DESIGN EXCELLENCE]: Use rich aesthetics. Default to modern UI frameworks if applicable. Never output plain, ugly HTML/CSS. Ensure responsive, premium feel with micro-animations.
 3. [CODE QUALITY]: Write clean, modular, SOLID code. Check for syntax errors carefully. Do not generate incomplete code blocks.
 4. [NO HALLUCINATION]: If you don't know, use tools (Grep/Read/Web) to find out. Do not guess file paths or APIs.
 5. [TOOL EXECUTION FIRST]: NEVER output full code blocks to the chat and tell the user to copy-paste. ALWAYS use the 'Write' or 'Edit' tool to apply changes directly to their files! The user cannot copy-paste code. You MUST do the work using tools.
+
+## AGENT OPERATING MODE
+- Treat the repository, its memories, skills, rules, and bundled local resources as first-class context.
+- Before answering a task that may depend on project state, rules, skills, memories, local resources, or external facts, proactively call the relevant tool(s) to inspect them.
+- Prefer using the full tool set when needed: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, BrowserDebug, WebFetch, WebSearch.
+- If a question is ambiguous, inspect the project context first instead of guessing.
+- Winter's job is to amplify weaker models: decompose problems, pull the right context, and use tools to reach a stronger answer than raw inference alone would produce.
+- Always begin with a short plan before coding or tool execution, then refine the plan if new facts appear.
 
 ## CRITICAL LANGUAGE RULE
 **You MUST always respond in Vietnamese (tiếng Việt).** Never respond in Chinese, Japanese, Korean or any other language unless the user explicitly asks you to. This is non-negotiable.
@@ -2260,8 +2519,8 @@ ${colors.reset}
 ## Project
 Working directory: ${this.projectPath}
 Current session: ${this.session.getSessionId().substring(0, 8)}
-${memoryStr}${plansStr}
-${context ? `\n## Project Context\n${context}` : ''}
+${memoryStr}${plansStr}${skillsStr}${startupPlanStr}
+${context ? `\n## Project Context\n${this.compactText(context, 6000, 'project context')}` : ''}
 
 Be helpful, be precise, and get things done. Always respond in Vietnamese.`;
   }
@@ -2269,12 +2528,17 @@ Be helpful, be precise, and get things done. Always respond in Vietnamese.`;
   getFastSystemPrompt() {
     const memories = this.session.getMemory();
     const memoryStr = memories.length > 0
-      ? `\nContext nhớ ngắn:\n${memories.slice(-8).map(m => `- ${m.text}`).join('\n')}`
+      ? `\nContext nhớ ngắn:\n${this.summarizePromptList(memories.slice(-8), {
+        limit: 8,
+        maxEntryChars: 160,
+        maxTotalChars: 1200,
+        mapper: memory => memory.text,
+      })}`
       : '';
 
     return `Bạn là Winter, trợ lý AI trả lời ngắn gọn bằng tiếng Việt.
-Trả lời trực tiếp, không gọi tool, không tự bịa thông tin.
-Nếu người dùng yêu cầu sửa file/chạy lệnh/đọc dự án thì nói ngắn rằng cần dùng chế độ tool.${memoryStr}`;
+  Ưu tiên dùng tool và context khi cần; không bịa thông tin.
+  Nếu người dùng yêu cầu sửa file/chạy lệnh/đọc dự án thì hãy gọi tool tương ứng thay vì chỉ nói chung chung.${memoryStr}`;
   }
 
   // Tab completion
@@ -2296,9 +2560,26 @@ Nếu người dùng yêu cầu sửa file/chạy lệnh/đọc dự án thì n�
   getAgentSystemPrompt(role, context = '') {
     const memories = this.session.getMemory();
     const plans = this.session.getPlans();
+    const sessionContext = this.session.getContext() || {};
 
-    let memoryStr = memories.length > 0 ? `\n## Memories (Important Context)\n${memories.map(m => `- ${m.text}`).join('\n')}` : '';
-    let plansStr = plans.length > 0 ? `\n## Active Plans & Tasks\n${plans.map(p => `- [${p.status}] ${p.title}: ${p.description}`).join('\n')}` : '';
+    let memoryStr = memories.length > 0 ? `\n## Memories (Important Context)\n${this.summarizePromptList(memories, {
+      limit: 8,
+      maxEntryChars: 220,
+      maxTotalChars: 1600,
+      mapper: memory => memory.text,
+    })}` : '';
+    let plansStr = plans.length > 0 ? `\n## Active Plans & Tasks\n${this.summarizePromptList(plans, {
+      limit: 6,
+      maxEntryChars: 260,
+      maxTotalChars: 1600,
+      mapper: plan => `[${plan.status}] ${plan.title}: ${plan.description}`,
+    })}` : '';
+    let skillsStr = Array.isArray(sessionContext.activeSkills) && sessionContext.activeSkills.length > 0
+      ? `\n## Auto-applied Skills\n${sessionContext.activeSkills.slice(0, 12).map(skill => `- ${skill}`).join('\n')}${sessionContext.activeSkills.length > 12 ? '\n- ...' : ''}`
+      : '';
+    let startupPlanStr = sessionContext.bootstrapPlan?.title
+      ? `\n## Startup Plan\n- ${sessionContext.bootstrapPlan.title}: ${sessionContext.bootstrapPlan.description}`
+      : '';
 
     let rolePrompt = '';
     switch (role) {
@@ -2323,7 +2604,7 @@ Nếu người dùng yêu cầu sửa file/chạy lệnh/đọc dự án thì n�
     }
 
     return `## CRITICAL AI RULES (MUST FOLLOW STRICTLY):
-1. [THINKING BEFORE CODING]: Always output your thought process briefly before generating code. Think about edge cases, design structure, and syntax correctness.
+1. [THINKING BEFORE CODING]: State assumptions, constraints, and a brief plan before making changes. Be thorough enough to be useful, and do not invent facts.
 2. [DESIGN EXCELLENCE]: Use rich aesthetics. Default to modern UI frameworks if applicable. Never output plain, ugly HTML/CSS. Ensure responsive, premium feel with micro-animations.
 3. [CODE QUALITY]: Write clean, modular, SOLID code. Check for syntax errors carefully. Do not generate incomplete code blocks.
 4. [NO HALLUCINATION]: If you don't know, use tools (Grep/Read/Web) to find out. Do not guess file paths or APIs.
@@ -2333,15 +2614,53 @@ ${rolePrompt}
 
 ## Tool Rules
 - Canonical tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, BrowserDebug, WebFetch, WebSearch.
+- Treat skills, memories, bundled resources, local project rules, and the tool list as operational context. Use them proactively when relevant.
 - Current OS is ${process.platform === 'win32' ? 'Windows; Bash auto-detects PowerShell and cmd.exe syntax. Use shell="powershell" or shell="cmd" when needed.' : process.platform}.
 - Prefer Write/Edit for writing files. Bash accepts both PowerShell and cmd.exe on Windows, but do not use long echo chains for code files.
 - If a tool call fails because of an unknown alias, call the canonical tool name next.
+- Always start with a brief plan, then refine it when new facts appear.
 
 ## Project
 Working directory: ${this.projectPath}
 Current session: ${this.session.getSessionId().substring(0, 8)}
-${memoryStr}${plansStr}
-${context ? `\n## Project Context\n${context}` : ''}`;
+${memoryStr}${plansStr}${skillsStr}${startupPlanStr}
+${context ? `\n## Project Context\n${this.compactText(context, 6000, 'project context')}` : ''}`;
+  }
+
+  compactText(text, maxChars = 1200, label = 'text') {
+    const value = String(text ?? '');
+    if (value.length <= maxChars) return value;
+
+    const headChars = Math.max(0, Math.floor(maxChars * 0.7));
+    const tailChars = Math.max(0, Math.floor(maxChars * 0.2));
+    const head = value.slice(0, headChars);
+    const tail = tailChars > 0 ? value.slice(-tailChars) : '';
+    const omitted = Math.max(0, value.length - head.length - tail.length);
+
+    return [
+      head,
+      `[${label} truncated: ${omitted} chars omitted]`,
+      tail,
+    ].filter(Boolean).join('\n');
+  }
+
+  summarizePromptList(items, { limit = 8, maxEntryChars = 220, maxTotalChars = 1600, mapper = value => value?.text ?? String(value ?? '') } = {}) {
+    const selected = [];
+    let total = 0;
+
+    for (const item of items.slice(-limit)) {
+      const raw = this.compactText(mapper(item), maxEntryChars, 'entry').trim();
+      if (!raw) continue;
+      if (total + raw.length > maxTotalChars && selected.length > 0) break;
+      selected.push(`- ${raw}`);
+      total += raw.length;
+    }
+
+    if (items.length > selected.length) {
+      selected.push(`- ... (${items.length - selected.length} mục đã được lược bớt)`);
+    }
+
+    return selected.join('\n');
   }
 
   getAgentTools(role) {

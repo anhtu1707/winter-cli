@@ -998,7 +998,7 @@ export class ToolExecutor {
         success: true,
         url,
         content: cleanText.substring(0, 15000), // Cho phép đọc dài hơn
-        length: text.length
+        length: cleanText.length
       };
     } catch (error) {
       return { success: false, error: error.message, url };
