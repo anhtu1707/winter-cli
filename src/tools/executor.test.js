@@ -20,11 +20,46 @@ test('tool names accept common model aliases', () => {
   assert.equal(tools.normalizeToolName('read_file'), 'Read');
   assert.equal(tools.normalizeToolName('write_to_file'), 'Write');
   assert.equal(tools.normalizeToolName('replace_in_file'), 'Edit');
+  assert.equal(tools.normalizeToolName('command_executor'), 'Bash');
   assert.equal(tools.normalizeToolName('execute_command'), 'Bash');
   assert.equal(tools.normalizeToolName('list_files'), 'Glob');
   assert.equal(tools.normalizeToolName('search_files'), 'Grep');
   assert.equal(tools.normalizeToolName('shell'), 'Bash');
   assert.equal(tools.normalizeToolName('web-search'), 'WebSearch');
+});
+
+test('Bash supports model-style heredoc file writes', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-heredoc-'));
+  const tools = new ToolExecutor({ projectPath: root });
+  const result = await tools.execute('command_executor', {
+    command: "cat > src/components/InstallSection.tsx << 'EOF'\nconst ok = true;\nEOF",
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.path, path.join(root, 'src', 'components', 'InstallSection.tsx'));
+
+  const read = await tools.execute('Read', { file_path: 'src/components/InstallSection.tsx' });
+  assert.equal(read.content, 'const ok = true;\n');
+});
+
+test('Windows Bash runs PowerShell commands and translates ls flags', async (t) => {
+  if (process.platform !== 'win32') {
+    t.skip('Windows-only shell behavior');
+    return;
+  }
+
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-powershell-'));
+  await mkdir(path.join(root, 'src', 'components'), { recursive: true });
+  await writeFile(path.join(root, 'src', 'components', 'a.txt'), 'hello');
+
+  const tools = new ToolExecutor({ projectPath: root });
+  const ls = await tools.execute('Bash', { command: 'ls -la src/components/' });
+  assert.equal(ls.success, true);
+  assert.match(ls.stdout, /a\.txt/);
+
+  const ps = await tools.execute('Bash', { command: 'Get-ChildItem -Path src/components/ -Name' });
+  assert.equal(ps.success, true);
+  assert.match(ps.stdout, /a\.txt/);
 });
 
 test('Read lists directories instead of failing on directory paths', async () => {

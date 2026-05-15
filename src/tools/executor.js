@@ -5,11 +5,12 @@
 
 import { promises as fs } from 'fs';
 import path from 'path';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { diffLines } from 'diff';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export class ToolExecutor {
   constructor(repl) {
@@ -262,6 +263,7 @@ export class ToolExecutor {
       bash: 'Bash',
       shell: 'Bash',
       command: 'Bash',
+      commandexecutor: 'Bash',
       executecommand: 'Bash',
       runcommand: 'Bash',
       terminal: 'Bash',
@@ -445,6 +447,9 @@ export class ToolExecutor {
     timeout = parseInt(timeout, 10);
     if (isNaN(timeout) || timeout < 0) timeout = 60000;
 
+    const heredocResult = await this.tryHandleHeredocWrite(command, cwd);
+    if (heredocResult) return heredocResult;
+
     command = await this.translateWindowsCommand(command);
 
     // Security check
@@ -456,7 +461,14 @@ export class ToolExecutor {
     }
 
     try {
-      const { stdout, stderr } = await execAsync(command, { cwd, timeout, shell: true });
+      const { stdout, stderr } = process.platform === 'win32'
+        ? await execFileAsync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command], {
+            cwd,
+            timeout,
+            windowsHide: true,
+            maxBuffer: 10 * 1024 * 1024,
+          })
+        : await execAsync(command, { cwd, timeout, shell: true, maxBuffer: 10 * 1024 * 1024 });
       return {
         success: true,
         stdout: stdout || '',
@@ -557,16 +569,17 @@ export class ToolExecutor {
     if (process.platform !== 'win32') return command;
 
     const trimmed = command.trim();
-    const lsRecursive = trimmed.match(/^ls\s+-R\s+(.+)$/i);
-    if (lsRecursive) {
-      const target = lsRecursive[1].trim();
-      return `powershell -NoProfile -Command "Get-ChildItem -LiteralPath ${this.quotePowerShellString(target)} -Recurse -Force | Select-Object -ExpandProperty FullName"`;
-    }
-
-    const ls = trimmed.match(/^ls\s+(.+)$/i);
+    const ls = trimmed.match(/^ls(?:\s+(.+))?$/i);
     if (ls) {
-      const target = ls[1].trim();
-      return `powershell -NoProfile -Command "Get-ChildItem -LiteralPath ${this.quotePowerShellString(target)} -Force | Select-Object -ExpandProperty Name"`;
+      const parsed = this.parseLsArgs(ls[1] || '');
+      const target = parsed.target || '.';
+      const recurse = parsed.flags.has('r') || parsed.flags.has('recursive');
+      const long = parsed.flags.has('l') || parsed.flags.has('la') || parsed.flags.has('al');
+      const force = parsed.flags.has('a') || parsed.flags.has('force') || parsed.flags.has('la') || parsed.flags.has('al');
+      const fields = long
+        ? 'Mode,Length,LastWriteTime,Name'
+        : 'Name';
+      return `Get-ChildItem -LiteralPath ${this.quotePowerShellString(target)}${recurse ? ' -Recurse' : ''}${force ? ' -Force' : ''} | Select-Object ${fields}`;
     }
 
     const cat = trimmed.match(/^cat\s+(.+)$/i);
@@ -576,13 +589,80 @@ export class ToolExecutor {
       try {
         const stat = await fs.stat(normalizedTarget);
         if (stat.isDirectory()) {
-          return `powershell -NoProfile -Command "Get-ChildItem -LiteralPath ${this.quotePowerShellString(target)} -Force | Select-Object -ExpandProperty Name"`;
+          return `Get-ChildItem -LiteralPath ${this.quotePowerShellString(target)} -Force | Select-Object -ExpandProperty Name`;
         }
       } catch {}
-      return `powershell -NoProfile -Command "Get-Content -LiteralPath ${this.quotePowerShellString(target)}"`;
+      return `Get-Content -LiteralPath ${this.quotePowerShellString(target)}`;
     }
 
     return command;
+  }
+
+  async tryHandleHeredocWrite(command, cwd) {
+    const match = String(command || '').match(/^cat\s*>\s*(.+?)\s*<<\s*['"]?([A-Za-z0-9_-]+)['"]?\r?\n([\s\S]*?)\r?\n\2\s*$/);
+    if (!match) return null;
+
+    const [, rawTarget, , content] = match;
+    const target = this.resolveInputPath(rawTarget.trim(), cwd);
+    return await this.writeFile(target, content.endsWith('\n') ? content : `${content}\n`);
+  }
+
+  parseLsArgs(rawArgs) {
+    const tokens = this.splitShellLike(rawArgs);
+    const flags = new Set();
+    const paths = [];
+
+    for (const token of tokens) {
+      if (token.startsWith('-') && token.length > 1) {
+        const flag = token.replace(/^-+/, '').toLowerCase();
+        flags.add(flag);
+        if (!flag.includes('=')) {
+          for (const ch of flag) flags.add(ch);
+        }
+      } else {
+        paths.push(token);
+      }
+    }
+
+    return { flags, target: paths.join(' ') };
+  }
+
+  splitShellLike(text) {
+    const tokens = [];
+    let current = '';
+    let quote = null;
+    let escaped = false;
+
+    for (const ch of String(text || '')) {
+      if (escaped) {
+        current += ch;
+        escaped = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escaped = true;
+        continue;
+      }
+      if ((ch === '"' || ch === "'") && !quote) {
+        quote = ch;
+        continue;
+      }
+      if (ch === quote) {
+        quote = null;
+        continue;
+      }
+      if (/\s/.test(ch) && !quote) {
+        if (current) {
+          tokens.push(current);
+          current = '';
+        }
+        continue;
+      }
+      current += ch;
+    }
+
+    if (current) tokens.push(current);
+    return tokens;
   }
 
   quotePowerShellString(value) {
