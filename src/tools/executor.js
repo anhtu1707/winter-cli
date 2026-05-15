@@ -37,7 +37,7 @@ export class ToolExecutor {
       {
         type: 'function',
         name: 'Write',
-        description: 'Create or overwrite file with content.',
+        description: 'Create or overwrite a file with content. Prefer this for file creation instead of Bash echo/cat/heredoc. Also handles model aliases like write_to_file.',
         parameters: {
           type: 'object',
           properties: {
@@ -50,7 +50,7 @@ export class ToolExecutor {
       {
         type: 'function',
         name: 'Edit',
-        description: 'Make surgical changes. Replace exact old_string with new_string.',
+        description: 'Make surgical changes. Replace exact old_string with new_string. Also handles model aliases like replace_in_file and str_replace_editor.',
         parameters: {
           type: 'object',
           properties: {
@@ -64,7 +64,7 @@ export class ToolExecutor {
       {
         type: 'function',
         name: 'Bash',
-        description: 'Execute shell command. Returns stdout/stderr.',
+        description: 'Execute a shell command. On Windows this runs in PowerShell, not Linux bash. Prefer Write/Edit for file writes.',
         parameters: {
           type: 'object',
           properties: {
@@ -236,7 +236,12 @@ export class ToolExecutor {
       case 'WebSearch':
         return await this.webSearch(input.query ?? input.q);
       default:
-        return { success: false, error: `Unknown tool: ${toolName}` };
+        return {
+          success: false,
+          error: `Unknown tool: ${toolName}`,
+          availableTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'TaskCreate', 'TaskUpdate', 'TaskList', 'BrowserDebug', 'WebFetch', 'WebSearch'],
+          recovery: 'Call one of the available tools. For file writes use Write with { "file_path": "...", "content": "..." }. For shell commands use Bash with { "command": "..." }.',
+        };
     }
   }
 

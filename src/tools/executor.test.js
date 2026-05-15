@@ -14,6 +14,16 @@ test('Bash validates missing command instead of throwing', async () => {
   assert.equal(result.error, 'command is required');
 });
 
+test('unknown tools return recovery guidance instead of a bare failure', async () => {
+  const tools = new ToolExecutor({ projectPath: process.cwd() });
+  const result = await tools.execute('bad_tool_name', {});
+
+  assert.equal(result.success, false);
+  assert.equal(result.error, 'Unknown tool: bad_tool_name');
+  assert(result.availableTools.includes('Write'));
+  assert.match(result.recovery, /Write/);
+});
+
 test('tool names accept common model aliases', () => {
   const tools = new ToolExecutor({ projectPath: process.cwd() });
 
