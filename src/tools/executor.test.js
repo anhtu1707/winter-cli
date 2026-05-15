@@ -38,6 +38,55 @@ test('tool names accept common model aliases', () => {
   assert.equal(tools.normalizeToolName('web-search'), 'WebSearch');
 });
 
+test('Edit accepts common model argument aliases', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-edit-alias-'));
+  await writeFile(path.join(root, 'file.txt'), 'hello world\n');
+
+  const tools = new ToolExecutor({ projectPath: root });
+  const result = await tools.execute('Edit', {
+    path: 'file.txt',
+    find: 'hello',
+    replacement: 'hi',
+  });
+
+  assert.equal(result.success, true);
+  const read = await tools.execute('Read', { path: 'file.txt' });
+  assert.equal(read.content, 'hi world\n');
+});
+
+test('Edit accepts nested and batch edit arguments', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-edit-batch-'));
+  await writeFile(path.join(root, 'file.txt'), 'alpha beta gamma\n');
+
+  const tools = new ToolExecutor({ projectPath: root });
+  const result = await tools.execute('replace_in_file', {
+    arguments: {
+      file_path: 'file.txt',
+      edits: [
+        { old_str: 'alpha', new_str: 'one' },
+        { text_to_replace: 'gamma', replace_with: 'three' },
+      ],
+    },
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.replacements, 2);
+  const read = await tools.execute('Read', { path: 'file.txt' });
+  assert.equal(read.content, 'one beta three\n');
+});
+
+test('Edit missing strings returns recovery guidance', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-edit-recovery-'));
+  await writeFile(path.join(root, 'file.txt'), 'hello\n');
+
+  const tools = new ToolExecutor({ projectPath: root });
+  const result = await tools.execute('Edit', { path: 'file.txt' });
+
+  assert.equal(result.success, false);
+  assert.match(result.error, /Accepted aliases/);
+  assert.match(result.error, /Write instead of Edit/);
+});
+
 test('Bash supports model-style heredoc file writes', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'winter-heredoc-'));
   const tools = new ToolExecutor({ projectPath: root });

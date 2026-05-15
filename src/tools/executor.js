@@ -209,13 +209,7 @@ export class ToolExecutor {
       case 'Write':
         return await this.writeFile(this.resolveInputPath(input.file_path ?? input.path ?? input.file, cwd), input.content);
       case 'Edit':
-        const oldStr = input.old_string ?? input.oldString ?? input.old_text ?? input.oldText ?? input.search ?? input.target;
-        const newStr = input.new_string ?? input.newString ?? input.new_text ?? input.newText ?? input.replace ?? input.content;
-        return await this.editFile(
-          this.resolveInputPath(input.file_path ?? input.path ?? input.file, cwd),
-          oldStr,
-          newStr
-        );
+        return await this.executeEdit(input, cwd);
       case 'Bash':
         return await this.bash(input.command ?? input.cmd, input.cwd || cwd, input.timeout, input.shell);
       case 'Glob':
@@ -410,12 +404,85 @@ export class ToolExecutor {
     }
   }
 
+  async executeEdit(input, cwd) {
+    const request = this.unwrapToolInput(input);
+    const batch = request.edits ?? request.replacements ?? request.changes;
+
+    if (Array.isArray(batch)) {
+      const results = [];
+      for (const item of batch) {
+        const edit = this.normalizeEditArgs({ ...request, ...this.unwrapToolInput(item) }, cwd);
+        const result = await this.editFile(edit.filePath, edit.oldString, edit.newString);
+        results.push(result);
+        if (result.success === false) {
+          return { ...result, batchResults: results };
+        }
+      }
+
+      return {
+        success: true,
+        path: results[results.length - 1]?.path,
+        replacements: results.reduce((sum, result) => sum + (result.replacements || 0), 0),
+        batchResults: results,
+        diff: results.map(result => result.diff).filter(Boolean).join('\n'),
+      };
+    }
+
+    const edit = this.normalizeEditArgs(request, cwd);
+    return await this.editFile(edit.filePath, edit.oldString, edit.newString);
+  }
+
+  unwrapToolInput(input) {
+    let current = input && typeof input === 'object' ? input : {};
+    for (const key of ['input', 'args', 'arguments', 'parameters']) {
+      if (
+        current[key]
+        && typeof current[key] === 'object'
+        && !Array.isArray(current[key])
+        && Object.keys(current).length === 1
+      ) {
+        current = current[key];
+      }
+    }
+    return current;
+  }
+
+  normalizeEditArgs(input, cwd) {
+    const pick = (keys) => {
+      for (const key of keys) {
+        if (typeof input[key] === 'string') return input[key];
+      }
+      return undefined;
+    };
+
+    const filePath = this.resolveInputPath(pick([
+      'file_path', 'filepath', 'filePath', 'path', 'file', 'filename', 'target_file', 'targetFile',
+    ]), cwd);
+    const oldString = pick([
+      'old_string', 'oldString', 'old_text', 'oldText', 'old_str', 'oldStr',
+      'search', 'search_string', 'searchString', 'find', 'find_text', 'findText',
+      'target', 'target_string', 'targetString', 'text_to_replace', 'textToReplace',
+      'pattern', 'original', 'before',
+    ]);
+    const newString = pick([
+      'new_string', 'newString', 'new_text', 'newText', 'new_str', 'newStr',
+      'replace', 'replacement', 'replace_with', 'replaceWith',
+      'new_content', 'newContent', 'content', 'value', 'after',
+    ]);
+
+    return { filePath, oldString, newString };
+  }
+
   async editFile(filePath, oldString, newString) {
     if (!filePath) {
       return { success: false, error: 'file_path is required' };
     }
     if (typeof oldString !== 'string' || typeof newString !== 'string') {
-      return { success: false, error: 'old_string and new_string are required', path: filePath };
+      return {
+        success: false,
+        error: 'old_string and new_string are required. Accepted aliases: oldString/old_str/search/find/text_to_replace and newString/new_str/replace/replacement/replace_with. For full-file replacement use Write instead of Edit.',
+        path: filePath,
+      };
     }
 
     try {
