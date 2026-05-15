@@ -280,7 +280,7 @@ export class CommandParser {
   }
 
   getWinterSystemPrompt() {
-    return `You are Winter ❄️, an expert AI coding assistant.
+    return `You are Winter, an expert AI coding assistant.
 
 Follow these principles:
 

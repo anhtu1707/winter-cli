@@ -295,7 +295,7 @@ export class WinterREPL {
     this.rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
-      prompt: `${colors.bright}${colors.cyan}winter ❄ ${colors.reset} `,
+      prompt: `${colors.bright}${colors.cyan}winter > ${colors.reset}`,
       completer: this.completer.bind(this),
     });
     this.installSlashSuggestions();
@@ -1487,6 +1487,7 @@ ${colors.reset}
     const toolCallParts = [];
     let finishReason = null;
     let printed = false;
+    const bufferToolModeContent = options?.enableTools === true;
 
     for await (const chunk of this.ai.streamRequest(messages, options)) {
       if (chunk.usage) this.addUsage(totalUsage, chunk.usage);
@@ -1515,40 +1516,57 @@ ${colors.reset}
       if (chunk.content) {
         if (!printed) {
           if (this.spinner) this.spinner.stop();
-          process.stdout.write(`\n${colors.white}`);
-          printed = true;
+          if (!bufferToolModeContent) {
+            process.stdout.write(`\n${colors.white}`);
+            printed = true;
+          }
         }
         content += chunk.content;
-        process.stdout.write(chunk.content);
+        if (!bufferToolModeContent) {
+          process.stdout.write(chunk.content);
+        }
       }
     }
 
     if (this.spinner) this.spinner.stop();
     if (printed) process.stdout.write(colors.reset);
 
-    const rawToolCalls = toolCallParts
-      .filter(Boolean)
-      .map((toolCall, index) => ({
+    const inlineToolExtraction = this.extractInlineToolCalls(content);
+    const rawToolCalls = [
+      ...toolCallParts.filter(Boolean).map((toolCall, index) => ({
         ...toolCall,
         id: toolCall.id || `call-${index}`,
-      }));
+      })),
+      ...inlineToolExtraction.toolCalls,
+    ];
     const toolCalls = this.normalizeToolCalls(rawToolCalls);
+    const visibleContent = inlineToolExtraction.content || content;
 
-    if (toolCalls.length === 0 && content) {
-      console.log(`\n${colors.dim}${this.formatAnswerFooter(startedAt, totalUsage)}${colors.reset}\n`);
+    if (bufferToolModeContent && toolCalls.length === 0 && visibleContent) {
+      this.printAssistantAnswer(visibleContent, startedAt, totalUsage);
       return {
-        assistantMsg: { content },
+        assistantMsg: { content: visibleContent },
         toolCalls,
-        finalContent: content,
+        finalContent: visibleContent,
         finishReason,
       };
-    } else if (content) {
+    }
+
+    if (toolCalls.length === 0 && visibleContent) {
+      console.log(`\n${colors.dim}${this.formatAnswerFooter(startedAt, totalUsage)}${colors.reset}\n`);
+      return {
+        assistantMsg: { content: visibleContent },
+        toolCalls,
+        finalContent: visibleContent,
+        finishReason,
+      };
+    } else if (printed && visibleContent) {
       process.stdout.write('\n');
     }
 
     return {
       assistantMsg: {
-        content,
+        content: visibleContent,
         tool_calls: this.formatToolCallsForMessage(toolCalls),
       },
       toolCalls,
@@ -1924,6 +1942,42 @@ ${colors.reset}
     });
   }
 
+  extractInlineToolCalls(content) {
+    const text = String(content || '');
+    const toolCalls = [];
+    let cleaned = text;
+    const callPattern = /<minimax:tool_call>\s*<invoke\s+name=["']([^"']+)["']>([\s\S]*?)<\/invoke>\s*<\/minimax:tool_call>/gi;
+
+    cleaned = cleaned.replace(callPattern, (_match, name, body) => {
+      const args = {};
+      const paramPattern = /<parameter\s+name=["']([^"']+)["']>([\s\S]*?)<\/parameter>/gi;
+      let param;
+      while ((param = paramPattern.exec(body))) {
+        args[param[1]] = this.decodeXmlEntities(param[2].trim());
+      }
+      toolCalls.push({
+        id: `inline-${Date.now()}-${toolCalls.length}`,
+        type: 'function',
+        function: {
+          name,
+          arguments: JSON.stringify(args),
+        },
+      });
+      return '';
+    }).trim();
+
+    return { content: cleaned, toolCalls };
+  }
+
+  decodeXmlEntities(value) {
+    return String(value || '')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&amp;/g, '&');
+  }
+
   parseToolArguments(rawArgs) {
     if (!rawArgs) return {};
     if (typeof rawArgs === 'object') return rawArgs;
@@ -2127,7 +2181,7 @@ ${colors.reset}
     let memoryStr = memories.length > 0 ? `\n## Memories (Important Context)\n${memories.map(m => `- ${m.text}`).join('\n')}` : '';
     let plansStr = plans.length > 0 ? `\n## Active Plans & Tasks\n${plans.map(p => `- [${p.status}] ${p.title}: ${p.description}`).join('\n')}` : '';
 
-    return `You are Winter ❄️, an expert AI coding assistant.
+    return `You are Winter, an expert AI coding assistant.
 
 ## CRITICAL AI RULES (MUST FOLLOW STRICTLY):
 1. [THINKING BEFORE CODING]: Always output your thought process briefly before generating code. Think about edge cases, design structure, and syntax correctness.
@@ -2162,6 +2216,9 @@ ${colors.reset}
 - If a tool name fails, call the canonical tool name next: Write, Edit, Read, Bash, Glob, or Grep.
 - On Windows, Bash accepts both PowerShell and cmd.exe commands. Prefer Write with full content for file writes.
 - After using tools, always provide a direct final answer to the user.
+- Never claim that you changed files unless a Write, Edit, Bash, or equivalent tool result shows the change succeeded in this turn.
+- Never emit XML or provider-specific pseudo tool syntax like <minimax:tool_call>. Use the actual tool-calling API only.
+- If a file path is unknown, search with Glob/Grep first instead of inventing names like Nav.tsx or Footer.tsx.
 - Answer normal questions directly without unnecessary legal or policy disclaimers.
 - If a request is illegal, unsafe, or harmful, refuse briefly and offer a safe alternative.
 - Read files before modifying

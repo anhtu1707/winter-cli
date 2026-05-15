@@ -397,7 +397,7 @@ export class AIProviderManager {
   }
 
   getSystemPrompt() {
-    return `You are Winter ❄️, an expert AI coding assistant.
+    return `You are Winter, an expert AI coding assistant.
 
 ## Core Principles
 1. **Think Before Coding** - State assumptions, ask when unclear

@@ -215,3 +215,61 @@ test('runConversation reports malformed tool arguments instead of executing empt
   assert.equal(answer, 'Recovered');
   assert.deepEqual(executed, []);
 });
+
+test('runConversation executes inline XML tool calls without printing pseudo syntax', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+
+  let streamCount = 0;
+  const executed = [];
+  const writes = [];
+  const originalWrite = process.stdout.write;
+  repl.ai = {
+    tools: [],
+    providers: { custom: { model: 'test-model' } },
+    getActiveProvider: () => 'custom',
+    setTools(tools) {
+      this.tools = tools;
+    },
+    async *streamRequest() {
+      streamCount++;
+      if (streamCount === 1) {
+        yield {
+          content: 'Để tôi đọc file:\n<minimax:tool_call><invoke name="Read"><parameter name="path">README.md</parameter></invoke></minimax:tool_call>',
+          raw: { choices: [{ delta: { content: 'inline xml' }, finish_reason: 'stop' }] },
+        };
+        return;
+      }
+
+      yield { content: 'Đã đọc xong' };
+    },
+  };
+  repl.tools = {
+    normalizeToolName: name => name,
+    async execute(name, args) {
+      executed.push({ name, args });
+      return { success: true, path: args.path, lines: 1, size: 2, content: 'ok' };
+    },
+  };
+
+  process.stdout.write = (chunk) => {
+    writes.push(String(chunk));
+    return true;
+  };
+
+  try {
+    const answer = await repl.runConversation([{ role: 'user', content: 'read it' }], 'Test', [{ name: 'Read' }]);
+
+    assert.equal(answer, 'Đã đọc xong');
+    assert.deepEqual(executed, [{ name: 'Read', args: { path: 'README.md' } }]);
+    assert.doesNotMatch(writes.join(''), /minimax:tool_call/);
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+});
+
+test('interactive prompt and system prompt do not brand Winter with emoji', () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+
+  assert.match(repl.getSystemPrompt(''), /You are Winter, an expert AI coding assistant/);
+  assert.doesNotMatch(repl.getSystemPrompt(''), /You are Winter ❄️/);
+});
