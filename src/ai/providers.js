@@ -5,6 +5,9 @@
 
 import { withRetry } from '../tools/retry.js';
 import { selectExecutionProfile } from '../context/router.js';
+import { buildSystemPrompt, buildFastSystemPrompt, buildAgentSystemPrompt } from './prompts/system-prompt.js';
+import { classifyTask } from './prompts/task-classifier.js';
+import SuccessCriteria from './prompts/success-criteria.js';
 
 function isAuthError(error) {
   const msg = String(error?.message || error || '');
@@ -516,22 +519,40 @@ export class AIProviderManager {
     return { error: 'Tool execution handled by REPL' };
   }
 
-  getSystemPrompt() {
-    return `You are Winter, an expert AI coding assistant.
+  getSystemPrompt(options = {}) {
+    const taskInfo = options.task ? classifyTask(options.task) : null;
+    const tools = this.tools ? Object.keys(this.tools) : [];
+    const sessionInfo = {
+      memory: options.memory || [],
+      plans: options.plans || [],
+    };
 
-## Core Principles
-1. **Think Before Coding** - State assumptions, ask when unclear
-2. **Simplicity First** - Minimum code that solves the problem
-3. **Surgical Changes** - Touch only what you must
-4. **Goal-Driven Execution** - Define success criteria, verify results
+    if (options.role === 'agent') {
+      return buildAgentSystemPrompt(options.agentRole || 'coding', { tools });
+    }
 
-## Tools
-You have access to tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate
+    if (options.fast) {
+      return buildFastSystemPrompt({ role: 'coding', tools });
+    }
 
-Use tools when they help. Be proactive.
-After using tools, always provide a direct final answer to the user.
-Answer normal questions directly without unnecessary legal or policy disclaimers.
-If a request is illegal, unsafe, or harmful, refuse briefly and offer a safe alternative.`;
+    const successPrompt = options.task
+      ? '\n\n' + SuccessCriteria.fromRequest(options.task).buildPrompt()
+      : '';
+
+    return buildSystemPrompt({
+      role: taskInfo?.category || 'coding',
+      context: taskInfo,
+      tools,
+      session: sessionInfo,
+    }) + successPrompt;
+  }
+
+  classifyTask(userInput) {
+    return classifyTask(userInput);
+  }
+
+  buildSuccessCriteria(userInput) {
+    return SuccessCriteria.fromRequest(userInput);
   }
 
   clearCache() {
