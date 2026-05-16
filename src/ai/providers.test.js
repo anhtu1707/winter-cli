@@ -349,3 +349,228 @@ test('streamRequest falls back to default provider when routed provider has auth
     globalThis.fetch = originalFetch;
   }
 });
+
+test('sendRequestToProvider includes reasoning_effort for OpenAI provider', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies = [];
+
+  globalThis.fetch = async (_url, options) => {
+    bodies.push(JSON.parse(options.body));
+    return {
+      ok: true,
+      async json() {
+        return { choices: [{ message: { content: 'reasoned response' } }] };
+      },
+    };
+  };
+
+  try {
+    const ai = new AIProviderManager({
+      async load() {
+        return {
+          defaultProvider: 'openai',
+          openai: {
+            baseURL: 'https://api.openai.com/v1',
+            apiKey: 'sk-test',
+            model: 'o3-mini',
+          },
+        };
+      },
+    });
+    ai.loadAuthToken = async () => null;
+    await ai.init();
+
+    await ai.sendRequestToProvider(ai.providers.openai, [{ role: 'user', content: 'complex task' }], {
+      reasoning: { reasoning_effort: 'high' },
+    });
+
+    assert.equal(bodies[0].reasoning_effort, 'high');
+    assert.equal(bodies[0].model, 'o3-mini');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('sendRequestToProvider includes thinking budget for Claude provider', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies = [];
+
+  globalThis.fetch = async (_url, options) => {
+    bodies.push(JSON.parse(options.body));
+    return {
+      ok: true,
+      async json() {
+        return { choices: [{ message: { content: 'thinking response' } }] };
+      },
+    };
+  };
+
+  try {
+    const ai = new AIProviderManager({
+      async load() {
+        return {
+          defaultProvider: 'claude',
+          claude: {
+            baseURL: 'http://claude.test/v1',
+            apiKey: 'not-required',
+            model: 'claude-sonnet-4-20250514',
+          },
+        };
+      },
+    });
+    ai.loadAuthToken = async () => null;
+    await ai.init();
+
+    await ai.sendRequestToProvider(ai.providers.claude, [{ role: 'user', content: 'complex task' }], {
+      reasoning: { thinking: { type: 'enabled', budget_tokens: 8192 } },
+    });
+
+    assert.equal(bodies[0].thinking.budget_tokens, 8192);
+    assert.equal(bodies[0].thinking.type, 'enabled');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('streamRequestToProvider includes reasoning params in request body', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies = [];
+  const encoder = new TextEncoder();
+
+  globalThis.fetch = async (_url, options) => {
+    bodies.push(JSON.parse(options.body));
+    return {
+      ok: true,
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"ok"}}]}\n\n'));
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+          controller.close();
+        },
+      }),
+    };
+  };
+
+  try {
+    const ai = new AIProviderManager({
+      async load() {
+        return {
+          defaultProvider: 'openai',
+          openai: {
+            baseURL: 'https://api.openai.com/v1',
+            apiKey: 'sk-test',
+            model: 'o1',
+          },
+        };
+      },
+    });
+    ai.loadAuthToken = async () => null;
+    await ai.init();
+
+    const chunks = [];
+    for await (const chunk of ai.streamRequestToProvider(ai.providers.openai, [{ role: 'user', content: 'hello' }], {
+      reasoning: { reasoning_effort: 'medium' },
+    })) {
+      chunks.push(chunk);
+    }
+
+    assert.equal(bodies[0].reasoning_effort, 'medium');
+    assert.equal(bodies[0].stream, true);
+    assert(chunks.length > 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('selectExecutionProfile includes reasoning level for complex tasks', async () => {
+  const ai = new AIProviderManager({
+    async load() {
+      return {
+        defaultProvider: 'custom',
+        custom: {
+          baseURL: 'http://custom.test/v1',
+          apiKey: 'not-required',
+          model: 'custom-model',
+        },
+      };
+    },
+  });
+  ai.loadAuthToken = async () => null;
+  await ai.init();
+
+  // Complex task with deep signals
+  const profile = ai.selectExecutionProfile('Refactor the architecture and redesign the full stack migration for security optimization');
+
+  assert.equal(profile.provider, 'custom');
+  assert.ok(profile.reasoningLevel, 'should have reasoningLevel');
+  assert.ok(profile.reasoningParam === null || typeof profile.reasoningParam === 'object');
+  assert.equal(typeof profile.reasoningPrompt, 'string');
+});
+
+test('getSystemPrompt injects reasoning instructions when reasoningLevel is high and provider lacks API reasoning', async () => {
+  const ai = new AIProviderManager({
+    async load() {
+      return {
+        defaultProvider: 'custom',
+        custom: {
+          baseURL: 'http://custom.test/v1',
+          apiKey: 'not-required',
+          model: 'custom-model',
+        },
+      };
+    },
+  });
+  ai.loadAuthToken = async () => null;
+  await ai.init();
+
+  // Explicitly set high reasoning level
+  const prompt = ai.getSystemPrompt({
+    task: 'Fix a bug',
+    reasoningLevel: 'high',
+  });
+
+  assert.ok(prompt.length > 0);
+  // High reasoning level should inject 'analyze' instructions
+  assert.ok(prompt.includes('analyze') || prompt.includes('reason') || prompt.includes('thinking'),
+    'High reasoning prompt should contain reasoning instructions for non-API-reasoning providers');
+});
+
+test('_getReasoningParam returns null when no reasoning config provided', async () => {
+  const ai = new AIProviderManager({
+    async load() {
+      return {
+        defaultProvider: 'custom',
+        custom: {
+          baseURL: 'http://custom.test/v1',
+          apiKey: 'not-required',
+          model: 'custom-model',
+        },
+      };
+    },
+  });
+  ai.loadAuthToken = async () => null;
+  await ai.init();
+
+  const param = ai._getReasoningParam({}, { name: 'custom' });
+  assert.equal(param, null);
+});
+
+test('_getReasoningParam builds param from reasoningLevel string', async () => {
+  const ai = new AIProviderManager({
+    async load() {
+      return {
+        defaultProvider: 'openai',
+        openai: {
+          baseURL: 'https://api.openai.com/v1',
+          apiKey: 'sk-test',
+          model: 'o3-mini',
+        },
+      };
+    },
+  });
+  ai.loadAuthToken = async () => null;
+  await ai.init();
+
+  const param = ai._getReasoningParam({ reasoningLevel: 'high' }, ai.providers.openai);
+  assert.deepEqual(param, { reasoning_effort: 'high' });
+});

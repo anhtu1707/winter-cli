@@ -8,6 +8,7 @@ import { selectExecutionProfile } from '../context/router.js';
 import { buildSystemPrompt, buildFastSystemPrompt, buildAgentSystemPrompt } from './prompts/system-prompt.js';
 import { classifyTask } from './prompts/task-classifier.js';
 import SuccessCriteria from './prompts/success-criteria.js';
+import { ReasoningConfig, REASONING_LEVELS, complexityToReasoningLevel } from './reasoning.js';
 
 function isAuthError(error) {
   const msg = String(error?.message || error || '');
@@ -229,10 +230,15 @@ export class AIProviderManager {
     const routedProvider = this.providers[executionProfile.provider] || this.providers[this.activeProvider];
     const defaultProvider = this.providers[this.activeProvider];
 
+    const routingModel = options.model || executionProfile.model;
+    const routingReasoning = options.reasoning || executionProfile.reasoningParam;
+
     try {
       return await withRetry(() => this.sendRequestToProvider(routedProvider, messages, {
         ...options,
-        model: options.model || executionProfile.model,
+        model: routingModel,
+        reasoning: routingReasoning,
+        reasoningLevel: options.reasoningLevel || executionProfile.reasoningLevel,
       }), { maxAttempts: 3, baseDelayMs: 150 });
     } catch (error) {
       if (isAuthError(error) && routedProvider !== defaultProvider && defaultProvider) {
@@ -240,6 +246,8 @@ export class AIProviderManager {
         return await withRetry(() => this.sendRequestToProvider(defaultProvider, messages, {
           ...options,
           model: options.model || defaultProvider.model,
+          reasoning: routingReasoning,
+          reasoningLevel: options.reasoningLevel || executionProfile.reasoningLevel,
         }), { maxAttempts: 1, baseDelayMs: 0 });
       }
       throw error;
@@ -257,10 +265,15 @@ export class AIProviderManager {
     const routedProvider = this.providers[executionProfile.provider] || this.providers[this.activeProvider];
     const defaultProvider = this.providers[this.activeProvider];
 
+    const routingModel = options.model || executionProfile.model;
+    const routingReasoning = options.reasoning || executionProfile.reasoningParam;
+
     try {
       yield* this.streamRequestToProvider(routedProvider, messages, {
         ...options,
-        model: options.model || executionProfile.model,
+        model: routingModel,
+        reasoning: routingReasoning,
+        reasoningLevel: options.reasoningLevel || executionProfile.reasoningLevel,
       });
     } catch (error) {
       if (isAuthError(error) && routedProvider !== defaultProvider && defaultProvider) {
@@ -268,6 +281,8 @@ export class AIProviderManager {
         yield* this.streamRequestToProvider(defaultProvider, messages, {
           ...options,
           model: options.model || defaultProvider.model,
+          reasoning: routingReasoning,
+          reasoningLevel: options.reasoningLevel || executionProfile.reasoningLevel,
         });
       } else {
         throw error;
@@ -284,6 +299,17 @@ export class AIProviderManager {
       model: options.model || provider.model,
       messages,
     };
+
+    // Apply reasoning configuration
+    const reasoningParam = options.reasoning || this._getReasoningParam(options, provider);
+    if (reasoningParam) {
+      if (reasoningParam.reasoning_effort) {
+        body.reasoning_effort = reasoningParam.reasoning_effort;
+      }
+      if (reasoningParam.thinking) {
+        body.thinking = reasoningParam.thinking;
+      }
+    }
 
     if (this.tools.length > 0 && options.enableTools) {
       body.tools = this.tools;
@@ -327,6 +353,17 @@ export class AIProviderManager {
 
     if (options.includeUsage !== false) {
       body.stream_options = { include_usage: true };
+    }
+
+    // Apply reasoning configuration
+    const reasoningParam = options.reasoning || this._getReasoningParam(options, provider);
+    if (reasoningParam) {
+      if (reasoningParam.reasoning_effort) {
+        body.reasoning_effort = reasoningParam.reasoning_effort;
+      }
+      if (reasoningParam.thinking) {
+        body.thinking = reasoningParam.thinking;
+      }
     }
 
     if (this.tools.length > 0 && options.enableTools) {
@@ -519,6 +556,23 @@ export class AIProviderManager {
     return { error: 'Tool execution handled by REPL' };
   }
 
+  _getReasoningParam(options, provider) {
+    // 1. Explicit reasoning param passed through options
+    if (options.reasoning) return options.reasoning;
+
+    // 2. Reasoning level specified -> build from level
+    if (options.reasoningLevel) {
+      const config = new ReasoningConfig({
+        level: options.reasoningLevel,
+        provider: provider?.name || this.activeProvider,
+      });
+      return config.getApiReasoningParam();
+    }
+
+    // 3. No reasoning config at all
+    return null;
+  }
+
   getSystemPrompt(options = {}) {
     const taskInfo = options.task ? classifyTask(options.task) : null;
     const tools = this.tools ? Object.keys(this.tools) : [];
@@ -527,8 +581,27 @@ export class AIProviderManager {
       plans: options.plans || [],
     };
 
+    // Inject reasoning instructions if applicable
+    let reasoningPrompt = '';
+    if (options.reasoningLevel || options.reasoningPrompt) {
+      reasoningPrompt = options.reasoningPrompt || new ReasoningConfig({
+        level: options.reasoningLevel || REASONING_LEVELS.MEDIUM,
+        provider: this.activeProvider,
+      }).getPromptInstructions();
+    } else if (taskInfo) {
+      // Auto-inject based on task complexity for providers without API reasoning
+      const level = complexityToReasoningLevel(taskInfo.type);
+      const config = new ReasoningConfig({
+        level,
+        provider: this.activeProvider,
+      });
+      if (config.needsPromptInjection && level !== REASONING_LEVELS.NONE) {
+        reasoningPrompt = config.getPromptInstructions();
+      }
+    }
+
     if (options.role === 'agent') {
-      return buildAgentSystemPrompt(options.agentRole || 'coding', { tools });
+      return buildAgentSystemPrompt(options.agentRole || 'coding', { tools }) + reasoningPrompt;
     }
 
     if (options.fast) {
@@ -544,7 +617,7 @@ export class AIProviderManager {
       context: taskInfo,
       tools,
       session: sessionInfo,
-    }) + successPrompt;
+    }) + reasoningPrompt + successPrompt;
   }
 
   classifyTask(userInput) {
