@@ -248,6 +248,27 @@ ${content}`, type);
     return this.currentSession.history.slice(-limit);
   }
 
+  async recordToolEvent(entry = {}) {
+    if (!this.currentSession) return;
+    if (!this.currentSession.toolEvents) {
+      this.currentSession.toolEvents = [];
+    }
+    this.currentSession.toolEvents.push({
+      id: crypto.randomUUID(),
+      ...entry,
+      timestamp: new Date().toISOString(),
+    });
+    if (this.currentSession.toolEvents.length > 1000) {
+      this.currentSession.toolEvents.splice(0, this.currentSession.toolEvents.length - 1000);
+    }
+    await this.saveSession();
+  }
+
+  getToolEvents(limit = 50) {
+    if (!this.currentSession || !this.currentSession.toolEvents) return [];
+    return this.currentSession.toolEvents.slice(-limit);
+  }
+
   getContext() {
     return this.context;
   }
@@ -258,6 +279,31 @@ ${content}`, type);
 
   getMemory() {
     return this.memory;
+  }
+
+  async clearMemory(pattern = null) {
+    if (!pattern) {
+      this.memory = [];
+      if (this.currentSession) {
+        this.currentSession.memory = [];
+      }
+      await this.saveSession();
+      return 0;
+    }
+
+    const needle = String(pattern).toLowerCase();
+    const before = this.memory.length;
+    this.memory = this.memory.filter(entry => {
+      const text = String(typeof entry === 'string' ? entry : entry?.text || '').toLowerCase();
+      return !text.includes(needle);
+    });
+
+    if (this.currentSession) {
+      this.currentSession.memory = this.memory;
+    }
+
+    await this.saveSession();
+    return before - this.memory.length;
   }
 
   async listSessions() {

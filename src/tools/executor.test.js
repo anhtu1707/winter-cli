@@ -161,6 +161,23 @@ test('Windows Bash auto-detects cmd chaining syntax', async (t) => {
   assert.match(result.stdout, /auto/);
 });
 
+test('Windows Bash allows PowerShell -Format arguments', async (t) => {
+  if (process.platform !== 'win32') {
+    t.skip('Windows-only shell behavior');
+    return;
+  }
+
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-format-'));
+  const tools = new ToolExecutor({ projectPath: root });
+  const result = await tools.execute('Bash', {
+    shell: 'powershell',
+    command: 'Get-Date -Format "yyyy-MM-dd"',
+  });
+
+  assert.equal(result.success, true);
+  assert.match(result.stdout, /\d{4}-\d{2}-\d{2}/);
+});
+
 test('Read lists directories instead of failing on directory paths', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'winter-tools-'));
   await mkdir(path.join(root, 'sub'));
@@ -223,6 +240,15 @@ test('Task tools create, update, and list session plans', async () => {
   assert.equal(listed.tasks.length, 1);
 });
 
+test('Parallel validates missing tool names before execution', async () => {
+  const tools = new ToolExecutor({ projectPath: process.cwd() });
+  const result = await tools.execute('Parallel', { tools: [{ input: { file_path: 'README.md' } }] });
+
+  assert.equal(result.success, false);
+  assert.match(result.error, /missing name/);
+  assert.equal(result.index, 0);
+});
+
 test('WebFetch strips markup and returns page text', async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => ({
@@ -283,4 +309,144 @@ test('BrowserDebug can inspect a simple data URL', async (t) => {
   assert.equal(result.success, true);
   assert.equal(result.actionResult, 'Winter');
   assert.match(result.domSnippet, /Winter/);
+});
+
+test('Grep full: basic regex search', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'winter-grep-test-'));
+  await mkdir(path.join(dir, 'sub'), { recursive: true });
+  await writeFile(path.join(dir, 'test.js'), 'const x = 1;\nconst y = 2;\n// comment\nconst z = 3;\n');
+  await writeFile(path.join(dir, 'sub', 'other.js'), 'const a = 10;\nfunction foo() { return a; }\n');
+
+  const tools = new ToolExecutor({ projectPath: dir });
+  const result = await tools.execute('Grep', { pattern: 'const', path: dir });
+  assert.equal(result.success, true);
+  assert.equal(result.count, 4);
+  assert.ok(result.matches.some(m => m.includes('test.js:1:')));
+});
+
+test('Grep full: case insensitive search', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'winter-grep-ci-'));
+  await writeFile(path.join(dir, 'test.txt'), 'Hello\nhello\nHELLO\nWorld\n');
+
+  const tools = new ToolExecutor({ projectPath: dir });
+  const result = await tools.execute('Grep', { pattern: 'hello', path: dir, case_insensitive: true });
+  assert.equal(result.success, true);
+  assert.equal(result.count, 3);
+});
+
+test('Grep full: case sensitive by default', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'winter-grep-cs-'));
+  await writeFile(path.join(dir, 'test.txt'), 'Hello\nhello\nHELLO\n');
+
+  const tools = new ToolExecutor({ projectPath: dir });
+  const result = await tools.execute('Grep', { pattern: 'hello', path: dir });
+  assert.equal(result.success, true);
+  assert.equal(result.count, 1);
+});
+
+test('Grep full: invert match', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'winter-grep-inv-'));
+  await writeFile(path.join(dir, 'test.txt'), 'apple\nbanana\ncherry\ndate');
+
+  const tools = new ToolExecutor({ projectPath: dir });
+  const result = await tools.execute('Grep', { pattern: 'banana', path: dir, invert_match: true });
+  assert.equal(result.success, true);
+  assert.equal(result.count, 3);
+  assert.ok(result.matches.some(m => m.includes('apple')));
+  assert.ok(result.matches.some(m => m.includes('cherry')));
+});
+
+test('Grep full: fixed string (no regex)', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'winter-grep-fixed-'));
+  await writeFile(path.join(dir, 'test.txt'), 'hello.world\nhello_world\nhelloworld\n');
+
+  const tools = new ToolExecutor({ projectPath: dir });
+  // Without fixed: any char matches
+  const result = await tools.execute('Grep', { pattern: 'hello.world', path: dir, fixed_string: true });
+  assert.equal(result.success, true);
+  assert.equal(result.count, 1);
+});
+
+test('Grep full: context lines (before+after)', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'winter-grep-ctx-'));
+  const lines = [];
+  for (let i = 1; i <= 10; i++) lines.push(`line ${i}`);
+  await writeFile(path.join(dir, 'test.txt'), lines.join('\n'));
+  await writeFile(path.join(dir, 'other.txt'), 'irrelevant\n');
+
+  const tools = new ToolExecutor({ projectPath: dir });
+  const result = await tools.execute('Grep', { pattern: 'line 5', path: dir, context_lines: 2 });
+  assert.equal(result.success, true);
+  assert.equal(result.count, 1);
+  // Context lines include lines 3-7 (2 before + 1 match + 2 after)
+  const match = String(result.matches[0]);
+  assert.ok(match.includes('line 3'), 'Should include context before');
+  assert.ok(match.includes('line 5'), 'Should include match');
+  assert.ok(match.includes('line 7'), 'Should include context after');
+});
+
+test('Grep full: max_results limit', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'winter-grep-max-'));
+  await writeFile(path.join(dir, 'test.txt'), Array(100).fill('match line').join('\n'));
+
+  const tools = new ToolExecutor({ projectPath: dir });
+  const result = await tools.execute('Grep', { pattern: 'match', path: dir, max_results: 10 });
+  assert.equal(result.success, true);
+  assert.equal(result.count, 10);
+});
+
+test('Grep full: line_numbers toggle off', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'winter-grep-ln-'));
+  await writeFile(path.join(dir, 'file.js'), 'const x = 1;\nconst y = 2;\n');
+
+  const tools = new ToolExecutor({ projectPath: dir });
+  const result = await tools.execute('Grep', { pattern: 'const', path: dir, line_numbers: false });
+  assert.equal(result.success, true);
+  // Results should not contain line number format
+  assert.ok(!result.matches[0].includes(':1:'), 'Should not include line numbers');
+});
+
+test('Grep full: invalid regex returns error', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'winter-grep-inv-regex-'));
+  await writeFile(path.join(dir, 'test.txt'), 'some content\n');
+
+  const tools = new ToolExecutor({ projectPath: dir });
+  const result = await tools.execute('Grep', { pattern: '[invalid', path: dir });
+  assert.equal(result.success, true);
+  assert.ok(result.matches.length > 0);
+  // Should return an error entry instead of crashing
+  assert.ok(result.matches.some(m => m.error && m.error.includes('Invalid regex')));
+});
+
+test('Grep full: output_mode files_with_matches', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'winter-grep-fwm-'));
+  await writeFile(path.join(dir, 'a.js'), 'const x = 1;\n');
+  await writeFile(path.join(dir, 'b.txt'), 'no match here\n');
+
+  const tools = new ToolExecutor({ projectPath: dir });
+  const result = await tools.execute('Grep', { pattern: 'const', path: dir, output_mode: 'files_with_matches' });
+  assert.equal(result.success, true);
+  assert.equal(result.count, 1);
+  assert.ok(String(result.matches[0]).includes('a.js'));
+});
+
+test('Grep full: output_mode count', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'winter-grep-cnt-'));
+  await writeFile(path.join(dir, 'data.txt'), Array(5).fill('match line').join('\n'));
+
+  const tools = new ToolExecutor({ projectPath: dir });
+  const result = await tools.execute('Grep', { pattern: 'match', path: dir, output_mode: 'count' });
+  assert.equal(result.success, true);
+  assert.equal(result.count, 5);
+  assert.equal(result.matches.length, 0);
+});
+
+test('Grep full: normalizeToolName for advanced aliases', async (t) => {
+  const tools = new ToolExecutor({ projectPath: process.cwd() });
+  assert.equal(tools.normalizeToolName('rgfull'), 'Grep');
+  assert.equal(tools.normalizeToolName('searchadvanced'), 'Grep');
+  assert.equal(tools.normalizeToolName('advancedsearch'), 'Grep');
+  assert.equal(tools.normalizeToolName('grepadvanced'), 'Grep');
+  assert.equal(tools.normalizeToolName('grepfull'), 'Grep');
+  assert.equal(tools.normalizeToolName('findinfile'), 'Grep');
 });

@@ -1,11 +1,44 @@
 const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
+const ZERO_WIDTH_PATTERN = /[\u200B-\u200D\u2060\uFE0E\uFE0F]/u;
+const WIDE_CODE_POINT_RANGES = [
+  [0x1100, 0x115f],
+  [0x2329, 0x232a],
+  [0x2e80, 0x303e],
+  [0x3040, 0xa4cf],
+  [0xac00, 0xd7a3],
+  [0xf900, 0xfaff],
+  [0xfe10, 0xfe19],
+  [0xfe30, 0xfe6f],
+  [0xff00, 0xff60],
+  [0xffe0, 0xffe6],
+  [0x1f300, 0x1f64f],
+  [0x1f680, 0x1f6ff],
+  [0x1f900, 0x1f9ff],
+  [0x1fa70, 0x1faff],
+];
 
 export function stripAnsi(text) {
   return String(text ?? '').replace(ANSI_PATTERN, '');
 }
 
 export function visibleWidth(text) {
-  return Array.from(stripAnsi(text)).length;
+  let width = 0;
+  for (const char of Array.from(stripAnsi(text))) {
+    width += charDisplayWidth(char);
+  }
+  return width;
+}
+
+export function charDisplayWidth(char) {
+  if (!char || ZERO_WIDTH_PATTERN.test(char) || /\p{Mark}/u.test(char)) return 0;
+
+  const codePoint = char.codePointAt(0);
+  if (codePoint === undefined) return 0;
+  if (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f)) return 0;
+  if (codePoint >= 0x1f1e6 && codePoint <= 0x1f1ff) return 2;
+  if (/\p{Extended_Pictographic}/u.test(char)) return 2;
+  if (WIDE_CODE_POINT_RANGES.some(([start, end]) => codePoint >= start && codePoint <= end)) return 2;
+  return 1;
 }
 
 export function terminalWidth(min = 72, max = 120, fallback = 88) {

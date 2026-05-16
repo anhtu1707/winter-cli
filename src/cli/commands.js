@@ -9,12 +9,16 @@ import { colors, statusIcons, miniLogo } from './snowflake-logo.js';
 import { DesignCommands } from '../design/commands.js';
 import { SkillManager } from '../skills/manager.js';
 import { PluginManager } from '../plugins/manager.js';
+import { MCPClient } from '../mcp/client.js';
+import { redactSecrets } from './secret-env.js';
+
+export { redactSecrets } from './secret-env.js';
 
 const SECRET_KEY_PATTERN = /(api[-_]?key|auth[-_]?token|access[-_]?token|refresh[-_]?token|secret|password)/i;
 
-export function redactSecrets(value) {
+export function redactSecretsLegacy(value) {
   if (Array.isArray(value)) {
-    return value.map(item => redactSecrets(item));
+    return value.map(item => redactSecretsLegacy(item));
   }
 
   if (!value || typeof value !== 'object') {
@@ -24,7 +28,7 @@ export function redactSecrets(value) {
   return Object.fromEntries(
     Object.entries(value).map(([key, entry]) => [
       key,
-      SECRET_KEY_PATTERN.test(key) ? '[redacted]' : redactSecrets(entry),
+      SECRET_KEY_PATTERN.test(key) ? '[redacted]' : redactSecretsLegacy(entry),
     ])
   );
 }
@@ -45,6 +49,12 @@ export class CommandParser {
       project: this.handleProject.bind(this),
       skill: this.handleSkill.bind(this),
       plugin: this.handlePlugin.bind(this),
+      mcp: this.handleMcp.bind(this),
+      permissions: this.handlePermissions.bind(this),
+      provider: this.handleProvider.bind(this),
+      providers: this.showProviders.bind(this),
+      model: this.handleModel.bind(this),
+      models: this.showModels.bind(this),
       design: this.handleDesign.bind(this),
       code: this.handleCode.bind(this),
       review: this.handleReview.bind(this),
@@ -82,12 +92,16 @@ export class CommandParser {
       '/new': () => this.session.newSession(),
       '/save': () => this.session.saveSession(),
       '/remember': (args) => this.session.addToMemory(args.join(' ')),
-      '/forget': (args) => console.log('Memory cleared'),
+      '/forget': (args) => this.session.clearMemory(args.length > 0 ? args.join(' ') : null),
       '/memories': () => this.showMemories(),
       '/plans': () => this.showPlans(),
       '/cache': () => this.handleCache(args),
       '/provider': () => this.handleProvider(args),
       '/providers': () => this.showProviders(),
+      '/model': () => this.handleModel(args),
+      '/models': () => this.showModels(),
+      '/mcp': () => this.handleMcp(args),
+      '/permissions': () => this.handlePermissions(args),
       '/exit': () => process.exit(0),
     };
 
@@ -238,6 +252,152 @@ export class CommandParser {
     }
   }
 
+  async handleMcp(args) {
+    const [action, ...rest] = args;
+    const config = await this.config.load();
+    config.mcp = config.mcp || { servers: [] };
+    config.permissions = config.permissions || { allowlist: {} };
+    config.permissions.allowlist = config.permissions.allowlist || { tools: [], commands: [], mcpServers: [] };
+
+    switch (action) {
+      case undefined:
+      case 'list':
+        console.log(`\n${colors.cyan}MCP Servers:${colors.reset}`);
+        (config.mcp.servers || []).forEach(server => {
+          const enabled = server.enabled === false ? `${colors.red}disabled${colors.reset}` : `${colors.green}enabled${colors.reset}`;
+          console.log(`  • ${server.name} (${enabled}) -> ${server.command}${server.args?.length ? ` ${server.args.join(' ')}` : ''}`);
+        });
+        if ((config.mcp.servers || []).length === 0) {
+          console.log(`  ${colors.dim}No MCP servers configured.${colors.reset}`);
+        }
+        break;
+      case 'add': {
+        const [name, command, ...commandArgs] = rest;
+        if (!name || !command) {
+          console.log(`${colors.yellow}Usage: winter mcp add <name> <command> [args-json]${colors.reset}`);
+          break;
+        }
+
+        const argsJson = commandArgs.join(' ');
+        let parsedArgs = [];
+        if (argsJson.trim()) {
+          try {
+            const parsed = JSON.parse(argsJson);
+            parsedArgs = Array.isArray(parsed) ? parsed : [String(parsed)];
+          } catch {
+            parsedArgs = commandArgs;
+          }
+        }
+
+        config.mcp.servers = (config.mcp.servers || []).filter(server => server.name !== name);
+        config.mcp.servers.push({ name, command, args: parsedArgs, enabled: true });
+        config.permissions.allowlist.mcpServers = [...new Set([...(config.permissions.allowlist.mcpServers || []), name])];
+        await this.config.save(config);
+        console.log(`${colors.green}✓ Added MCP server: ${name}${colors.reset}`);
+        break;
+      }
+      case 'remove': {
+        const name = rest[0];
+        if (!name) {
+          console.log(`${colors.yellow}Usage: winter mcp remove <name>${colors.reset}`);
+          break;
+        }
+        config.mcp.servers = (config.mcp.servers || []).filter(server => server.name !== name);
+        config.permissions.allowlist.mcpServers = (config.permissions.allowlist.mcpServers || []).filter(server => server !== name);
+        await this.config.save(config);
+        console.log(`${colors.green}✓ Removed MCP server: ${name}${colors.reset}`);
+        break;
+      }
+      case 'allow': {
+        const name = rest[0];
+        if (!name) {
+          console.log(`${colors.yellow}Usage: winter mcp allow <server>${colors.reset}`);
+          break;
+        }
+        config.permissions.allowlist.mcpServers = [...new Set([...(config.permissions.allowlist.mcpServers || []), name])];
+        await this.config.save(config);
+        console.log(`${colors.green}✓ MCP server allowed: ${name}${colors.reset}`);
+        break;
+      }
+      case 'tools': {
+        const name = rest[0];
+        if (!name) {
+          console.log(`${colors.yellow}Usage: winter mcp tools <server>${colors.reset}`);
+          break;
+        }
+
+        const server = (config.mcp.servers || []).find(item => item.name === name && item.enabled !== false);
+        if (!server) {
+          console.log(`${colors.red}MCP server not configured or disabled: ${name}${colors.reset}`);
+          break;
+        }
+
+        const client = new MCPClient(server);
+        try {
+          const tools = await client.listTools();
+          console.log(`\n${colors.cyan}MCP Tools: ${name}${colors.reset}`);
+          if (!tools.length) {
+            console.log(`  ${colors.dim}No tools reported.${colors.reset}`);
+          }
+          tools.forEach(tool => {
+            const description = tool.description ? ` - ${tool.description}` : '';
+            console.log(`  ${colors.green}${tool.name}${colors.reset}${description}`);
+          });
+        } catch (error) {
+          console.log(`${colors.red}Failed to list MCP tools: ${error.message}${colors.reset}`);
+        } finally {
+          await client.close();
+        }
+        break;
+      }
+      default:
+        console.log(`${colors.yellow}Usage: winter mcp <list|add|remove|allow|tools>${colors.reset}`);
+    }
+  }
+
+  async handlePermissions(args) {
+    const [action, ...rest] = args;
+    const config = await this.config.load();
+    config.permissions = config.permissions || { allowlist: { tools: [], commands: [], mcpServers: [] } };
+    config.permissions.allowlist = config.permissions.allowlist || { tools: [], commands: [], mcpServers: [] };
+
+    switch (action) {
+      case undefined:
+      case 'list':
+        console.log(`\n${colors.cyan}Permission Allowlist:${colors.reset}`);
+        console.log(`  Tools: ${(config.permissions.allowlist.tools || []).join(', ') || 'none'}`);
+        console.log(`  Commands: ${(config.permissions.allowlist.commands || []).join(', ') || 'none'}`);
+        console.log(`  MCP Servers: ${(config.permissions.allowlist.mcpServers || []).join(', ') || 'none'}`);
+        console.log(`  Prompt by default: ${config.permissions.promptByDefault !== false}`);
+        break;
+      case 'allow': {
+        const [kind, value] = rest;
+        if (!kind || !value) {
+          console.log(`${colors.yellow}Usage: winter permissions allow <tool|command|mcp> <value>${colors.reset}`);
+          break;
+        }
+        const field = kind === 'tool' ? 'tools' : kind === 'command' ? 'commands' : kind === 'mcp' ? 'mcpServers' : null;
+        if (!field) {
+          console.log(`${colors.yellow}Allowed kinds: tool, command, mcp${colors.reset}`);
+          break;
+        }
+        config.permissions.allowlist[field] = [...new Set([...(config.permissions.allowlist[field] || []), value])];
+        await this.config.save(config);
+        console.log(`${colors.green}✓ Allowed ${kind}: ${value}${colors.reset}`);
+        break;
+      }
+      case 'prompt': {
+        const value = String(rest[0] || '').toLowerCase();
+        config.permissions.promptByDefault = !(value === 'off' || value === 'false' || value === '0' || value === 'no');
+        await this.config.save(config);
+        console.log(`${colors.green}✓ promptByDefault = ${config.permissions.promptByDefault}${colors.reset}`);
+        break;
+      }
+      default:
+        console.log(`${colors.yellow}Usage: winter permissions <list|allow|prompt>${colors.reset}`);
+    }
+  }
+
   async handleDesign(args) {
     const [action, ...rest] = args;
     await this.design.execute(action, rest);
@@ -252,6 +412,35 @@ export class CommandParser {
   }
 
   async handleConfig(args) {
+    const [action, ...rest] = args;
+
+    if (action === 'backup') {
+      const backupPath = await this.config.backupConfig?.('manual');
+      console.log(`${colors.green}${statusIcons.success} Config backup: ${backupPath}${colors.reset}`);
+      return;
+    }
+
+    if (action === 'restore') {
+      const backupPath = rest.join(' ').trim();
+      if (!backupPath) {
+        console.log(`${colors.yellow}Usage: winter config restore <backup-path>${colors.reset}`);
+        return;
+      }
+      await this.config.restoreConfig?.(backupPath);
+      await this.ai.reload?.();
+      console.log(`${colors.green}${statusIcons.success} Config restored${colors.reset}`);
+      return;
+    }
+
+    if (action === 'migrate-secrets') {
+      const result = await this.config.migrateSecrets?.();
+      await this.ai.reload?.();
+      console.log(`${colors.green}${statusIcons.success} Secrets migrated out of winter.json${colors.reset}`);
+      console.log(`${colors.dim}Backup: ${result?.backupPath}${colors.reset}`);
+      console.log(`${colors.dim}Env file: ${result?.envFile}${colors.reset}`);
+      return;
+    }
+
     const config = await this.config.load();
     console.log(`\n${colors.cyan}Current Configuration:${colors.reset}`);
     console.log(JSON.stringify(redactSecrets(config), null, 2));
@@ -306,6 +495,54 @@ export class CommandParser {
     console.log(`${colors.dim}Available providers: ${available}${colors.reset}`);
   }
 
+  async handleModel(args) {
+    await this.ai.init?.();
+    const providers = this.ai.providers || {};
+    const activeProvider = this.ai.getActiveProvider?.();
+
+    if (!args.length) {
+      console.log(`${colors.cyan}Model: ${providers[activeProvider]?.model || 'unavailable'}${colors.reset}`);
+      return;
+    }
+
+    let providerName = activeProvider;
+    let modelArgs = args;
+    const firstArg = String(args[0] || '').trim().toLowerCase();
+    if (providers[firstArg] && args.length > 1) {
+      providerName = firstArg;
+      modelArgs = args.slice(1);
+    }
+
+    const model = modelArgs.join(' ').trim();
+    if (!providerName || !model) {
+      console.log(`${colors.yellow}Usage: winter model [provider] <model-id>${colors.reset}`);
+      return;
+    }
+
+    await this.config.setProviderModel(providerName, model);
+    if (providers[providerName]) {
+      providers[providerName].model = model;
+    }
+    if (typeof this.ai.reload === 'function') {
+      await this.ai.reload();
+    }
+    console.log(`${statusIcons.success} Model for ${providerName}: ${model}`);
+  }
+
+  async showModels() {
+    await this.ai.init?.();
+    const providers = this.ai.listProviders?.() || [];
+    console.log(`\n${colors.cyan}Models:${colors.reset}`);
+    if (providers.length === 0) {
+      console.log(`  ${colors.dim}No providers configured${colors.reset}`);
+      return;
+    }
+    providers.forEach(provider => {
+      const active = provider.name === this.ai.getActiveProvider?.() ? ` ${colors.green}< active${colors.reset}` : '';
+      console.log(`  ${provider.name}: ${provider.model}${active}`);
+    });
+  }
+
   async showProviders() {
     await this.ai.init?.();
     const providers = this.ai.listProviders?.() || [];
@@ -338,6 +575,15 @@ export class CommandParser {
   }
 
   getWinterSystemPrompt() {
+    const environmentSummary = [
+      `Host OS: ${process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'macOS' : process.platform === 'linux' ? 'Linux' : process.platform}`,
+      `Node platform: ${process.platform}`,
+      `Current shell hint: ${process.platform === 'win32' ? 'powershell-capable or cmd/unknown' : (process.env.SHELL || 'bash/sh')}`,
+      process.platform === 'win32'
+        ? 'Shell rule: Use shell:"powershell" for PowerShell cmdlets, shell:"cmd" for cmd.exe syntax, and shell:"auto" when unsure.'
+        : 'Shell rule: Use the native POSIX shell on non-Windows hosts and leave shell unspecified unless a specific shell is required.',
+    ].join('\n');
+
     return `You are Winter, an expert AI coding assistant.
 
 Follow these principles:
@@ -360,6 +606,9 @@ Follow these principles:
 4. **Goal-Driven Execution**
    - Define success criteria
    - Loop until verified
+
+## Runtime Environment
+${environmentSummary}
 
 Current session: ${this.session.getSessionId().substring(0, 8)}
 `;

@@ -3,6 +3,14 @@
  * Full Claude Code / Codex compatible AI integration
  */
 
+import { withRetry } from '../tools/retry.js';
+import { selectExecutionProfile } from '../context/router.js';
+
+function isAuthError(error) {
+  const msg = String(error?.message || error || '');
+  return /\b(401|403)\b/.test(msg) || /authentication_error|invalid_api_key|unauthorized|auth\s*failed/i.test(msg);
+}
+
 export class AIProviderManager {
   constructor(config) {
     this.config = config;
@@ -18,18 +26,19 @@ export class AIProviderManager {
     if (this.initialized) return;
 
     const cfg = await this.config.load();
+    const claudeConfig = cfg.claude || cfg.anthropic || null;
 
     // Load auth token from Claude Code's auth.json if available
     this.authToken = await this.loadAuthToken();
 
-    if (cfg.claude?.baseURL || this.authToken) {
+    if (claudeConfig?.baseURL || this.authToken) {
       this.providers.claude = {
         name: 'Claude-compatible API',
-        baseURL: cfg.claude?.baseURL || 'http://localhost:4000/v1',
+        baseURL: claudeConfig?.baseURL || 'http://localhost:4000/v1',
         authToken: this.authToken,
-        apiKey: cfg.claude?.apiKey,
-        model: cfg.claude?.model || 'nvidia/moonshotai/kimi-k2.6',
-        ready: !!this.authToken || !!cfg.claude?.apiKey || cfg.claude?.apiKey === 'not-required',
+        apiKey: claudeConfig?.apiKey,
+        model: claudeConfig?.model || 'nvidia/moonshotai/kimi-k2.6',
+        ready: !!this.authToken || !!claudeConfig?.apiKey || claudeConfig?.apiKey === 'not-required',
       };
     }
 
@@ -74,7 +83,9 @@ export class AIProviderManager {
     }
 
     // Set default
-    const defaultProvider = cfg.defaultProvider || 'claude';
+    const defaultProvider = this.normalizeProviderName(cfg.defaultProvider || 'claude') === 'anthropic'
+      ? 'claude'
+      : this.normalizeProviderName(cfg.defaultProvider || 'claude');
     this.activeProvider = this.providers[defaultProvider] ? defaultProvider : 'claude';
 
     if (!this.providers[this.activeProvider]?.ready) {
@@ -173,6 +184,19 @@ export class AIProviderManager {
     }));
   }
 
+  selectExecutionProfile(messageOrMessages, options = {}) {
+    const messages = typeof messageOrMessages === 'string'
+      ? [{ role: 'user', content: messageOrMessages }]
+      : messageOrMessages;
+
+    return selectExecutionProfile({
+      messages,
+      activeProvider: this.activeProvider,
+      providers: this.providers,
+      options,
+    });
+  }
+
   setTools(tools) {
     this.tools = tools;
   }
@@ -193,14 +217,59 @@ export class AIProviderManager {
 
   async sendRequest(messages, options = {}) {
     await this.init();
-    const provider = this.providers[this.activeProvider];
-    return await this.sendRequestToProvider(provider, messages, options);
+    const executionProfile = selectExecutionProfile({
+      messages,
+      activeProvider: this.activeProvider,
+      providers: this.providers,
+      options,
+    });
+    const routedProvider = this.providers[executionProfile.provider] || this.providers[this.activeProvider];
+    const defaultProvider = this.providers[this.activeProvider];
+
+    try {
+      return await withRetry(() => this.sendRequestToProvider(routedProvider, messages, {
+        ...options,
+        model: options.model || executionProfile.model,
+      }), { maxAttempts: 3, baseDelayMs: 150 });
+    } catch (error) {
+      if (isAuthError(error) && routedProvider !== defaultProvider && defaultProvider) {
+        console.warn(`[winter] ${executionProfile.provider} provider auth error, falling back to ${this.activeProvider}`);
+        return await withRetry(() => this.sendRequestToProvider(defaultProvider, messages, {
+          ...options,
+          model: options.model || defaultProvider.model,
+        }), { maxAttempts: 1, baseDelayMs: 0 });
+      }
+      throw error;
+    }
   }
 
   async *streamRequest(messages, options = {}) {
     await this.init();
-    const provider = this.providers[this.activeProvider];
-    yield* this.streamRequestToProvider(provider, messages, options);
+    const executionProfile = selectExecutionProfile({
+      messages,
+      activeProvider: this.activeProvider,
+      providers: this.providers,
+      options,
+    });
+    const routedProvider = this.providers[executionProfile.provider] || this.providers[this.activeProvider];
+    const defaultProvider = this.providers[this.activeProvider];
+
+    try {
+      yield* this.streamRequestToProvider(routedProvider, messages, {
+        ...options,
+        model: options.model || executionProfile.model,
+      });
+    } catch (error) {
+      if (isAuthError(error) && routedProvider !== defaultProvider && defaultProvider) {
+        console.warn(`[winter] ${executionProfile.provider} provider auth error, falling back to ${this.activeProvider}`);
+        yield* this.streamRequestToProvider(defaultProvider, messages, {
+          ...options,
+          model: options.model || defaultProvider.model,
+        });
+      } else {
+        throw error;
+      }
+    }
   }
 
   async sendRequestToProvider(provider, messages, options = {}) {

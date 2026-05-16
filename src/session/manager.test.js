@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -69,4 +69,27 @@ test('switchSession updates the remembered project anchor', async () => {
   assert.notEqual(firstSessionId, 'session-b');
   assert.equal(session.getSessionId(), 'session-b');
   assert.equal(config.state.project.current, secondProject);
+});
+
+test('clearMemory removes stored memories and persists the change', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-session-memory-'));
+  const config = createConfigStub();
+  const session = new SessionManager(config);
+  session.winterDir = path.join(root, '.winter');
+  session.sessionsDir = path.join(session.winterDir, 'sessions');
+
+  await session.init({ project: path.join(root, 'project') });
+  await session.addToMemory('keep this note');
+  await session.addToMemory('remove this note');
+
+  const removed = await session.clearMemory('remove this note');
+
+  assert.equal(removed, 1);
+  assert.equal(session.getMemory().length, 1);
+  assert.equal(session.getMemory()[0].text, 'keep this note');
+
+  const sessionPath = path.join(session.sessionsDir, 'active', `${session.getSessionId()}.json`);
+  const saved = JSON.parse(await readFile(sessionPath, 'utf8'));
+  assert.equal(saved.memory.length, 1);
+  assert.equal(saved.memory[0].text, 'keep this note');
 });

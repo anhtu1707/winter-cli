@@ -2,6 +2,9 @@
 .npmrc
 
 # Runtime state and local user context copied into bundled resources.
+resources/local/**
+!resources/local/
+!resources/local/manifest.json
 resources/local/codex/config.toml
 resources/local/codex/memories/
 resources/local/claude/settings.json
@@ -9,6 +12,7 @@ resources/local/claude/tasks/
 resources/local/claude/todos/
 
 # Non-package noise
+src/**/*.test.js
 .git/
 .winter/
 .claude/

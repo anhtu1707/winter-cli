@@ -7,6 +7,15 @@
   "bin": {
     "winter": "bin/winter.js"
   },
+  "files": [
+    "bin/",
+    "src/**/*.js",
+    "!src/**/*.test.js",
+    "resources/local/manifest.json",
+    "README.md",
+    "WINTER.md",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "start": "node bin/winter.js",
     "dev": "node bin/winter.js",
@@ -27,7 +36,9 @@
   },
   "dependencies": {
     "cli-highlight": "^2.1.11",
-    "diff": "^9.0.0",
+    "diff": "^9.0.0"
+  },
+  "optionalDependencies": {
     "puppeteer": "^24.43.1"
   }
 }

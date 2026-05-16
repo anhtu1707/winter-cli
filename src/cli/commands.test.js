@@ -156,6 +156,113 @@ test('slash providers command lists available providers', async () => {
   assert(logs.some(line => line.includes('custom-model')));
 });
 
+test('provider command switches and persists provider without slash', async () => {
+  const saved = [];
+  const ai = {
+    active: 'ollama',
+    providers: {
+      custom: { model: 'custom-model', ready: true },
+      ollama: { model: 'llama3', ready: true },
+    },
+    async switchProvider(name) {
+      if (!this.providers[name]) return null;
+      this.active = name;
+      return name;
+    },
+    getActiveProvider() {
+      return this.active;
+    },
+    listProviders() {
+      return Object.entries(this.providers).map(([name, provider]) => ({ name, ...provider }));
+    },
+  };
+  const parser = new CommandParser({
+    session: {
+      getSessionId: () => '12345678-1234-1234-1234-123456789abc',
+      getMemory: () => [],
+      getPlans: () => [],
+    },
+    ai,
+    config: {
+      setDefaultProvider: async provider => saved.push(provider),
+    },
+  });
+
+  await parser.parse(['provider', 'custom']);
+
+  assert.equal(ai.getActiveProvider(), 'custom');
+  assert.deepEqual(saved, ['custom']);
+});
+
+test('model command sets active provider model with and without slash', async () => {
+  const saved = [];
+  const ai = {
+    active: 'custom',
+    providers: {
+      custom: { model: 'old-model', ready: true },
+      ollama: { model: 'llama3', ready: true },
+    },
+    init: async () => {},
+    reload: async () => {},
+    getActiveProvider() {
+      return this.active;
+    },
+    listProviders() {
+      return Object.entries(this.providers).map(([name, provider]) => ({ name, ...provider }));
+    },
+  };
+  const parser = new CommandParser({
+    session: {
+      getSessionId: () => '12345678-1234-1234-1234-123456789abc',
+      getMemory: () => [],
+      getPlans: () => [],
+    },
+    ai,
+    config: {
+      setProviderModel: async (provider, model) => saved.push({ provider, model }),
+    },
+  });
+
+  await parser.parse(['model', 'new-model']);
+  await parser.parse(['/model', 'ollama', 'llama3.1']);
+
+  assert.deepEqual(saved, [
+    { provider: 'custom', model: 'new-model' },
+    { provider: 'ollama', model: 'llama3.1' },
+  ]);
+  assert.equal(ai.providers.custom.model, 'new-model');
+  assert.equal(ai.providers.ollama.model, 'llama3.1');
+});
+
+test('mcp and permissions commands update config state', async () => {
+  const saved = [];
+  const config = {
+    load: async () => ({
+      mcp: { servers: [] },
+      permissions: { promptByDefault: true, allowlist: { tools: [], commands: [], mcpServers: [] } },
+    }),
+    save: async value => saved.push(value),
+    setPermissionAllowlist: async value => saved.push(value),
+  };
+  const parser = createParser();
+  parser.config = config;
+
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+
+  try {
+    await parser.parse(['mcp', 'add', 'workspace', 'node', '["src/mcp/server.js"]']);
+    await parser.parse(['permissions', 'allow', 'tool', 'Bash']);
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert(saved.length > 0);
+  assert(logs.some(line => line.includes('Added MCP server')));
+  assert(logs.some(line => line.includes('Allowed tool')));
+});
+
 test('plugin manager loads local plugin files via file URLs', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'winter-plugin-load-'));
   const pluginsDir = path.join(root, '.winter', 'plugins');

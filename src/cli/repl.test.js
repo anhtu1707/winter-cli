@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -14,6 +14,59 @@ test('slash suggestions include provider, model, and bundled resources', () => {
   assert(commands.includes('/model'));
   assert(commands.includes('/resources'));
   assert(commands.includes('/codex'));
+});
+
+test('slash menu does not accept on Enter and preserves typed suffix on Tab', () => {
+  const repl = new WinterREPL({ projectPath: 'E:\\dev\\app\\winter' });
+  const writes = [];
+  let prompted = 0;
+
+  repl.rl = {
+    line: '/pro hello world',
+    write(value, options) {
+      writes.push({ value, options });
+    },
+    prompt() {
+      prompted++;
+    },
+  };
+
+  repl.slashMenu = {
+    open: true,
+    line: '/pro hello world',
+    items: [{ cmd: '/project', desc: 'Show/set current project' }],
+    selected: 0,
+    printedLines: 0,
+  };
+
+  assert.equal(repl.handleSlashMenuKey({ name: 'return' }), false);
+  assert.equal(repl.handleSlashMenuKey({ name: 'tab' }), true);
+
+  assert(writes.some(entry => entry.value === null && entry.options?.ctrl === true && entry.options?.name === 'u'));
+  assert(writes.some(entry => entry.value === '/project hello world'));
+  assert.equal(prompted > 0, true);
+});
+
+test('assistant markdown tables render inside a box instead of raw pipe rows', () => {
+  const repl = new WinterREPL({ projectPath: 'E:\\dev\\app\\winter' });
+  const logs = [];
+  const originalLog = console.log;
+
+  console.log = (...args) => {
+    logs.push(args.join(' '));
+  };
+
+  try {
+    repl.printAssistantAnswer(`## Đánh giá tổng thể\n\n| Tiêu chí | Rating |\n| --- | --- |\n| Code Quality | ⭐⭐⭐ (3/5) — Cần review thêm |\n| Maturity | ⭐⭐ (2/5) — Rất sớm |`, 0, {});
+  } finally {
+    console.log = originalLog;
+  }
+
+  const output = logs.join('\n');
+  assert.match(output, /╭/);
+  assert.match(output, /Tiêu chí/);
+  assert.match(output, /Rating/);
+  assert.doesNotMatch(output, /\| --- \| --- \|/);
 });
 
 test('resource paths point at bundled project resources', () => {
@@ -63,9 +116,51 @@ test('local resource context indexes Claude and Codex resource roots', async () 
   assert.match(context, /Codex memories/);
 });
 
+test('local resource context indexes user home Codex and Claude roots', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-user-roots-'));
+  const codexRoot = path.join(root, '.codex');
+  const claudeRoot = path.join(root, '.claude');
+  await mkdir(path.join(codexRoot, 'skills'), { recursive: true });
+  await mkdir(path.join(codexRoot, 'plugins'), { recursive: true });
+  await mkdir(path.join(codexRoot, 'rules'), { recursive: true });
+  await mkdir(path.join(codexRoot, 'memories'), { recursive: true });
+  await mkdir(path.join(claudeRoot, 'skills'), { recursive: true });
+  await mkdir(path.join(claudeRoot, 'plugins'), { recursive: true });
+  await writeFile(path.join(codexRoot, 'skills', 'home-skill.md'), '# skill');
+  await writeFile(path.join(codexRoot, 'plugins', 'home-plugin.js'), 'export default {}');
+  await writeFile(path.join(codexRoot, 'rules', 'home-rule.md'), '# rule');
+  await writeFile(path.join(codexRoot, 'memories', 'home-memory.md'), '# memory');
+  await writeFile(path.join(claudeRoot, 'skills', 'claude-skill.md'), '# skill');
+  await writeFile(path.join(claudeRoot, 'plugins', 'claude-plugin.js'), 'export default {}');
+
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  repl.contextLoader.getUserResourcePaths = () => ({
+    codexRoot,
+    codexSkills: path.join(codexRoot, 'skills'),
+    codexPlugins: path.join(codexRoot, 'plugins'),
+    codexRules: path.join(codexRoot, 'rules'),
+    codexMemories: path.join(codexRoot, 'memories'),
+    claudeRoot,
+    claudeSkills: path.join(claudeRoot, 'skills'),
+    claudePlugins: path.join(claudeRoot, 'plugins'),
+    claudeRules: path.join(claudeRoot, 'rules'),
+    claudeMemories: path.join(claudeRoot, 'memories'),
+  });
+
+  const context = await repl.getLocalResourceContext();
+
+  assert.match(context, /User resource roots:/);
+  assert.match(context, /Home Codex skills: home-skill\.md/);
+  assert.match(context, /Home Codex plugins: home-plugin\.js/);
+  assert.match(context, /Home Codex rules: home-rule\.md/);
+  assert.match(context, /Home Codex memories: home-memory\.md/);
+  assert.match(context, /Home Claude skills: claude-skill\.md/);
+  assert.match(context, /Home Claude plugins: claude-plugin\.js/);
+});
+
 test('inferStartupSkills promotes design skills for React-like projects', async () => {
   const repl = new WinterREPL({ projectPath: process.cwd() });
-  repl.getStartupSkillCatalog = async () => new Set([
+  repl.contextLoader.getStartupSkillCatalog = async () => new Set([
     'coding',
     'debug',
     'refactor',
@@ -74,7 +169,7 @@ test('inferStartupSkills promotes design skills for React-like projects', async 
     'web-design-guidelines',
     'vercel-react-best-practices',
   ]);
-  repl.getProjectSignals = async () => ['react', 'next', 'tsx', 'ui'];
+  repl.contextLoader.getProjectSignals = async () => ['react', 'next', 'tsx', 'ui'];
 
   const snapshot = await repl.inferStartupSkills();
 
@@ -86,8 +181,8 @@ test('inferStartupSkills promotes design skills for React-like projects', async 
 
 test('bootstrapProjectCapabilities creates a startup plan and stores skills', async () => {
   const repl = new WinterREPL({ projectPath: process.cwd() });
-  repl.getStartupSkillCatalog = async () => new Set(['coding', 'debug', 'refactor', 'test']);
-  repl.getProjectSignals = async () => ['node', 'cli'];
+  repl.contextLoader.getStartupSkillCatalog = async () => new Set(['coding', 'debug', 'refactor', 'test']);
+  repl.contextLoader.getProjectSignals = async () => ['node', 'cli'];
 
   const contextStore = {};
   const plans = [];
@@ -122,6 +217,47 @@ test('shouldUseTools keeps agent mode enabled by default', () => {
 
   assert.equal(repl.shouldUseTools('hello'), true);
   assert.equal(repl.shouldUseTools('just chat'), true);
+});
+
+test('runConversation routes review-like prompts to Claude when available', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  const requests = [];
+
+  repl.ai = {
+    tools: [],
+    providers: {
+      custom: { model: 'custom-model' },
+      claude: { model: 'claude-sonnet-4-20250514' },
+    },
+    getActiveProvider: () => 'custom',
+    setTools(tools) {
+      this.tools = tools;
+    },
+    async sendRequest(messages, options = {}) {
+      requests.push({ messages, options });
+      return { choices: [{ message: { content: 'done' } }] };
+    },
+  };
+  repl.tools = { normalizeToolName: name => name, execute: async () => ({ success: true }) };
+
+  const answer = await repl.runConversation([{ role: 'user', content: 'Please review this bug fix' }], 'Test', []);
+
+  assert.equal(answer, 'done');
+  assert.equal(requests[0].options.provider, 'claude');
+  assert.equal(requests[0].options.model, 'claude-sonnet-4-20250514');
+});
+
+test('getAgentTools scopes tool access by agent role', () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+
+  const reviewTools = repl.getAgentTools('review').map(tool => tool.name);
+  const debugTools = repl.getAgentTools('debug').map(tool => tool.name);
+
+  assert(reviewTools.includes('Read'));
+  assert(reviewTools.includes('Grep'));
+  assert(!reviewTools.includes('Write'));
+  assert(debugTools.includes('Write'));
+  assert(debugTools.includes('Bash'));
 });
 
 test('extractModelIdsFromCache reads model slugs without service tier ids', () => {
@@ -446,6 +582,146 @@ test('runConversation reports malformed tool arguments instead of executing empt
 
   assert.equal(answer, 'Recovered');
   assert.deepEqual(executed, []);
+});
+
+test('runConversation stops repeating identical tool calls and asks for a final answer', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+
+  let streamCount = 0;
+  const executed = [];
+  repl.ai = {
+    tools: [],
+    providers: { custom: { model: 'test-model' } },
+    getActiveProvider: () => 'custom',
+    setTools(tools) {
+      this.tools = tools;
+    },
+    async *streamRequest(messages, options = {}) {
+      streamCount++;
+
+      if (options.enableTools === false) {
+        yield { content: 'Final answer', usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 } };
+        return;
+      }
+
+      yield {
+        raw: {
+          choices: [{
+            delta: {
+              tool_calls: [{
+                index: 0,
+                id: 'call-read',
+                type: 'function',
+                function: { name: 'Read', arguments: '{"file_path":"README.md"}' },
+              }],
+            },
+            finish_reason: 'tool_calls',
+          }],
+        },
+      };
+    },
+  };
+  repl.tools = {
+    normalizeToolName: name => name,
+    async execute(name, args) {
+      executed.push({ name, args });
+      return { success: true, path: args.file_path, content: 'Winter CLI\n', lines: 1, size: 10 };
+    },
+  };
+
+  const answer = await repl.runConversation([{ role: 'user', content: 'read it' }], 'Test', [{ name: 'Read' }]);
+
+  assert.equal(answer, 'Final answer');
+  assert.equal(executed.length, 1);
+  assert(streamCount >= 2);
+});
+
+test('runConversation can grant Bash permission for the whole session', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+
+  let streamCount = 0;
+  const prompts = [];
+  const executed = [];
+  repl.permissionManager = {
+    shouldPromptForToolPermission: async toolName => toolName === 'Bash',
+    allowTool: async () => {},
+  };
+  repl.rl = {
+    question(prompt, callback) {
+      prompts.push(prompt);
+      callback('2');
+    },
+  };
+  repl.ai = {
+    tools: [],
+    providers: { custom: { model: 'test-model' } },
+    getActiveProvider: () => 'custom',
+    setTools(tools) {
+      this.tools = tools;
+    },
+    async *streamRequest(_messages, options = {}) {
+      streamCount++;
+
+      if (options.enableTools === false) {
+        yield { content: 'Final answer' };
+        return;
+      }
+
+      if (streamCount === 1) {
+        yield {
+          raw: {
+            choices: [{
+              delta: {
+                tool_calls: [{
+                  index: 0,
+                  id: 'call-1',
+                  type: 'function',
+                  function: { name: 'Bash', arguments: '{"command":"echo one"}' },
+                }],
+              },
+              finish_reason: 'tool_calls',
+            }],
+          },
+        };
+        return;
+      }
+
+      if (streamCount === 2) {
+        yield {
+          raw: {
+            choices: [{
+              delta: {
+                tool_calls: [{
+                  index: 0,
+                  id: 'call-2',
+                  type: 'function',
+                  function: { name: 'Bash', arguments: '{"command":"echo two"}' },
+                }],
+              },
+              finish_reason: 'tool_calls',
+            }],
+          },
+        };
+        return;
+      }
+
+      yield { content: 'Final answer' };
+    },
+  };
+  repl.tools = {
+    normalizeToolName: name => name,
+    async execute(name, args) {
+      executed.push({ name, args });
+      return { success: true, stdout: args.command };
+    },
+  };
+
+  const answer = await repl.runConversation([{ role: 'user', content: 'run commands' }], 'Test', [{ name: 'Bash' }]);
+
+  assert.equal(answer, 'Final answer');
+  assert.equal(prompts.length, 1);
+  assert.equal(executed.length, 2);
+  assert(repl.sessionPermissionGrants.has('Bash'));
 });
 
 test('runConversation executes inline XML tool calls without printing pseudo syntax', async () => {

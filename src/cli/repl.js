@@ -4,7 +4,7 @@
  */
 
 import readline from 'readline';
-import { promises as fs } from 'fs';
+import { promises as fs, watch as fsWatch } from 'fs';
 import { homedir } from 'os';
 import { welcomeBanner, colors } from './snowflake-logo.js';
 import { renderBox, terminalWidth, stripAnsi, visibleWidth, wrapText, padVisible } from './terminal-ui.js';
@@ -12,142 +12,35 @@ import { ToolExecutor } from '../tools/executor.js';
 import { SessionManager } from '../session/manager.js';
 import { AIProviderManager } from '../ai/providers.js';
 import { ConfigLoader } from './config.js';
+import { PermissionManager } from '../tools/permission.js';
+import { compressConversation } from '../context/compress.js';
+import { getToolUsageSummary } from '../tools/analytics.js';
+import { SweAgent } from '../agent/swe-agent.js';
+import { SLASH_COMMANDS } from './slash-commands.js';
+import { formatMarkdown } from './markdown-format.js';
+import { Spinner } from './spinner.js';
+import { ContextLoader } from './context-loader.js';
+import { PromptBuilder } from './prompt-builder.js';
+import {
+  addUsage as mergeUsage,
+  buildToolCallSignature as buildToolCallSignatureText,
+  buildToolFallbackAnswer as buildFallbackAnswer,
+  compactText as compactPromptText,
+  decodeXmlEntities as decodeXmlValue,
+  extractFirstJsonObject as extractJsonObject,
+  extractInlineToolCalls as extractInlineCalls,
+  formatAnswerFooter as formatFooterText,
+  formatToolCallsForMessage as formatToolCalls,
+  formatToolResultForConsole as formatToolResult,
+  formatUsage as formatUsageText,
+  normalizeToolCalls as normalizeCalls,
+  parseToolArguments as parseArguments,
+  summarizePromptList as summarizePrompts,
+} from './conversation-format.js';
+import { handleSlashCommand } from './repl-commands.js';
 import path from 'path';
-import { highlight } from 'cli-highlight';
-
-// All slash commands (like Claude Code)
-const SLASH_COMMANDS = [
-  // Project
-  { cmd: '/project', desc: 'Show/set current project' },
-  { cmd: '/cd', desc: 'Change directory' },
-  { cmd: '/pwd', desc: 'Show current directory' },
-  // Session
-  { cmd: '/session', desc: 'Session management' },
-  { cmd: '/sessions', desc: 'List all sessions' },
-  { cmd: '/clear', desc: 'Clear screen' },
-  // Memory
-  { cmd: '/remember', desc: 'Store in memory', usage: '/remember <text>' },
-  { cmd: '/memories', desc: 'Show stored memories' },
-  { cmd: '/forget', desc: 'Clear memories', usage: '/forget [pattern]' },
-  // Plans
-  { cmd: '/plan', desc: 'Create/view plans' },
-  { cmd: '/plans', desc: 'List active plans' },
-  // Tasks
-  { cmd: '/tasks', desc: 'List tasks' },
-  { cmd: '/task', desc: 'Create task', usage: '/task <description>' },
-  { cmd: '/agent', desc: 'Launch subagent', usage: '/agent <task>' },
-  // Tools
-  { cmd: '/read', desc: 'Read file', usage: '/read <file>' },
-  { cmd: '/write', desc: 'Write file', usage: '/write <file> <content>' },
-  { cmd: '/glob', desc: 'Find files', usage: '/glob <pattern>' },
-  { cmd: '/grep', desc: 'Search files', usage: '/grep <pattern>' },
-  { cmd: '/bash', desc: 'Run command', usage: '/bash <command>' },
-  { cmd: '/image', desc: 'Analyze image/screenshot', usage: '/image <file> [question]' },
-  // Design
-  { cmd: '/design', desc: 'Design commands', sub: ['search', 'add', 'list', 'preview'] },
-  { cmd: '/designs', desc: 'List/search awesome-design-md systems', usage: '/designs [query]' },
-  // Skills
-  { cmd: '/skill', desc: 'Skills management', sub: ['list', 'enable', 'create'] },
-  { cmd: '/skills', desc: 'List local Winter/Codex/Claude skills' },
-  // Plugins
-  { cmd: '/plugin', desc: 'Plugin management', sub: ['list', 'install', 'remove'] },
-  // Local agent resources
-  { cmd: '/codex', desc: 'Browse ~/.codex resources', usage: '/codex [skills|plugins|models|rules|memories]' },
-  { cmd: '/claude', desc: 'Browse ~/.claude resources', usage: '/claude [skills|plugins|settings]' },
-  { cmd: '/karpathy', desc: 'Browse karpathy-tools and guidelines' },
-  { cmd: '/agents', desc: 'Read ~/agents.md' },
-  { cmd: '/resources', desc: 'Show bundled local resource manifest' },
-  // Provider
-  { cmd: '/provider', desc: 'Show/switch AI provider', usage: '/provider <custom|claude|ollama|openai|groq>' },
-  { cmd: '/providers', desc: 'List all providers' },
-  { cmd: '/models', desc: 'List configured/cached models' },
-  // Config
-  { cmd: '/config', desc: 'Show configuration' },
-  { cmd: '/model', desc: 'Show/set active provider model', usage: '/model <model-id>' },
-  // Help & Exit
-  { cmd: '/help', desc: 'Show this help' },
-  { cmd: '/?', desc: 'Show help' },
-  { cmd: '/exit', desc: 'Exit Winter' },
-  { cmd: '/quit', desc: 'Exit Winter' },
-];
 
 
-function formatMarkdown(text) {
-  if (!text) return '';
-  let formatted = text;
-
-  formatted = formatted.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
-    const label = lang || 'code';
-    let coloredCode = code.trimEnd();
-    try {
-      coloredCode = highlight(coloredCode, { language: lang || 'javascript', ignoreIllegals: true });
-    } catch (e) {
-      // Fallback
-    }
-
-    const boxWidth = Math.max(60, Math.min(terminalWidth(60, 100, 80), 100));
-    const body = wrapText(coloredCode, boxWidth - 4);
-
-    return `\n${renderBox({
-      title: label,
-      width: boxWidth,
-      borderColor: colors.dim,
-      titleColor: colors.dim,
-      body,
-    })}\n${colors.white}`;
-  });
-
-  // Bold
-  formatted = formatted.replace(/\*\*(.*?)\*\*/g, `${colors.bright}$1${colors.reset}${colors.white}`);
-
-  // Italic
-  formatted = formatted.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, `${colors.italic || colors.dim}$1${colors.reset}${colors.white}`);
-
-  // Inline code
-  formatted = formatted.replace(/`([^`\n]+)`/g, `${colors.cyan}$1${colors.reset}${colors.white}`);
-
-  // Headings
-  formatted = formatted.replace(/^### (.+)$/gm, `${colors.cyan}   $1${colors.reset}`);
-  formatted = formatted.replace(/^## (.+)$/gm, `${colors.cyan}${colors.bright}  $1${colors.reset}`);
-  formatted = formatted.replace(/^# (.+)$/gm, `\n${colors.bright}${colors.cyan}━ $1${colors.reset}\n`);
-
-  // Horizontal rules
-  formatted = formatted.replace(/^---+$/gm, `${colors.dim}${'─'.repeat(50)}${colors.reset}`);
-
-  // Unordered list bullets
-  formatted = formatted.replace(/^(\s*)[-*] /gm, `$1${colors.cyan}•${colors.reset} `);
-
-  // Numbered list
-  formatted = formatted.replace(/^(\s*)(\d+)\. /gm, `$1${colors.cyan}$2.${colors.reset} `);
-
-  return formatted;
-}
-
-class Spinner {
-  constructor(text = '') {
-    this.text = text;
-    this.frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-    this.interval = null;
-    this.frameIndex = 0;
-  }
-  start() {
-    if (this.interval) return;
-    this.interval = setInterval(() => {
-      process.stdout.write(`\r\x1b[K${colors.cyan}${this.frames[this.frameIndex]}${colors.reset} ${colors.dim}${this.text}${colors.reset}`);
-      this.frameIndex = (this.frameIndex + 1) % this.frames.length;
-    }, 80);
-  }
-  stop(finalText) {
-    if (this.interval) {
-      clearInterval(this.interval);
-      this.interval = null;
-      process.stdout.write(`\r\x1b[K${finalText ? finalText + '\n' : ''}`);
-    }
-  }
-  update(text) {
-    this.text = text;
-  }
-}
 
 export class WinterREPL {
   constructor(options = {}) {
@@ -167,36 +60,56 @@ export class WinterREPL {
     this.taskQueue = [];
     this.isProcessing = false;
     this.isCancelled = false;
+    this.sessionPermissionGrants = new Set();
+    this.permissionManager = new PermissionManager(this.config, this.session);
+    this.contextLoader = new ContextLoader({ projectPath: this.projectPath, session: this.session, tools: this.tools });
+    this.promptBuilder = new PromptBuilder({
+      session: this.session,
+      tools: this.tools,
+      projectPath: this.projectPath,
+      sessionPermissionGrants: this.sessionPermissionGrants,
+      compactText: (text, maxChars, label) => this.compactText(text, maxChars, label),
+      summarizePrompts: (items, opts) => this.summarizePromptList(items, opts),
+    });
+    this.watchers = [];
+  }
+
+  getSessionToolPermissionStore() {
+    const context = this.session?.getContext?.() || {};
+    const value = context.toolPermissions?.value;
+    return value && typeof value === 'object' ? value : { session: [] };
+  }
+
+  hydrateSessionToolPermissions() {
+    const store = this.getSessionToolPermissionStore();
+    this.sessionPermissionGrants = new Set(Array.isArray(store.session) ? store.session : []);
+  }
+
+  async rememberSessionToolPermission(toolName) {
+    const store = this.getSessionToolPermissionStore();
+    const sessionGrants = new Set(Array.isArray(store.session) ? store.session : []);
+    sessionGrants.add(toolName);
+    await this.session.updateContext('toolPermissions', {
+      session: [...sessionGrants],
+    });
+    this.sessionPermissionGrants = sessionGrants;
+  }
+
+  async shouldPromptForToolPermission(toolName) {
+    if (this.sessionPermissionGrants.has(toolName)) return false;
+    return await this.permissionManager.shouldPromptForToolPermission(toolName);
+  }
+
+  buildSessionSignalsPrompt() {
+    return this.promptBuilder.buildSessionSignalsPrompt();
   }
 
   getProjectInstructionFiles() {
-    return ['winter.md', 'WINTER.md', 'CLAUDE.md', '.claude/CLAUDE.md'];
+    return this.contextLoader.getProjectInstructionFiles();
   }
 
   async readProjectInstructionFiles() {
-    const fsPromises = await import('fs/promises');
-    const files = [];
-    const seen = new Set();
-
-    for (const relativePath of this.getProjectInstructionFiles()) {
-      const filePath = path.join(this.projectPath, relativePath);
-      const normalizedPath = path.normalize(filePath).toLowerCase();
-
-      if (seen.has(normalizedPath)) continue;
-      seen.add(normalizedPath);
-
-      try {
-        const stat = await fsPromises.stat(filePath).catch(() => null);
-        if (!stat || !stat.isFile()) continue;
-
-        const content = await fsPromises.readFile(filePath, 'utf8');
-        files.push({ relativePath, filePath, content });
-      } catch {
-        // Ignore unreadable instruction files.
-      }
-    }
-
-    return files;
+    return this.contextLoader.readProjectInstructionFiles();
   }
 
   async start() {
@@ -358,7 +271,7 @@ export class WinterREPL {
     this.rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
-      prompt: `${colors.bright}${colors.cyan}winter > ${colors.reset}`,
+      prompt: `${colors.bright}${colors.cyan}winter❄️:  ${colors.reset}`,
       completer: this.completer.bind(this),
     });
     this.installSlashSuggestions();
@@ -406,30 +319,11 @@ export class WinterREPL {
   }
 
   getResourcePaths() {
-    const home = homedir();
-    const localRoot = path.join(this.projectPath, 'resources', 'local');
-    return {
-      codex: {
-        root: path.join(localRoot, 'codex'),
-        skills: path.join(localRoot, 'codex', 'skills'),
-        plugins: path.join(localRoot, 'codex', 'plugins'),
-        models: path.join(localRoot, 'codex', 'models_cache.json'),
-        rules: path.join(localRoot, 'codex', 'rules'),
-        memories: path.join(localRoot, 'codex', 'memories'),
-      },
-      claude: {
-        root: path.join(localRoot, 'claude'),
-        skills: path.join(localRoot, 'claude', 'skills'),
-        plugins: path.join(localRoot, 'claude', 'plugins'),
-        projects: path.join(localRoot, 'claude', 'projects'),
-        settings: path.join(localRoot, 'claude', 'settings.json'),
-      },
-      karpathy: path.join(localRoot, 'karpathy-tools'),
-      designs: path.join(localRoot, 'awesome-design-md', 'design-md'),
-      agents: path.join(localRoot, 'agents.md'),
-      manifest: path.join(localRoot, 'manifest.json'),
-      localRoot,
-    };
+    return this.contextLoader.getResourcePaths();
+  }
+
+  getUserResourcePaths() {
+    return this.contextLoader.getUserResourcePaths();
   }
 
   async showResourceManifest() {
@@ -546,15 +440,7 @@ export class WinterREPL {
   }
 
   async listPathEntries(target, limit = 100) {
-    try {
-      const entries = await fs.readdir(target, { withFileTypes: true });
-      return entries
-        .map(entry => ({ name: entry.name, isDirectory: entry.isDirectory() }))
-        .sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name))
-        .slice(0, limit);
-    } catch {
-      return [];
-    }
+    return this.contextLoader.listPathEntries(target, limit);
   }
 
   async handleInput(input) {
@@ -852,328 +738,7 @@ export class WinterREPL {
   }
 
   async handleSlashCommand(input) {
-    const parts = input.split(/\s+/);
-    const cmd = parts[0].toLowerCase();
-    const args = parts.slice(1);
-
-    switch (cmd) {
-      // Project commands
-      case '/project':
-      case '/pwd':
-        console.log(`${colors.cyan}${this.projectPath}${colors.reset}`);
-        break;
-      case '/cd':
-        if (args[0]) {
-          this.projectPath = path.resolve(args[0]);
-          console.log(`${colors.green}✓ Changed to: ${this.projectPath}${colors.reset}`);
-        }
-        break;
-
-      // Session commands
-      case '/session':
-        console.log(`${colors.cyan}Session: ${this.session.getSessionId().substring(0, 8)}${colors.reset}`);
-        break;
-      case '/sessions':
-        const sessions = await this.session.listSessions();
-        console.log(`${colors.cyan}Sessions:${colors.reset}`);
-        sessions.forEach(s => console.log(`  ${s.id.substring(0, 8)} - ${s.createdAt}`));
-        break;
-      case '/clear':
-        console.clear();
-        break;
-
-      // Memory commands
-      case '/remember':
-        if (args.length > 0) {
-          await this.session.addToMemory(args.join(' '));
-          console.log(`${colors.green}✓ Remembered${colors.reset}`);
-        }
-        break;
-      case '/memories':
-        const memories = this.session.getMemory();
-        if (memories.length === 0) {
-          console.log(`${colors.dim}No memories${colors.reset}`);
-        } else {
-          console.log(`${colors.cyan}Memories:${colors.reset}`);
-          memories.slice(-10).forEach(m => console.log(`  ${colors.dim}•${colors.reset} ${m.text}`));
-        }
-        break;
-      case '/forget':
-        console.log(`${colors.green}✓ Memories cleared${colors.reset}`);
-        break;
-
-      // Git Auto-Pilot
-      case '/commit':
-        await this.runAutoCommit(args.join(' '));
-        return;
-      case '/review':
-        await this.runCodeReview(args.join(' '));
-        return;
-
-      // Plan commands
-      case '/plan':
-      case '/plans':
-        if (args.length > 0) {
-          await this.generateInteractivePlan(args.join(' '));
-          break;
-        }
-        const plans = this.session.getPlans();
-        if (plans.length === 0) {
-          console.log(`${colors.dim}No active plans${colors.reset}`);
-        } else {
-          console.log(`${colors.cyan}Active Plans:${colors.reset}`);
-          plans.forEach(p => console.log(`  ${colors.green}•${colors.reset} ${p.title} [${p.status}]`));
-        }
-        break;
-
-      // Task commands
-      case '/tasks':
-        const tasks = this.session.getPlans();
-        if (tasks.length === 0) {
-          console.log(`${colors.dim}No tasks${colors.reset}`);
-        } else {
-          console.log(`${colors.cyan}Tasks:${colors.reset}`);
-          tasks.forEach(t => console.log(`  ${colors.green}•${colors.reset} ${t.title} [${t.status}]`));
-        }
-        break;
-      case '/task':
-        if (args.length > 0) {
-          await this.session.createPlan(args.join(' '), '');
-          console.log(`${colors.green}✓ Task created${colors.reset}`);
-        }
-        break;
-      case '/agent':
-        if (args.length > 0) {
-          let role = 'general';
-          let task = args.join(' ');
-          const first = args[0].toLowerCase();
-          if (['plan', 'review', 'debug', 'research', 'browser'].includes(first)) {
-            role = first;
-            task = args.slice(1).join(' ');
-          }
-          if (!task) {
-            console.log(`${colors.dim}Usage: /agent [plan|review|debug|research|browser] <task>${colors.reset}`);
-            break;
-          }
-          console.log(`${colors.cyan}Subagent:${colors.reset} ${role}`);
-          await this.runAgent(role, task);
-        } else {
-          console.log(`${colors.dim}Usage: /agent [plan|review|debug|research|browser] <task>${colors.reset}`);
-        }
-        break;
-
-      // Tool commands
-      case '/read':
-        if (args[0]) {
-          const result = await this.tools.execute('Read', { file_path: path.resolve(this.projectPath, args[0]) });
-          if (result.success) {
-            console.log(result.content);
-          } else {
-            console.log(`${colors.red}Error: ${result.error}${colors.reset}`);
-          }
-        }
-        break;
-      case '/write':
-        if (args.length > 1) {
-          const [file, ...content] = args;
-          const result = await this.tools.execute('Write', { file_path: path.resolve(this.projectPath, file), content: content.join(' ') });
-          if (result.success) {
-            console.log(`${colors.green}✓ Wrote ${file}${colors.reset}`);
-          } else {
-            console.log(`${colors.red}Error: ${result.error}${colors.reset}`);
-          }
-        }
-        break;
-      case '/bash':
-        if (args.length > 0) {
-          const result = await this.tools.execute('Bash', { command: args.join(' '), cwd: this.projectPath });
-          if (result.success) {
-            if (result.stdout) console.log(result.stdout);
-            if (result.stderr) console.log(`${colors.yellow}${result.stderr}${colors.reset}`);
-          } else {
-            console.log(`${colors.red}Error: ${result.error}${colors.reset}`);
-          }
-        }
-        break;
-      case '/glob':
-        if (args[0]) {
-          const result = await this.tools.execute('Glob', { pattern: args[0], cwd: this.projectPath });
-          if (result.success) {
-            result.files.forEach(f => console.log(`  ${f}`));
-          }
-        }
-        break;
-      case '/grep':
-        if (args[0]) {
-          const result = await this.tools.execute('Grep', { pattern: args[0], path: this.projectPath });
-          if (result.success) {
-            result.matches.forEach(m => console.log(`  ${m}`));
-          }
-        }
-        break;
-      case '/image':
-        if (args.length > 0) {
-          const imgPath = path.resolve(this.projectPath, args[0]);
-          try {
-            const img = await this.loadImageAsBase64(imgPath);
-            if (img) {
-              const question = args.slice(1).join(' ') || 'Vui lòng phân tích hình ảnh này.';
-              await this.chat(question, [img]);
-            } else {
-              console.log(`[31mKhông thể load ảnh: ${args[0]}[0m`);
-            }
-          } catch {
-            console.log(`[31mLỗi xử lý ảnh[0m`);
-          }
-        } else {
-          console.log(`[2mSử dụng: /image <file> [câu hỏi][0m`);
-        }
-        break;
-
-      case '/paste':
-        const clipText = await this.getClipboardContent();
-        if (clipText) {
-          console.log(`\x1b[35m[CLIPBOARD]\x1b[0m Đã nhận ${clipText.length} ký tự từ bộ nhớ đệm.`);
-          const userQuery = args.join(' ') || 'Hãy đọc và phân tích nội dung sau:';
-          await this.chat(`${userQuery}\n\n\`\`\`\n${clipText}\n\`\`\``);
-        } else {
-          console.log('\x1b[33mKhông tìm thấy văn bản trong bộ nhớ đệm hoặc bị lỗi.\x1b[0m');
-        }
-        break;
-
-      // Design commands
-      case '/design':
-        const { DesignCommands } = await import('../design/commands.js');
-        const design = new DesignCommands(this.session, this.config);
-        await design.execute(args[0], args.slice(1));
-        break;
-      case '/designs':
-        await this.showDesignSystems(args[0]);
-        break;
-
-      // Skills commands
-      case '/skill':
-        const { SkillManager } = await import('../skills/manager.js');
-        const skills = new SkillManager(this.session);
-        const skillList = await skills.listSkills();
-        if (args[0] === 'list' || !args[0]) {
-          console.log(`${colors.cyan}Skills:${colors.reset}`);
-          skillList.forEach(s => console.log(`  ${s.icon} ${s.name} - ${s.description}`));
-        }
-        break;
-      case '/skills':
-        await this.showAllLocalSkills();
-        break;
-
-      // Plugin commands
-      case '/plugin':
-        const { PluginManager } = await import('../plugins/manager.js');
-        const plugins = new PluginManager(this.session);
-        const pluginList = await plugins.listPlugins();
-        if (args[0] === 'list' || !args[0]) {
-          console.log(`${colors.cyan}Plugins:${colors.reset}`);
-          pluginList.forEach(p => console.log(`  ${p.icon} ${p.name} v${p.version}`));
-        }
-        break;
-      case '/codex':
-        await this.showResourceGroup('codex', args[0]);
-        break;
-      case '/claude':
-        await this.showResourceGroup('claude', args[0]);
-        break;
-      case '/karpathy':
-        await this.showKarpathyResources();
-        break;
-      case '/agents':
-        await this.showAgentsFile();
-        break;
-      case '/resources':
-        await this.showResourceManifest();
-        break;
-
-      // Provider commands
-      case '/provider':
-        if (args[0]) {
-          const providerName = args[0].trim().toLowerCase();
-          const switched = typeof this.ai.switchProvider === 'function'
-            ? await this.ai.switchProvider(providerName)
-            : (this.ai.setProvider(providerName) ? providerName : null);
-
-          if (switched) {
-            await this.config.setDefaultProvider(switched);
-            console.log(`${colors.green}✓ Provider: ${switched}${colors.reset}`);
-          } else {
-            const available = this.ai.listProviders().map(p => p.name).join(', ') || 'none';
-            console.log(`${colors.red}Unknown provider: ${providerName}${colors.reset}`);
-            console.log(`${colors.dim}Available providers: ${available}${colors.reset}`);
-          }
-        } else {
-          console.log(`${colors.cyan}Provider: ${this.ai.getActiveProvider()}${colors.reset}`);
-        }
-        break;
-      case '/providers':
-        const providers = this.ai.listProviders();
-        console.log(`${colors.cyan}Providers:${colors.reset}`);
-        providers.forEach(p => {
-          const status = p.ready ? `${colors.green}●${colors.reset}` : `${colors.red}○${colors.reset}`;
-          console.log(`  ${status} ${p.name} (${p.model})`);
-        });
-        break;
-      case '/models':
-        await this.showModels();
-        break;
-
-      // Config commands
-      case '/config':
-        const cfg = await this.config.load();
-        console.log(JSON.stringify(cfg, null, 2));
-        break;
-      case '/model':
-        if (args[0]) {
-          const providerName = this.ai.getActiveProvider();
-          const model = args.join(' ');
-          await this.config.setProviderModel(providerName, model);
-          this.ai.providers[providerName].model = model;
-          console.log(`${colors.green}✓ Model for ${providerName}: ${model}${colors.reset}`);
-        } else {
-          console.log(`${colors.cyan}Model: ${this.ai.providers[this.ai.getActiveProvider()]?.model}${colors.reset}`);
-        }
-        break;
-
-      // Help & Exit
-      case '/':
-        this.showCommandMenu();
-        break;
-      case '/auto':
-      case '/tdd':
-        if (args.length > 0) {
-          await this.runAutoHealing(args.join(' '));
-        } else {
-          console.log(`\x1b[33mSử dụng: /auto <yêu cầu code>\x1b[0m`);
-        }
-        break;
-      case '/help':
-      case '/?':
-        this.showCommandMenu();
-        break;
-      case '/exit':
-      case '/quit':
-        this.running = false;
-        console.log(`${colors.dim}Exiting...${colors.reset}`);
-        if (!this.readlineClosed) this.rl.close();
-        break;
-
-      default:
-        // Try partial match
-        const match = SLASH_COMMANDS.find(c => c.cmd.startsWith(cmd));
-        if (match) {
-          console.log(`${colors.cyan}${match.cmd}${colors.reset} - ${match.desc}`);
-          if (match.usage) console.log(`${colors.dim}Usage: ${match.usage}${colors.reset}`);
-        } else {
-          console.log(`${colors.red}Unknown command: ${cmd}${colors.reset}`);
-          console.log(`${colors.dim}Type /help for available commands${colors.reset}`);
-        }
-    }
+    return handleSlashCommand(this, input);
   }
 
   showCommandMenu() {
@@ -1208,6 +773,7 @@ export class WinterREPL {
       `${c.bright}Cấu hình Model${c.reset}`,
       row(`${c.yellow}/provider${c.reset} Đổi provider AI`, `${c.yellow}/model${c.reset}    Đổi model`),
       row(`${c.yellow}/providers${c.reset} Danh sách provider`, `${c.yellow}/models${c.reset}   Danh sách model`),
+      row(`${c.yellow}/mcp${c.reset}      MCP server mgmt`, `${c.yellow}/permissions${c.reset} Quyền/allowlist`),
       '',
       `${c.bright}Bộ nhớ & Kỹ năng${c.reset}`,
       row(`${c.yellow}/remember${c.reset} Lưu vào bộ nhớ`, `${c.yellow}/memories${c.reset} Xem bộ nhớ`),
@@ -1262,6 +828,8 @@ ${colors.white}AI & Config:${colors.reset}
   /provider [name]  Show/switch provider and save default
   /providers        List providers
   /models           List configured/cached models
+  /mcp              MCP server management
+  /permissions      Permission allowlist
   /config          Show config
   /model [model]    Show/set active provider model
 
@@ -1380,10 +948,49 @@ ${colors.reset}
     }
   }
 
+  selectExecutionProfile(messages = [], options = {}) {
+    if (typeof this.ai?.selectExecutionProfile === 'function') {
+      const profile = this.ai.selectExecutionProfile(messages, options);
+      if (profile?.provider || profile?.model) return profile;
+    }
+
+    const text = Array.isArray(messages)
+      ? messages.map(message => {
+        if (!message) return '';
+        if (typeof message.content === 'string') return message.content;
+        if (Array.isArray(message.content)) {
+          return message.content.map(part => part?.text || part?.image_url?.url || '').join('\n');
+        }
+        return '';
+      }).join('\n').toLowerCase()
+      : String(messages || '').toLowerCase();
+
+    const providers = this.ai?.providers || {};
+    const activeProvider = this.ai?.getActiveProvider?.() || Object.keys(providers)[0] || null;
+    const hasProvider = name => !!providers[name]?.model || !!providers[name]?.ready;
+
+    let provider = activeProvider;
+    if (/\b(review|refactor|debug|fix|bug|error|stack trace|test|tool|patch|code)\b/.test(text) && hasProvider('claude')) {
+      provider = 'claude';
+    } else if (/\b(summary|summarize|commit message|changelog|docs|explain|rewrite)\b/.test(text) && hasProvider('openai')) {
+      provider = 'openai';
+    } else if (/\b(local|offline|privacy|private|on-device)\b/.test(text) && hasProvider('ollama')) {
+      provider = 'ollama';
+    } else if (/\b(quick|brief|short|fast)\b/.test(text) && hasProvider('groq')) {
+      provider = 'groq';
+    }
+
+    return {
+      provider,
+      model: options.model || providers[provider]?.model || providers[activeProvider]?.model || null,
+    };
+  }
+
 
   async runConversation(messages, label = 'Thinking', tools = null) {
     this.spinner = new Spinner(label + '...');
     this.spinner.start();
+    this.hydrateSessionToolPermissions();
 
     const startedAt = Date.now();
     const previousTools = this.ai.tools;
@@ -1394,11 +1001,14 @@ ${colors.reset}
     let usedTools = false;
     const toolSummaries = [];
     const totalUsage = {};
+    let lastToolSignature = null;
+    const executionProfile = this.selectExecutionProfile(messages, { enableTools: true });
     try {
       for (let i = 0; i < 8; i++) {
         if (this.isCancelled) throw new Error('AbortError');
         const turn = await this.requestAssistantTurn(messages, {
-          model: this.ai.providers[this.ai.getActiveProvider()]?.model,
+          provider: executionProfile.provider,
+          model: executionProfile.model,
           enableTools: true,
         }, startedAt, totalUsage);
 
@@ -1429,15 +1039,16 @@ ${colors.reset}
         usedTools = true;
         if (this.spinner) this.spinner.stop();
 
+        const currentToolSignature = this.buildToolCallSignature(toolCalls);
+        if (currentToolSignature && currentToolSignature === lastToolSignature) {
+          console.log(`
+${colors.yellow}ℹ AI đang lặp lại cùng một chuỗi tool call. Dừng vòng lặp để tránh spam.${colors.reset}`);
+          reachedToolLimit = false;
+          break;
+        }
+        lastToolSignature = currentToolSignature;
+
         const BOX_WIDTH = terminalWidth(76, 116, 92);
-        const innerWidth = BOX_WIDTH - 2;
-        const title = ' AGENT TOOLS EXECUTION ';
-        const titlePad = Math.max(0, innerWidth - visibleWidth(title));
-        const leftPad = Math.floor(titlePad / 2);
-        const rightPad = titlePad - leftPad;
-        console.log(`\n${colors.magenta}╭${'─'.repeat(innerWidth)}╮${colors.reset}`);
-        console.log(`${colors.magenta}│${colors.reset}${' '.repeat(leftPad)}${colors.bright}${title}${colors.reset}${' '.repeat(rightPad)}${colors.magenta}│${colors.reset}`);
-        console.log(`${colors.magenta}├${'─'.repeat(innerWidth)}┤${colors.reset}`);
         messages.push({
           role: 'assistant',
           content: assistantMsg.content || '',
@@ -1451,19 +1062,26 @@ ${colors.reset}
           const enrichedArgs = argParseError ? {} : this.enrichToolArgs(canonicalToolName, toolArgs, messages);
 
           const icon = canonicalToolName === 'Bash' ? '⚙' : canonicalToolName === 'Read' ? '📖' : canonicalToolName === 'Write' ? '✏️' : canonicalToolName === 'Edit' ? '🔧' : canonicalToolName === 'Grep' ? '🔍' : canonicalToolName === 'Glob' ? '📂' : '⚡';
-          console.log(`${colors.magenta}│${colors.reset} ${icon} ${colors.cyan}${colors.bright}${toolName}${colors.reset}`);
 
           let proceed = true;
-          if (canonicalToolName === 'Bash' && !argParseError) {
+          if (await this.shouldPromptForToolPermission(canonicalToolName) && !argParseError) {
             const cmd = enrichedArgs.command || enrichedArgs.cmd || 'unknown';
-            process.stdout.write(`${colors.magenta}│${colors.reset}   ${colors.yellow}⚠  AI muốn chạy: ${colors.bright}${cmd}${colors.reset}\n`);
-            proceed = await new Promise(resolve => {
-              this.rl.question(`${colors.magenta}│${colors.reset}   ${colors.yellow}Cho phép? [y/N]: ${colors.reset}`, answer => {
-                resolve(answer.trim().toLowerCase() === 'y');
-              });
-            });
-            if (!proceed) {
-              console.log(`${colors.magenta}│${colors.reset}   ${colors.dim}Đã hủy lệnh.${colors.reset}`);
+            if (this.sessionPermissionGrants.has(canonicalToolName)) {
+              proceed = true;
+            } else {
+              proceed = await this.promptToolPermission(cmd);
+              if (proceed === 'session') {
+                await this.rememberSessionToolPermission(canonicalToolName);
+                proceed = true;
+              }
+
+              if (proceed === true) {
+                await this.permissionManager.allowTool(canonicalToolName);
+              }
+
+              if (!proceed) {
+                console.log(`${colors.magenta}│${colors.reset}   ${colors.dim}Đã hủy lệnh.${colors.reset}`);
+              }
             }
           }
 
@@ -1491,18 +1109,21 @@ ${colors.reset}
           if (summary) {
             toolSummaries.push(`${canonicalToolName}: ${summary}`);
             const statusIcon = result.success === false ? `${colors.red}✖${colors.reset}` : `${colors.green}✓${colors.reset}`;
-
-            const maxLen = BOX_WIDTH - 8;
-            const wrappedLines = summary.split('\n').flatMap(line => wrapText(line, maxLen));
-            for (const [index, line] of wrappedLines.entries()) {
-              const prefix = index === 0 ? statusIcon : ' ';
-              const cleanLine = stripAnsi(line);
-              const padding = ' '.repeat(Math.max(0, maxLen - visibleWidth(cleanLine)));
-              console.log(`${colors.magenta}│${colors.reset}   ${prefix} ${colors.dim}${cleanLine}${colors.reset}${padding}${colors.magenta}│${colors.reset}`);
-            }
+            const toolLine = `${icon} ${colors.cyan}${colors.bright}${toolName}${colors.reset}`;
+            const summaryLines = summary.split('\n').flatMap(line => wrapText(line, BOX_WIDTH - 8));
+            console.log(renderBox({
+              title: 'AGENT TOOLS EXECUTION',
+              width: BOX_WIDTH,
+              borderColor: colors.magenta,
+              titleColor: colors.bright,
+              body: [
+                toolLine,
+                ...summaryLines.map((line, index) => index === 0 ? `${statusIcon} ${colors.dim}${line}${colors.reset}` : `${colors.dim}${line}${colors.reset}`),
+              ],
+            }));
           }
         }
-        console.log(`${colors.magenta}╰${'─'.repeat(innerWidth)}╯${colors.reset}\n`);
+        console.log('');
       }
 
       if (usedTools && !finalContent) {
@@ -1510,6 +1131,7 @@ ${colors.reset}
       }
     } finally {
       if (tools) this.ai.setTools(previousTools);
+      if (this.spinner) this.spinner.stop();
     }
 
     if ((reachedToolLimit || usedTools) && !finalContent) {
@@ -1648,8 +1270,12 @@ ${colors.reset}
 
     readline.emitKeypressEvents(process.stdin, this.rl);
 
-    process.stdin.on('keypress', (_str, key = {}) => {
+    process.stdin.on('keypress', (str, key = {}) => {
       if (key.ctrl || key.meta) return;
+
+      if (typeof str === 'string' && str.length > 1) {
+        return;
+      }
 
       if (this.slashMenu.open && this.handleSlashMenuKey(key)) {
         return;
@@ -1703,7 +1329,7 @@ ${colors.reset}
       this.moveSlashSelection(1);
       return true;
     }
-    if (key.name === 'tab' || key.name === 'return') {
+    if (key.name === 'tab') {
       this.acceptSlashSelection();
       return true;
     }
@@ -1726,9 +1352,15 @@ ${colors.reset}
     const item = this.slashMenu.items[this.slashMenu.selected];
     if (!item) return;
 
-    const suffix = item.usage ? ' ' : '';
+    const currentLine = String(this.rl?.line ?? this.slashMenu.line ?? '');
+    const slashPrefixMatch = currentLine.match(/^\s*(\/\S*)(.*)$/);
+    const prefix = slashPrefixMatch ? slashPrefixMatch[1] : currentLine.trim();
+    const suffixText = slashPrefixMatch ? slashPrefixMatch[2] : '';
+    const needsSpace = item.usage && suffixText && !/^\s/.test(suffixText);
+    const replacement = `${item.cmd}${needsSpace ? ' ' : ''}${suffixText}`.trimEnd();
+
     this.rl.write(null, { ctrl: true, name: 'u' });
-    this.rl.write(item.cmd + suffix);
+    this.rl.write(replacement || prefix || item.cmd);
     this.closeSlashMenu();
     this.rl.prompt(true);
   }
@@ -1843,6 +1475,7 @@ ${colors.reset}
   }
 
   async requestFinalAnswer(messages, toolSummaries, startedAt, totalUsage) {
+    const executionProfile = this.selectExecutionProfile(messages, { enableTools: false });
     const finalMessages = [
       ...messages,
       {
@@ -1859,11 +1492,12 @@ ${colors.reset}
 
     try {
       if (typeof this.ai.streamRequest === 'function') {
-        return await this.streamFinalAnswer(finalMessages, startedAt, totalUsage);
+        return await this.streamFinalAnswer(finalMessages, startedAt, totalUsage, executionProfile);
       }
 
       const response = await this.ai.sendRequest(finalMessages, {
-        model: this.ai.providers[this.ai.getActiveProvider()]?.model,
+        provider: executionProfile.provider,
+        model: executionProfile.model,
         enableTools: false,
       });
       this.addUsage(totalUsage, response.usage);
@@ -1879,14 +1513,16 @@ ${colors.reset}
     }
   }
 
-  async streamFinalAnswer(messages, startedAt, totalUsage) {
+  async streamFinalAnswer(messages, startedAt, totalUsage, executionProfile = null) {
     let content = '';
+    const profile = executionProfile || this.selectExecutionProfile(messages, { enableTools: false });
 
     try {
       process.stdout.write(`\n${colors.white}`);
       let isFirst = true;
       for await (const chunk of this.ai.streamRequest(messages, {
-        model: this.ai.providers[this.ai.getActiveProvider()]?.model,
+        provider: profile.provider,
+        model: profile.model,
         enableTools: false,
       })) {
         if (chunk.usage) this.addUsage(totalUsage, chunk.usage);
@@ -1907,7 +1543,8 @@ ${colors.reset}
     }
 
     const response = await this.ai.sendRequest(messages, {
-      model: this.ai.providers[this.ai.getActiveProvider()]?.model,
+      provider: profile.provider,
+      model: profile.model,
       enableTools: false,
     });
     this.addUsage(totalUsage, response.usage);
@@ -1926,210 +1563,229 @@ ${colors.reset}
   }
 
   formatAnswerFooter(startedAt, usage = {}) {
-    const elapsedMs = Math.max(0, Date.now() - startedAt);
-    const seconds = (elapsedMs / 1000).toFixed(elapsedMs < 10000 ? 1 : 0);
-    const tokenText = this.formatUsage(usage);
-    return tokenText ? `Time: ${seconds}s · Tokens: ${tokenText}` : `Time: ${seconds}s · Tokens: n/a`;
+    return formatFooterText(startedAt, usage);
   }
 
   addUsage(totalUsage, usage = {}) {
-    if (!usage || typeof usage !== 'object') return totalUsage;
-
-    const prompt = usage.prompt_tokens ?? usage.input_tokens;
-    const completion = usage.completion_tokens ?? usage.output_tokens;
-    const total = usage.total_tokens ?? (
-      typeof prompt === 'number' || typeof completion === 'number'
-        ? (prompt || 0) + (completion || 0)
-        : undefined
-    );
-
-    if (typeof prompt === 'number') {
-      totalUsage.prompt_tokens = (totalUsage.prompt_tokens || 0) + prompt;
-    }
-    if (typeof completion === 'number') {
-      totalUsage.completion_tokens = (totalUsage.completion_tokens || 0) + completion;
-    }
-    if (typeof total === 'number') {
-      totalUsage.total_tokens = (totalUsage.total_tokens || 0) + total;
-    }
-
-    return totalUsage;
+    return mergeUsage(totalUsage, usage);
   }
 
   formatUsage(usage = {}) {
-    const prompt = usage.prompt_tokens;
-    const completion = usage.completion_tokens;
-    const total = usage.total_tokens;
-
-    if (typeof total === 'number' && typeof prompt === 'number' && typeof completion === 'number') {
-      return `${total} total (${prompt} in, ${completion} out)`;
-    }
-    if (typeof total === 'number') return `${total} total`;
-    if (typeof prompt === 'number' || typeof completion === 'number') {
-      return `${prompt || 0} in, ${completion || 0} out`;
-    }
-    return '';
+    return formatUsageText(usage);
   }
 
   buildToolFallbackAnswer(toolSummaries, errorMessage = '') {
-    const lines = ['I used the requested tools but could not get a final model response.'];
-    if (errorMessage) lines.push(`Final answer request failed: ${errorMessage}`);
-    if (toolSummaries.length) {
-      lines.push('Tool results:');
-      lines.push(...toolSummaries.map(summary => `- ${summary}`));
-    }
-    return lines.join('\n');
+    return buildFallbackAnswer(toolSummaries, errorMessage);
   }
 
   formatToolResultForConsole(toolName, result) {
-    if (!result) return '';
-    if (result.success === false) {
-      return `Tool failed: ${result.error || 'unknown error'}`;
-    }
-
-    switch (toolName) {
-      case 'Read':
-        return `Read ${result.path} (${result.lines} lines, ${result.size} chars)`;
-      case 'Write':
-        return result.diff ? `Wrote ${result.path}\n${result.diff}` : `Wrote ${result.path} (${result.size} chars)`;
-      case 'Edit':
-        return result.diff ? `Edited ${result.path}\n${result.diff}` : `Edited ${result.path} (${result.replacements} replacements)`;
-      case 'Glob':
-        return `Found ${result.count} file(s)`;
-      case 'Grep':
-        return `Found ${result.count} match(es)`;
-      case 'Bash': {
-        const output = (result.stdout || result.stderr || '').trim();
-        return output.length > 1200 ? `${output.slice(0, 1200)}\n... truncated` : output;
-      }
-      case 'WebFetch':
-        return `Fetched ${result.url} (${result.length} chars)`;
-      case 'WebSearch':
-        return `Found ${result.count} result(s)`;
-      default:
-        return result.message || '';
-    }
+    return formatToolResult(toolName, result);
   }
 
   normalizeToolCalls(toolCalls) {
-    if (!Array.isArray(toolCalls)) return [];
-
-    return toolCalls.map((tc, index) => {
-      const fn = tc.function || {};
-      const rawArgs = fn.arguments ?? tc.arguments ?? tc.input ?? {};
-
-      return {
-        ...tc,
-        id: tc.id || `call-${index}`,
-        toolName: fn.name || tc.name || tc.tool_name || tc.type,
-        toolArgs: this.parseToolArguments(rawArgs),
-      };
-    });
+    return normalizeCalls(toolCalls, rawArgs => this.parseToolArguments(rawArgs));
   }
 
   extractInlineToolCalls(content) {
-    const text = String(content || '');
-    const toolCalls = [];
-    let cleaned = text;
-    const callPattern = /<minimax:tool_call>\s*<invoke\s+name=["']([^"']+)["']>([\s\S]*?)<\/invoke>\s*<\/minimax:tool_call>/gi;
-
-    cleaned = cleaned.replace(callPattern, (_match, name, body) => {
-      const args = {};
-      const paramPattern = /<parameter\s+name=["']([^"']+)["']>([\s\S]*?)<\/parameter>/gi;
-      let param;
-      while ((param = paramPattern.exec(body))) {
-        args[param[1]] = this.decodeXmlEntities(param[2].trim());
-      }
-      toolCalls.push({
-        id: `inline-${Date.now()}-${toolCalls.length}`,
-        type: 'function',
-        function: {
-          name,
-          arguments: JSON.stringify(args),
-        },
-      });
-      return '';
-    }).trim();
-
-    return { content: cleaned, toolCalls };
+    return extractInlineCalls(content);
   }
 
   decodeXmlEntities(value) {
-    return String(value || '')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&apos;/g, "'")
-      .replace(/&amp;/g, '&');
+    return decodeXmlValue(value);
   }
 
   parseToolArguments(rawArgs) {
-    if (!rawArgs) return {};
-    if (typeof rawArgs === 'object') return rawArgs;
-    if (typeof rawArgs !== 'string') return {};
-
-    const text = rawArgs.trim();
-    if (!text) return {};
-
-    try {
-      return JSON.parse(text);
-    } catch (error) {
-      const extracted = this.extractFirstJsonObject(text);
-      if (extracted && extracted !== text) {
-        try {
-          return JSON.parse(extracted);
-        } catch {}
-      }
-
-      return {
-        __toolArgParseError: error.message,
-        __rawToolArgs: text.length > 800 ? `${text.slice(0, 800)}...` : text,
-      };
-    }
+    return parseArguments(rawArgs);
   }
 
   extractFirstJsonObject(text) {
-    const start = text.indexOf('{');
-    if (start === -1) return null;
-
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-
-    for (let i = start; i < text.length; i++) {
-      const ch = text[i];
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (ch === '\\') {
-        escaped = true;
-        continue;
-      }
-      if (ch === '"') {
-        inString = !inString;
-        continue;
-      }
-      if (inString) continue;
-      if (ch === '{') depth++;
-      if (ch === '}') {
-        depth--;
-        if (depth === 0) return text.slice(start, i + 1);
-      }
-    }
-
-    return null;
+    return extractJsonObject(text);
   }
 
   formatToolCallsForMessage(toolCalls) {
-    return toolCalls.map((tc) => ({
-      id: tc.id,
-      type: 'function',
-      function: {
-        name: tc.toolName || tc.function?.name || 'unknown',
-        arguments: JSON.stringify(tc.toolArgs || {}),
-      },
-    }));
+    return formatToolCalls(toolCalls);
+  }
+
+  async promptToolPermission(commandText) {
+    process.stdout.write(`${colors.magenta}│${colors.reset}   ${colors.yellow}⚠  AI muốn chạy: ${colors.bright}${commandText}${colors.reset}\n`);
+    process.stdout.write(`${colors.magenta}│${colors.reset}   ${colors.cyan}1.${colors.reset} Cho phép\n`);
+    process.stdout.write(`${colors.magenta}│${colors.reset}   ${colors.cyan}2.${colors.reset} Cho phép trong phiên\n`);
+    process.stdout.write(`${colors.magenta}│${colors.reset}   ${colors.cyan}3.${colors.reset} Không cho phép\n`);
+
+    while (true) {
+      const answer = await new Promise(resolve => {
+        this.rl.question(`${colors.magenta}│${colors.reset}   ${colors.yellow}Chọn [1/2/3]: ${colors.reset}`, resolve);
+      });
+
+      const choice = String(answer || '').trim().toLowerCase();
+      if (choice === '1' || choice === 'y' || choice === 'yes' || choice === 'allow') {
+        return true;
+      }
+      if (choice === '2' || choice === 'a' || choice === 'session' || choice === 'allow session') {
+        return 'session';
+      }
+      if (choice === '3' || choice === 'n' || choice === 'no' || choice === 'deny' || choice === '0') {
+        return false;
+      }
+
+      process.stdout.write(`${colors.magenta}│${colors.reset}   ${colors.dim}Vui lòng chọn 1, 2 hoặc 3.${colors.reset}\n`);
+    }
+  }
+
+  buildToolCallSignature(toolCalls) {
+    return buildToolCallSignatureText(toolCalls, name => this.tools?.normalizeToolName?.(name) || name);
+  }
+
+  getCompressedPromptHistory(options = {}) {
+    const raw = this.session.getHistory(options.limit || 40)
+      .filter(entry => entry && typeof entry.content === 'string')
+      .map(entry => ({ role: entry.role, content: entry.content }));
+    const compressed = compressConversation(raw, {
+      keepRecent: options.keepRecent || 14,
+      maxChars: options.maxTotalChars || 12000,
+      maxItems: 18,
+    });
+
+    return {
+      summary: compressed.summary,
+      entries: compressed.recent,
+      compressed,
+    };
+  }
+
+  async compressSessionContext(verbose = false) {
+    const raw = this.session.getHistory(80)
+      .filter(entry => entry && typeof entry.content === 'string')
+      .map(entry => ({ role: entry.role, content: entry.content }));
+    const compressed = compressConversation(raw, {
+      keepRecent: 14,
+      maxChars: 12000,
+      maxItems: 24,
+    });
+
+    if (!compressed.compressed) {
+      if (verbose) {
+        console.log(`${colors.dim}Context is already compact (${compressed.totalChars} chars).${colors.reset}`);
+      }
+      return compressed;
+    }
+
+    await this.session.updateContext('conversationSummary', {
+      summary: compressed.summary,
+      omittedCount: compressed.omittedCount,
+      totalChars: compressed.totalChars,
+      updatedAt: new Date().toISOString(),
+    });
+    await this.session.replaceMemory('[Conversation Summary]', compressed.summary, 'summary');
+
+    if (verbose) {
+      console.log(`${colors.green}✓ Compressed ${compressed.omittedCount} old message(s) into session summary.${colors.reset}`);
+    }
+    return compressed;
+  }
+
+  showToolStats() {
+    const summary = getToolUsageSummary();
+    if (summary.length === 0) {
+      console.log(`${colors.dim}No tool usage recorded in this process.${colors.reset}`);
+      return;
+    }
+
+    console.log(`${colors.cyan}Tool Usage:${colors.reset}`);
+    for (const item of summary) {
+      console.log(`  ${item.tool}: ${item.calls} call(s), ${item.failures} failure(s), avg ${item.avgMs}ms`);
+    }
+  }
+
+  showReplay(limit = 20) {
+    const history = this.session.getHistory(Math.max(1, limit));
+    const toolEvents = this.session.getToolEvents?.(Math.max(1, limit)) || [];
+
+    console.log(`${colors.cyan}Session Replay:${colors.reset}`);
+    if (history.length === 0 && toolEvents.length === 0) {
+      console.log(`  ${colors.dim}No replay data yet.${colors.reset}`);
+      return;
+    }
+
+    for (const entry of history) {
+      const text = this.compactText(entry.content || '', 220, 'history').replace(/\s+/g, ' ');
+      console.log(`  [${entry.timestamp || ''}] ${entry.role}: ${text}`);
+    }
+
+    if (toolEvents.length > 0) {
+      console.log(`${colors.cyan}Tool Events:${colors.reset}`);
+      for (const event of toolEvents) {
+        const status = event.success === false ? 'failed' : 'ok';
+        console.log(`  [${event.timestamp || ''}] ${event.tool} ${status} ${event.durationMs || 0}ms`);
+      }
+    }
+  }
+
+  async showDiff(args = []) {
+    const cached = args.includes('--cached') || args.includes('--staged');
+    const confirm = args.includes('--confirm');
+    const command = cached ? 'git diff --cached' : 'git diff';
+    const result = await this.tools.execute('Bash', { command, cwd: this.projectPath }, { cwd: this.projectPath });
+    const diff = result.stdout || '';
+
+    if (!result.success) {
+      console.log(`${colors.red}Error: ${result.error}${colors.reset}`);
+      return;
+    }
+    if (!diff.trim()) {
+      console.log(`${colors.dim}No diff.${colors.reset}`);
+      return;
+    }
+
+    console.log(diff);
+    if (confirm) {
+      const answer = await new Promise(resolve => {
+        this.rl.question(`${colors.yellow}Apply is not automatic here. Continue? [y/N]: ${colors.reset}`, resolve);
+      });
+      console.log(/^y(es)?$/i.test(String(answer || '').trim())
+        ? `${colors.green}✓ Confirmed${colors.reset}`
+        : `${colors.dim}Cancelled${colors.reset}`);
+    }
+  }
+
+  async handleWatchCommand(args = []) {
+    const action = args[0];
+    if (action === 'stop') {
+      this.stopWatchers();
+      console.log(`${colors.green}✓ Watcher stopped${colors.reset}`);
+      return;
+    }
+
+    const command = args.join(' ').trim() || 'npm test';
+    this.stopWatchers();
+
+    let timer = null;
+    const run = async (reason) => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(async () => {
+        console.log(`${colors.dim}Watcher: ${reason}; running ${command}${colors.reset}`);
+        const result = await this.tools.execute('Bash', { command, cwd: this.projectPath, timeout: 120000 }, { cwd: this.projectPath });
+        if (result.stdout) console.log(result.stdout);
+        if (result.stderr) console.log(`${colors.yellow}${result.stderr}${colors.reset}`);
+        if (!result.success) console.log(`${colors.red}Watcher command failed: ${result.error}${colors.reset}`);
+      }, 250);
+    };
+
+    const watcher = fsWatch(this.projectPath, { recursive: true }, (_eventType, fileName) => {
+      const name = String(fileName || '');
+      if (!name || /(^|[\\/])(\.git|node_modules|\.winter)([\\/]|$)/.test(name)) return;
+      run(name);
+    });
+    this.watchers.push(watcher);
+    console.log(`${colors.green}✓ Watching ${this.projectPath}${colors.reset}`);
+    console.log(`${colors.dim}Command: ${command}. Use /watch stop to stop.${colors.reset}`);
+  }
+
+  stopWatchers() {
+    for (const watcher of this.watchers) {
+      try { watcher.close(); } catch {}
+    }
+    this.watchers = [];
   }
 
   async chat(message, imageAttachments = []) {
@@ -2140,12 +1796,16 @@ ${colors.reset}
         { role: 'system', content: this.getSystemPrompt(context) }
       ];
 
-      const history = this.getPromptHistory({
+      await this.compressSessionContext(false);
+      const promptHistory = this.getCompressedPromptHistory({
         limit: 20,
-        maxEntryChars: 2000,
+        keepRecent: 14,
         maxTotalChars: 12000,
       });
-      for (const entry of history) {
+      if (promptHistory.summary) {
+        messages.push({ role: 'system', content: `Compressed prior conversation:\n${promptHistory.summary}` });
+      }
+      for (const entry of promptHistory.entries) {
         messages.push({ role: entry.role, content: entry.content });
       }
 
@@ -2206,8 +1866,11 @@ ${colors.reset}
       { role: 'system', content: this.getAgentSystemPrompt(role, context) }
     ];
 
-    const history = this.session.getHistory(20);
-    for (const entry of history) {
+    const promptHistory = this.getCompressedPromptHistory({ limit: 30, keepRecent: 14, maxTotalChars: 12000 });
+    if (promptHistory.summary) {
+      messages.push({ role: 'system', content: `Compressed prior conversation:\n${promptHistory.summary}` });
+    }
+    for (const entry of promptHistory.entries) {
       messages.push({ role: entry.role, content: entry.content });
     }
 
@@ -2270,53 +1933,7 @@ ${colors.reset}
   }
 
   async getLocalResourceContext() {
-    try {
-      const manifestPath = this.getResourcePaths().manifest;
-      const raw = await fs.readFile(manifestPath, 'utf8');
-      const manifest = JSON.parse(raw.replace(/^\uFEFF/, ''));
-      const paths = this.getResourcePaths();
-      const [claudeSkills, codexSkills, claudePlugins, codexMemories] = await Promise.all([
-        this.listPathEntries(paths.claude.skills, 20),
-        this.listPathEntries(paths.codex.skills, 20),
-        this.listPathEntries(paths.claude.plugins, 20),
-        this.listPathEntries(paths.codex.memories, 20),
-      ]);
-
-      const lines = [];
-      lines.push('[Local Resources]');
-      lines.push(`- Root: ${manifest.root || this.getResourcePaths().localRoot}`);
-
-      for (const resource of manifest.localResources || []) {
-        lines.push(`- ${resource.name}: ${resource.files} files, ${(resource.bytes / 1024 / 1024).toFixed(2)} MB`);
-      }
-
-      if (manifest.redacted?.length) {
-        lines.push(`- Redacted: ${manifest.redacted.join('; ')}`);
-      }
-
-      lines.push('- Use Read/Grep/Glob to inspect any local resource when it matters for the task.');
-      lines.push('- Local resource families: agents.md, awesome-design-md, claude, codex, karpathy-tools.');
-
-      if (claudeSkills.length > 0) {
-        lines.push(`- Claude skills: ${claudeSkills.slice(0, 10).map(item => item.name).join(', ')}${claudeSkills.length > 10 ? ', ...' : ''}`);
-      }
-
-      if (claudePlugins.length > 0) {
-        lines.push(`- Claude plugin roots: ${claudePlugins.slice(0, 10).map(item => item.name).join(', ')}${claudePlugins.length > 10 ? ', ...' : ''}`);
-      }
-
-      if (codexSkills.length > 0) {
-        lines.push(`- Codex skills: ${codexSkills.slice(0, 10).map(item => item.name).join(', ')}${codexSkills.length > 10 ? ', ...' : ''}`);
-      }
-
-      if (codexMemories.length > 0) {
-        lines.push(`- Codex memories: ${codexMemories.slice(0, 10).map(item => item.name).join(', ')}${codexMemories.length > 10 ? ', ...' : ''}`);
-      }
-
-      return lines.join('\n');
-    } catch {
-      return '';
-    }
+    return this.contextLoader.getLocalResourceContext();
   }
 
   async bootstrapProjectCapabilities() {
@@ -2391,63 +2008,25 @@ ${colors.reset}
   }
 
   async getStartupSkillCatalog() {
-    const catalog = new Set(['coding', 'design', 'debug', 'refactor', 'test', 'security', 'performance']);
-    const resourcePaths = this.getResourcePaths();
-    const folders = [resourcePaths.claude.skills, resourcePaths.codex.skills];
-
-    for (const folder of folders) {
-      const entries = await this.listPathEntries(folder, 200);
-      for (const entry of entries) {
-        catalog.add(entry.name);
-      }
-    }
-
-    return catalog;
+    return this.contextLoader.getStartupSkillCatalog();
   }
 
   async getProjectSignals() {
-    const signals = [];
-
-    try {
-      const packageJsonPath = path.join(this.projectPath, 'package.json');
-      const raw = await fs.readFile(packageJsonPath, 'utf8');
-      const pkg = JSON.parse(raw);
-
-      signals.push(String(pkg.name || '').toLowerCase());
-      signals.push(String(pkg.description || '').toLowerCase());
-
-      for (const key of ['dependencies', 'devDependencies', 'peerDependencies']) {
-        const deps = pkg[key] || {};
-        for (const depName of Object.keys(deps)) {
-          signals.push(depName.toLowerCase());
-        }
-      }
-
-      for (const script of Object.values(pkg.scripts || {})) {
-        signals.push(String(script).toLowerCase());
-      }
-    } catch {
-      // Ignore package.json parsing issues.
-    }
-
-    try {
-      const entries = await fs.readdir(this.projectPath, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isFile()) continue;
-        signals.push(path.extname(entry.name).toLowerCase().slice(1));
-        signals.push(entry.name.toLowerCase());
-      }
-    } catch {
-      // Ignore directory scan issues.
-    }
-
-    return signals.filter(Boolean);
+    return this.contextLoader.getProjectSignals();
   }
-
   getSystemPrompt(context = '') {
+    this.hydrateSessionToolPermissions();
     const memories = this.session.getMemory();
     const plans = this.session.getPlans();
     const sessionContext = this.session.getContext() || {};
+    const environmentSummary = this.tools?.getRuntimeEnvironmentSummary?.() || [
+      `Host OS: ${process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'macOS' : process.platform === 'linux' ? 'Linux' : process.platform}`,
+      `Node platform: ${process.platform}`,
+      `Current shell hint: ${process.platform === 'win32' ? 'powershell-capable or cmd/unknown' : (process.env.SHELL || 'bash/sh')}`,
+      process.platform === 'win32'
+        ? 'Shell rule: Use shell:"powershell" for PowerShell cmdlets, shell:"cmd" for cmd.exe syntax, and shell:"auto" when unsure.'
+        : 'Shell rule: Use the native POSIX shell on non-Windows hosts and leave shell unspecified unless a specific shell is required.',
+    ].join('\n');
 
     let memoryStr = memories.length > 0 ? `\n## Memories (Important Context)\n${this.summarizePromptList(memories, {
       limit: 8,
@@ -2467,6 +2046,7 @@ ${colors.reset}
     let startupPlanStr = sessionContext.bootstrapPlan?.title
       ? `\n## Startup Plan\n- ${sessionContext.bootstrapPlan.title}: ${sessionContext.bootstrapPlan.description}`
       : '';
+    const sessionSignalsStr = `\n${this.buildSessionSignalsPrompt()}`;
 
     return `You are Winter, an expert AI coding assistant.
 
@@ -2484,6 +2064,10 @@ ${colors.reset}
 - If a question is ambiguous, inspect the project context first instead of guessing.
 - Winter's job is to amplify weaker models: decompose problems, pull the right context, and use tools to reach a stronger answer than raw inference alone would produce.
 - Always begin with a short plan before coding or tool execution, then refine the plan if new facts appear.
+
+## Runtime Environment
+${environmentSummary}
+${sessionSignalsStr}
 
 ## CRITICAL LANGUAGE RULE
 **You MUST always respond in Vietnamese (tiếng Việt).** Never respond in Chinese, Japanese, Korean or any other language unless the user explicitly asks you to. This is non-negotiable.
@@ -2633,45 +2217,119 @@ ${memoryStr}${plansStr}${skillsStr}${startupPlanStr}
 ${context ? `\n## Project Context\n${this.compactText(context, 6000, 'project context')}` : ''}`;
   }
 
+  async handleMcpCommand(args) {
+    const [action, ...rest] = args;
+    const config = await this.config.load();
+    config.mcp = config.mcp || { servers: [] };
+
+    switch (action) {
+      case undefined:
+      case 'list':
+        console.log(`${colors.cyan}MCP Servers:${colors.reset}`);
+        if ((config.mcp.servers || []).length === 0) {
+          console.log(`  ${colors.dim}No MCP servers configured.${colors.reset}`);
+          break;
+        }
+        config.mcp.servers.forEach(server => {
+          const enabled = server.enabled === false ? `${colors.red}disabled${colors.reset}` : `${colors.green}enabled${colors.reset}`;
+          console.log(`  • ${server.name} (${enabled}) -> ${server.command}${server.args?.length ? ` ${server.args.join(' ')}` : ''}`);
+        });
+        break;
+      case 'add': {
+        const [name, command, ...commandArgs] = rest;
+        if (!name || !command) {
+          console.log(`${colors.yellow}Usage: /mcp add <name> <command> [args-json]${colors.reset}`);
+          break;
+        }
+        let parsedArgs = [];
+        const rawArgs = commandArgs.join(' ').trim();
+        if (rawArgs) {
+          try {
+            const parsed = JSON.parse(rawArgs);
+            parsedArgs = Array.isArray(parsed) ? parsed : [String(parsed)];
+          } catch {
+            parsedArgs = commandArgs;
+          }
+        }
+        config.mcp.servers = (config.mcp.servers || []).filter(server => server.name !== name);
+        config.mcp.servers.push({ name, command, args: parsedArgs, enabled: true });
+        await this.config.save(config);
+        console.log(`${colors.green}✓ Added MCP server: ${name}${colors.reset}`);
+        break;
+      }
+      case 'remove': {
+        const name = rest[0];
+        if (!name) {
+          console.log(`${colors.yellow}Usage: /mcp remove <name>${colors.reset}`);
+          break;
+        }
+        config.mcp.servers = (config.mcp.servers || []).filter(server => server.name !== name);
+        await this.config.save(config);
+        console.log(`${colors.green}✓ Removed MCP server: ${name}${colors.reset}`);
+        break;
+      }
+      case 'allow': {
+        const name = rest[0];
+        if (!name) {
+          console.log(`${colors.yellow}Usage: /mcp allow <name>${colors.reset}`);
+          break;
+        }
+        await this.config.setPermissionAllowlist({ mcpServers: [name] });
+        console.log(`${colors.green}✓ MCP server allowed: ${name}${colors.reset}`);
+        break;
+      }
+      default:
+        console.log(`${colors.yellow}Usage: /mcp <list|add|remove|allow>${colors.reset}`);
+    }
+  }
+
+  async handlePermissionsCommand(args) {
+    const [action, ...rest] = args;
+    const config = await this.config.load();
+    config.permissions = config.permissions || { allowlist: { tools: [], commands: [], mcpServers: [] } };
+    config.permissions.allowlist = config.permissions.allowlist || { tools: [], commands: [], mcpServers: [] };
+
+    switch (action) {
+      case undefined:
+      case 'list':
+        console.log(`${colors.cyan}Permission Allowlist:${colors.reset}`);
+        console.log(`  Tools: ${(config.permissions.allowlist.tools || []).join(', ') || 'none'}`);
+        console.log(`  Commands: ${(config.permissions.allowlist.commands || []).join(', ') || 'none'}`);
+        console.log(`  MCP Servers: ${(config.permissions.allowlist.mcpServers || []).join(', ') || 'none'}`);
+        console.log(`  Prompt by default: ${config.permissions.promptByDefault !== false}`);
+        break;
+      case 'allow': {
+        const [kind, value] = rest;
+        if (!kind || !value) {
+          console.log(`${colors.yellow}Usage: /permissions allow <tool|command|mcp> <value>${colors.reset}`);
+          break;
+        }
+        const field = kind === 'tool' ? 'tools' : kind === 'command' ? 'commands' : kind === 'mcp' ? 'mcpServers' : null;
+        if (!field) {
+          console.log(`${colors.yellow}Allowed kinds: tool, command, mcp${colors.reset}`);
+          break;
+        }
+        await this.config.setPermissionAllowlist({ [field]: [value] });
+        console.log(`${colors.green}✓ Allowed ${kind}: ${value}${colors.reset}`);
+        break;
+      }
+      case 'prompt': {
+        const value = String(rest[0] || '').toLowerCase();
+        await this.config.setPermissionAllowlist({ promptByDefault: !(value === 'off' || value === 'false' || value === '0' || value === 'no') });
+        console.log(`${colors.green}✓ Updated prompt policy${colors.reset}`);
+        break;
+      }
+      default:
+        console.log(`${colors.yellow}Usage: /permissions <list|allow|prompt>${colors.reset}`);
+    }
+  }
+
   compactText(text, maxChars = 1200, label = 'text') {
-    const value = String(text ?? '');
-    if (value.length <= maxChars) return value;
-
-    const headChars = Math.max(0, Math.floor(maxChars * 0.7));
-    const tailChars = Math.max(0, Math.floor(maxChars * 0.2));
-    const head = value.slice(0, headChars);
-    const tail = tailChars > 0 ? value.slice(-tailChars) : '';
-    const omitted = Math.max(0, value.length - head.length - tail.length);
-
-    return [
-      head,
-      `[${label} truncated: ${omitted} chars omitted]`,
-      tail,
-    ].filter(Boolean).join('\n');
+    return compactPromptText(text, maxChars, label);
   }
 
-  summarizePromptList(items, { limit = 8, maxEntryChars = 220, maxTotalChars = 1600, mapper = value => value?.text ?? String(value ?? '') } = {}) {
-    const selected = [];
-    let total = 0;
-
-    for (const item of items.slice(-limit)) {
-      const raw = this.compactText(mapper(item), maxEntryChars, 'entry').trim();
-      if (!raw) continue;
-      if (total + raw.length > maxTotalChars && selected.length > 0) break;
-      selected.push(`- ${raw}`);
-      total += raw.length;
-    }
-
-    if (items.length > selected.length) {
-      selected.push(`- ... (${items.length - selected.length} mục đã được lược bớt)`);
-    }
-
-    return selected.join('\n');
-  }
-
-  getAgentTools(role) {
-    // Trả về tất cả công cụ hiện có trong executor
-    return this.tools.getToolDefinitions();
+  summarizePromptList(items, options = {}) {
+    return summarizePrompts(items, options);
   }
 
   async getClipboardContent() {

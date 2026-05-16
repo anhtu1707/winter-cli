@@ -18,7 +18,8 @@ const version = pkg.version;
 
 const COMMANDS = new Set([
   'chat', 'call', 'session', 'skill', 'plugin', 'design', 'config', 'init',
-  'help', 'project', 'code', 'review',
+  'help', 'project', 'code', 'review', 'mcp', 'permissions',
+  'provider', 'providers', 'model', 'models',
 ]);
 
 function isInteractiveRequest(args) {
@@ -55,6 +56,12 @@ Commands:
   winter session <action>     Session management
   winter skill <action>       Skill management
   winter plugin <action>      Plugin management
+  winter mcp <action>         MCP server management
+  winter permissions <action> Permission allowlist
+  winter provider [name]      Show/switch provider
+  winter providers            List providers
+  winter model [model]        Show/set active provider model
+  winter models               List configured/cached models
   winter design <action>      Design commands
   winter project <action>     Project commands
   winter config               Show config

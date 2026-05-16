@@ -8,6 +8,18 @@ import path from 'path';
 import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { diffLines } from 'diff';
+import { withRetry } from './retry.js';
+import { PermissionManager } from './permission.js';
+import { MCPClient } from '../mcp/client.js';
+import { trackToolUse } from './analytics.js';
+import { NotebookTool } from './notebook.js';
+import { TodoTool } from './todo.js';
+import { SchedulerTool } from './scheduler.js';
+import { InteractiveTool } from './interactive.js';
+import { AgentTool } from './agent.js';
+import { InsertTextTool } from './insert-text.js';
+import { StrReplaceAllTool } from './str-replace-all.js';
+import { WebArchiveTool } from './web-archive.js';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -17,10 +29,47 @@ export class ToolExecutor {
     this.repl = repl;
     this.projectPath = repl?.projectPath || process.cwd();
     this.allowedCommands = ['git', 'npm', 'node', 'python', 'code', 'pnpm', 'yarn', 'bun', 'pip', 'cargo', 'rustc'];
-    this.blockedPatterns = ['rm -rf', 'format', '/f/s', '--force'];
+    this.blockedPatterns = ['rm -rf', '/f/s', '--force'];
+    this.permissionManager = new PermissionManager(repl?.config, repl?.session);
+    this.mcpClients = new Map();
+    this.notebookTool = new NotebookTool();
+    this.todoTool = new TodoTool(repl?.projectPath ? path.join(repl.projectPath, '.winter') : undefined);
+    this.schedulerTool = new SchedulerTool(repl?.projectPath ? path.join(repl.projectPath, '.winter') : undefined);
+    this.interactiveTool = new InteractiveTool(repl);
+    this.agentTool = new AgentTool(repl);
+    this.insertTextTool = new InsertTextTool();
+    this.strReplaceAllTool = new StrReplaceAllTool();
+    this.webArchiveTool = new WebArchiveTool(repl?.projectPath ? path.join(repl.projectPath, '.winter') : undefined);
+    this.mcpToolCache = null; // Cache for dynamically discovered MCP tools
+  }
+
+  getRuntimeEnvironmentSummary() {
+    const hostOs = process.platform === 'win32'
+      ? 'Windows'
+      : process.platform === 'darwin'
+        ? 'macOS'
+        : process.platform === 'linux'
+          ? 'Linux'
+          : process.platform;
+
+    const currentShell = process.platform === 'win32'
+      ? (process.env.PSModulePath ? 'powershell-capable' : 'cmd/unknown')
+      : (process.env.SHELL || 'bash/sh');
+
+    const shellGuidance = process.platform === 'win32'
+      ? 'Use shell:"powershell" for PowerShell cmdlets, shell:"cmd" for cmd.exe syntax, and shell:"auto" when unsure.'
+      : 'Use the native POSIX shell on non-Windows hosts and leave shell unspecified unless a specific shell is required.';
+
+    return [
+      `Host OS: ${hostOs}`,
+      `Node platform: ${process.platform}`,
+      `Current shell hint: ${currentShell}`,
+      `Shell rule: ${shellGuidance}`,
+    ].join('\n');
   }
 
   getToolDefinitions() {
+    const environmentSummary = this.getRuntimeEnvironmentSummary();
     return [
       {
         type: 'function',
@@ -64,14 +113,14 @@ export class ToolExecutor {
       {
         type: 'function',
         name: 'Bash',
-        description: 'Execute a shell command. On Windows, shell auto-detects PowerShell or cmd.exe syntax. Prefer Write/Edit for file writes.',
+        description: `Execute a shell command.\n\n${environmentSummary}\n\nPrefer Write/Edit for file writes.`,
         parameters: {
           type: 'object',
           properties: {
             command: { type: 'string', description: 'Shell command to execute' },
             cwd: { type: 'string', description: 'Working directory' },
             timeout: { type: 'number', description: 'Timeout in ms (default: 60000)' },
-            shell: { type: 'string', description: 'Windows shell: auto, powershell, or cmd' }
+            shell: { type: 'string', description: process.platform === 'win32' ? 'Windows shell hint: auto, powershell, or cmd' : 'POSIX shell hint: usually omit; use only when required' }
           },
           required: ['command']
         }
@@ -91,18 +140,27 @@ export class ToolExecutor {
       },
       {
         type: 'function',
-        name: 'Grep',
-        description: 'Search for text in files.',
-        parameters: {
-          type: 'object',
-          properties: {
-            pattern: { type: 'string', description: 'Regex pattern' },
-            path: { type: 'string', description: 'Directory to search' },
-            glob: { type: 'string', description: 'File filter (e.g., *.js)' },
-            output_mode: { type: 'string', description: 'content, files_with_matches, count' }
-          },
-          required: ['pattern', 'path']
-        }
+    name: 'Grep',
+    description: 'Search for text in files using regex or fixed string, with context lines, case insensitive, invert match, multiline, and more.',
+    parameters: {
+      type: 'object',
+      properties: {
+        pattern: { type: 'string', description: 'Search pattern (regex or fixed string)' },
+        path: { type: 'string', description: 'Directory to search' },
+        glob: { type: 'string', description: 'File filter (e.g., *.js, *.ts, **/*.js)' },
+        output_mode: { type: 'string', description: 'content, files_with_matches, count', enum: ['content', 'files_with_matches', 'count'] },
+        case_insensitive: { type: 'boolean', description: 'Case insensitive search (default: false)' },
+        invert_match: { type: 'boolean', description: 'Return lines that do NOT match (default: false)' },
+        fixed_string: { type: 'boolean', description: 'Treat pattern as literal string, not regex (default: false)' },
+        multiline: { type: 'boolean', description: 'Search across multiple lines (default: false)' },
+        context_lines: { type: 'number', description: 'Lines of context before and after each match (default: 0)' },
+        before_lines: { type: 'number', description: 'Lines of context before each match (default: 0)' },
+        after_lines: { type: 'number', description: 'Lines of context after each match (default: 0)' },
+        max_results: { type: 'number', description: 'Maximum number of results to return (default: 50, max: 500)' },
+        line_numbers: { type: 'boolean', description: 'Include line numbers in output (default: true)' }
+      },
+      required: ['pattern', 'path']
+    }
       },
       {
         type: 'function',
@@ -158,6 +216,177 @@ export class ToolExecutor {
       },
       {
         type: 'function',
+        name: 'MCP',
+        description: 'Call a configured MCP server tool by name. Use for external integrations and IDE-like tools. Discover available MCP tools via the MCP tool with server name and tool=list. Also, tools from MCP servers are exposed with mcp__<server>__<tool> naming for direct IDE integration (e.g. mcp__vscode__open_file).',
+        parameters: {
+          type: 'object',
+          properties: {
+            server: { type: 'string', description: 'Configured MCP server name (e.g. vscode)' },
+            tool: { type: 'string', description: 'MCP tool name, or set to "list" to discover all tools from a server' },
+            arguments: { type: 'object', description: 'Tool arguments' },
+          },
+          required: ['server', 'tool']
+        }
+      },
+      {
+        type: 'function',
+        name: 'Parallel',
+        description: 'Execute multiple independent Winter tools concurrently. Use only when the calls do not depend on each other.',
+        parameters: {
+          type: 'object',
+          properties: {
+            tools: {
+              type: 'array',
+              description: 'Array of tool calls: { name, input }',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  input: { type: 'object' },
+                },
+                required: ['name']
+              }
+            }
+          },
+          required: ['tools']
+        }
+      },
+      {
+        type: 'function',
+        name: 'NotebookRead',
+        description: 'Read a Jupyter notebook (.ipynb) file and return its cells, metadata, and outputs.',
+        parameters: {
+          type: 'object',
+          properties: {
+            notebook_path: { type: 'string', description: 'Path to .ipynb file' },
+          },
+          required: ['notebook_path']
+        }
+      },
+      {
+        type: 'function',
+        name: 'NotebookEdit',
+        description: 'Edit a specific cell in a Jupyter notebook by replacing its source.',
+        parameters: {
+          type: 'object',
+          properties: {
+            notebook_path: { type: 'string', description: 'Path to .ipynb file' },
+            cell_id: { type: 'string', description: 'Cell ID (e.g., cell-0, cell-1)' },
+            new_source: { type: 'string', description: 'New source code for the cell' },
+          },
+          required: ['notebook_path', 'cell_id', 'new_source']
+        }
+      },
+      {
+        type: 'function',
+        name: 'TodoWrite',
+        description: 'Create a new persistent todo item with title, status, and priority.',
+        parameters: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: 'Todo title' },
+            status: { type: 'string', description: 'pending, in_progress, completed, cancelled (default: pending)' },
+            priority: { type: 'string', description: 'low, medium, high, critical (default: medium)' },
+          },
+          required: ['title']
+        }
+      },
+      {
+        type: 'function',
+        name: 'TodoList',
+        description: 'List all todos, optionally filtered by status.',
+        parameters: {
+          type: 'object',
+          properties: {
+            status: { type: 'string', description: 'Optional filter: pending, in_progress, completed, cancelled' },
+          },
+        }
+      },
+      {
+        type: 'function',
+        name: 'ScheduleWakeup',
+        description: 'Schedule a reminder/prompt to be triggered after a delay. The AI will be called again with the scheduled prompt.',
+        parameters: {
+          type: 'object',
+          properties: {
+            delay: { type: 'string', description: 'Delay before trigger, e.g. "30s", "5m", "1h", "2d", or milliseconds' },
+            prompt: { type: 'string', description: 'Prompt to execute when triggered' },
+            recurring: { type: 'boolean', description: 'Whether to repeat the schedule (default: false)' },
+          },
+          required: ['delay', 'prompt']
+        }
+      },
+      {
+        type: 'function',
+        name: 'AskUserQuestion',
+        description: 'Ask the user a question and wait for their response. Supports text input, single-select, and multi-select.',
+        parameters: {
+          type: 'object',
+          properties: {
+            questions: {
+              type: 'array',
+              description: 'Array of questions to ask',
+              items: {
+                type: 'object',
+                properties: {
+                  question: { type: 'string', description: 'The question text' },
+                  type: { type: 'string', description: 'text, select, or multi-select' },
+                  options: { type: 'array', items: { type: 'string' }, description: 'Options for select/multi-select' },
+                  default: { type: 'string', description: 'Default value for text input' },
+                },
+                required: ['question']
+              }
+            }
+          },
+          required: ['questions']
+        }
+      },
+      {
+        type: 'function',
+        name: 'Agent',
+        description: 'Spawn a subagent to execute a complex task with planning, execution, and verification workflow.',
+        parameters: {
+          type: 'object',
+          properties: {
+            task: { type: 'string', description: 'Task description for the agent' },
+            max_steps: { type: 'number', description: 'Maximum execution steps (default: 10, max: 25)' },
+            provider: { type: 'string', description: 'AI provider to use for this agent' },
+            cwd: { type: 'string', description: 'Working directory' },
+          },
+          required: ['task']
+        }
+      },
+      {
+        type: 'function',
+        name: 'InsertText',
+        description: 'Insert text at a specific line or position in a file. Supports line number, search-text, beginning, and end modes.',
+        parameters: {
+          type: 'object',
+          properties: {
+            file_path: { type: 'string', description: 'File path' },
+            insert_text: { type: 'string', description: 'Text to insert' },
+            mode: { type: 'string', description: 'Insertion mode: line, after, before, end, beginning' },
+            position: { type: 'string', description: 'Line number (for mode:line) or search text (for mode:after/before)' },
+          },
+          required: ['file_path', 'insert_text']
+        }
+      },
+      {
+        type: 'function',
+        name: 'StrReplaceAll',
+        description: 'Replace ALL occurrences of a string in a file. Unlike Edit which replaces only the first match.',
+        parameters: {
+          type: 'object',
+          properties: {
+            file_path: { type: 'string', description: 'File path' },
+            old_string: { type: 'string', description: 'String to find (all occurrences)' },
+            new_string: { type: 'string', description: 'Replacement string' },
+          },
+          required: ['file_path', 'old_string', 'new_string']
+        }
+      },
+      {
+        type: 'function',
         name: 'BrowserDebug',
         description: 'Open URL in headless browser to capture Console errors, Network errors, and DOM state for debugging. Very useful to fix frontend UI issues.',
         parameters: {
@@ -193,11 +422,54 @@ export class ToolExecutor {
           },
           required: ['query']
         }
+      },
+      {
+        type: 'function',
+        name: 'WebArchive',
+        description: 'Fetch archived/cached version of a webpage from Wayback Machine or local cache. Falls back to direct fetch, then Wayback Machine. Use when a page is down, has changed, or you need historical content.',
+        parameters: {
+          type: 'object',
+          properties: {
+            url: { type: 'string', description: 'URL to fetch archived version of' },
+            max_length: { type: 'number', description: 'Max content length (default: 15000)' },
+            prefer_direct: { type: 'boolean', description: 'Try direct fetch first before Wayback (default: true)' },
+            no_cache: { type: 'boolean', description: 'Bypass local cache (default: false)' },
+            clear_cache: { type: 'boolean', description: 'Clear local cache for this URL or all (default: false)' },
+          },
+          required: ['url']
+        }
       }
     ];
   }
 
   async execute(toolName, input, context = {}) {
+    const startedAt = Date.now();
+    const normalizedToolName = this.normalizeToolName(toolName);
+    try {
+      const result = await this.executeInternal(normalizedToolName, input, context);
+      trackToolUse(normalizedToolName, Date.now() - startedAt, result?.success !== false, result?.error);
+      await this.repl?.session?.recordToolEvent?.({
+        tool: normalizedToolName,
+        input: this.redactToolInput(input),
+        result: this.summarizeToolResult(result),
+        durationMs: Date.now() - startedAt,
+        success: result?.success !== false,
+      });
+      return result;
+    } catch (error) {
+      trackToolUse(normalizedToolName, Date.now() - startedAt, false, error.message);
+      await this.repl?.session?.recordToolEvent?.({
+        tool: normalizedToolName,
+        input: this.redactToolInput(input),
+        result: { error: error.message },
+        durationMs: Date.now() - startedAt,
+        success: false,
+      });
+      throw error;
+    }
+  }
+
+  async executeInternal(toolName, input, context = {}) {
     input = input && typeof input === 'object' ? input : {};
     toolName = this.normalizeToolName(toolName);
     const cwd = context.cwd || this.projectPath;
@@ -215,7 +487,23 @@ export class ToolExecutor {
       case 'Glob':
         return await this.glob(input.pattern ?? input.glob ?? '**/*', input.cwd || input.path || cwd);
       case 'Grep':
-        return await this.grep(input.pattern ?? input.query ?? input.q, input.path || cwd, input.glob, input.output_mode);
+        return await this.grep(
+          input.pattern ?? input.query ?? input.q,
+          input.path || cwd,
+          input.glob,
+          input.output_mode,
+          {
+            case_insensitive: input.case_insensitive ?? input.ignoreCase,
+            invert_match: input.invert_match ?? input.invert,
+            fixed_string: input.fixed_string ?? input.fixedString,
+            multiline: input.multiline,
+            context_lines: input.context_lines ?? input.context,
+            before_lines: input.before_lines,
+            after_lines: input.after_lines,
+            max_results: input.max_results ?? input.maxResults ?? input.max,
+            line_numbers: input.line_numbers ?? input.lineNumbers,
+          }
+        );
       case 'LSP':
         return await this.lsp(input.operation, input, resolvedPath(input.file_path ?? input.path ?? input.file));
       case 'TaskCreate':
@@ -224,19 +512,141 @@ export class ToolExecutor {
         return await this.taskUpdate(input.task_id ?? input.id, input);
       case 'TaskList':
         return await this.taskList();
+      case 'MCP':
+        return await this.mcp(input.server ?? input.server_name ?? input.name, input.tool ?? input.tool_name ?? input.method, input.arguments ?? input.args ?? input.params ?? {});
+      case 'Parallel':
+        return await this.parallelExecute(input.tools ?? input.calls ?? [], { cwd });
       case 'BrowserDebug':
         return await this.browserDebug(input.url ?? input.uri, input.action);
       case 'WebFetch':
         return await this.webFetch(input.url ?? input.uri, input.prompt);
       case 'WebSearch':
         return await this.webSearch(input.query ?? input.q);
+      case 'NotebookRead':
+        return await this.notebookTool.read(this.resolveInputPath(input.notebook_path ?? input.path ?? input.file, cwd));
+      case 'NotebookEdit':
+        return await this.notebookTool.edit(this.resolveInputPath(input.notebook_path ?? input.path ?? input.file, cwd), input.cell_id ?? input.cellId, input.new_source ?? input.newSource ?? input.source);
+      case 'TodoWrite':
+        return await this.todoTool.write(input.title, input.status, input.priority);
+      case 'TodoList':
+        return await this.todoTool.list(input.status);
+      case 'ScheduleWakeup':
+        return await this.schedulerTool.schedule(input.delay, input.prompt, input.recurring);
+      case 'AskUserQuestion':
+        return await this.interactiveTool.askQuestion(input.questions ?? input.question);
+      case 'Agent':
+        return await this.agentTool.run(input.task, { maxSteps: input.max_steps ?? input.maxSteps, provider: input.provider, cwd: input.cwd });
+      case 'InsertText':
+        return await this.insertTextTool.insert(this.resolveInputPath(input.file_path ?? input.path ?? input.file, cwd), input.insert_text ?? input.text ?? input.content, input);
+      case 'StrReplaceAll':
+        return await this.strReplaceAllTool.replaceAll(this.resolveInputPath(input.file_path ?? input.path ?? input.file, cwd), input.old_string ?? input.oldString ?? input.find, input.new_string ?? input.newString ?? input.replace);
+      case 'WebArchive':
+        return await this.webArchiveTool.fetch(input.url, {
+          maxLength: input.max_length ?? input.maxLength,
+          preferDirect: input.prefer_direct ?? input.preferDirect,
+          cache: input.no_cache ? false : true,
+          clearCache: input.clear_cache ?? input.clearCache,
+        });
       default:
+        // Check if tool name starts with mcp__ for MCP-IDE integration
+        const mcpMatch = toolName.match(/^mcp__([^_]+)__(.+)/);
+        if (mcpMatch) {
+          return await this.mcp(mcpMatch[1], mcpMatch[2], input);
+        }
         return {
           success: false,
           error: `Unknown tool: ${toolName}`,
-          availableTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'TaskCreate', 'TaskUpdate', 'TaskList', 'BrowserDebug', 'WebFetch', 'WebSearch'],
+          availableTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'TaskCreate', 'TaskUpdate', 'TaskList', 'MCP', 'Parallel', 'BrowserDebug', 'WebFetch', 'WebSearch', 'WebArchive', 'NotebookRead', 'NotebookEdit', 'TodoWrite', 'TodoList', 'ScheduleWakeup', 'AskUserQuestion', 'Agent', 'InsertText', 'StrReplaceAll'],
           recovery: 'Call one of the available tools. For file writes use Write with { "file_path": "...", "content": "..." }. For shell commands use Bash with { "command": "..." }.',
         };
+    }
+  }
+
+  redactToolInput(input) {
+    if (!input || typeof input !== 'object') return input;
+    const secretPattern = /(api[-_]?key|auth[-_]?token|access[-_]?token|refresh[-_]?token|secret|password)/i;
+    return Object.fromEntries(
+      Object.entries(input).map(([key, value]) => [
+        key,
+        secretPattern.test(key) ? '[redacted]' : value,
+      ])
+    );
+  }
+
+  summarizeToolResult(result) {
+    if (!result || typeof result !== 'object') return result;
+    const summary = {
+      success: result.success !== false,
+    };
+    for (const key of ['error', 'path', 'count', 'exitCode', 'server', 'tool']) {
+      if (result[key] !== undefined) summary[key] = result[key];
+    }
+    if (typeof result.stdout === 'string') summary.stdout = result.stdout.slice(0, 1000);
+    if (typeof result.stderr === 'string') summary.stderr = result.stderr.slice(0, 1000);
+    if (typeof result.content === 'string') summary.content = result.content.slice(0, 1000);
+    if (Array.isArray(result.files)) summary.files = result.files.slice(0, 20);
+    if (Array.isArray(result.matches)) summary.matches = result.matches.slice(0, 20);
+    return summary;
+  }
+
+  async getRuntimeConfig() {
+    try {
+      return await this.repl?.config?.load?.() || {};
+    } catch {
+      return {};
+    }
+  }
+
+  async getRetryPolicy() {
+    const cfg = await this.getRuntimeConfig();
+    return {
+      maxAttempts: cfg.reliability?.retryAttempts || 3,
+      baseDelayMs: cfg.reliability?.retryBaseDelayMs || 100,
+    };
+  }
+
+  async getMcpServerConfig(serverName) {
+    const cfg = await this.getRuntimeConfig();
+    return (cfg.mcp?.servers || []).find(server => server.name === serverName && server.enabled !== false) || null;
+  }
+
+  async getMcpClient(serverName) {
+    if (this.mcpClients.has(serverName)) {
+      return this.mcpClients.get(serverName);
+    }
+
+    const serverConfig = await this.getMcpServerConfig(serverName);
+    if (!serverConfig) return null;
+
+    const client = new MCPClient(serverConfig);
+    this.mcpClients.set(serverName, client);
+    return client;
+  }
+
+  async mcp(serverName, toolName, argumentsObject = {}) {
+    if (typeof serverName !== 'string' || serverName.trim() === '') {
+      return { success: false, error: 'server is required' };
+    }
+    if (typeof toolName !== 'string' || toolName.trim() === '') {
+      return { success: false, error: 'tool is required' };
+    }
+
+    const allowed = await this.permissionManager.isMcpServerAllowed(serverName);
+    if (!allowed) {
+      return { success: false, error: `MCP server not allowlisted: ${serverName}` };
+    }
+
+    const client = await this.getMcpClient(serverName);
+    if (!client) {
+      return { success: false, error: `MCP server not configured: ${serverName}` };
+    }
+
+    const retryPolicy = await this.getRetryPolicy();
+    try {
+      const result = await withRetry(() => client.callTool(toolName, argumentsObject), retryPolicy);
+      return { success: true, server: serverName, tool: toolName, result };
+    } catch (error) {
+      return { success: false, error: error.message, server: serverName, tool: toolName };
     }
   }
 
@@ -277,6 +687,13 @@ export class ToolExecutor {
       searchfiles: 'Grep',
       searchtext: 'Grep',
       rg: 'Grep',
+      rgfull: 'Grep',
+      searchadvanced: 'Grep',
+      advancedsearch: 'Grep',
+      textsearch: 'Grep',
+      findinfile: 'Grep',
+      grepadvanced: 'Grep',
+      grepfull: 'Grep',
       lsp: 'LSP',
       listcodedefinitionnames: 'LSP',
       taskcreate: 'TaskCreate',
@@ -294,6 +711,40 @@ export class ToolExecutor {
       searchweb: 'WebSearch',
       browserdebug: 'BrowserDebug',
       browser: 'BrowserDebug',
+      parallel: 'Parallel',
+      parallelexecute: 'Parallel',
+      batch: 'Parallel',
+      // New tools
+      webarchive: 'WebArchive',
+      webarchivetool: 'WebArchive',
+      archive: 'WebArchive',
+      wayback: 'WebArchive',
+      notebookread: 'NotebookRead',
+      readnotebook: 'NotebookRead',
+      notebookedit: 'NotebookEdit',
+      editnotebook: 'NotebookEdit',
+      todowrite: 'TodoWrite',
+      writetodo: 'TodoWrite',
+      createtodo: 'TodoWrite',
+      todolist: 'TodoList',
+      listtodos: 'TodoList',
+      todos: 'TodoList',
+      schedulewakeup: 'ScheduleWakeup',
+      scheduler: 'ScheduleWakeup',
+      wakeup: 'ScheduleWakeup',
+      askuserquestion: 'AskUserQuestion',
+      ask: 'AskUserQuestion',
+      askquestion: 'AskUserQuestion',
+      interactiveprompt: 'AskUserQuestion',
+      inserttext: 'InsertText',
+      insert: 'InsertText',
+      insertinto: 'InsertText',
+      strreplaceall: 'StrReplaceAll',
+      replaceall: 'StrReplaceAll',
+      batchreplace: 'StrReplaceAll',
+      agent: 'Agent',
+      subagent: 'Agent',
+      agentrun: 'Agent',
     };
     return aliases[normalized] || toolName;
   }
@@ -794,17 +1245,27 @@ export class ToolExecutor {
     return `'${unquoted.replace(/'/g, "''")}'`;
   }
 
-  async grep(pattern, searchPath, globPattern, outputMode = 'content') {
+  async grep(pattern, searchPath, globPattern, outputMode = 'content', options = {}) {
     if (typeof pattern !== 'string' || pattern === '') {
       return { success: false, error: 'pattern is required', pattern, path: searchPath };
     }
 
+    const caseInsensitive = options.case_insensitive || options.ignoreCase || false;
+    const invertMatch = options.invert_match || options.invert || false;
+    const contextBefore = options.context_lines ?? options.before_lines ?? 0;
+    const contextAfter = options.context_lines ?? options.after_lines ?? 0;
+    const maxResults = Math.max(1, options.max_results ?? options.maxResults ?? 50);
+    const showLineNumbers = options.line_numbers ?? options.lineNumbers ?? true;
+    const fixedString = options.fixed_string ?? options.fixedString ?? false;
+    const multiline = options.multiline ?? false;
+
     try {
       const files = await this.findFiles(searchPath, globPattern || '**/*');
       const matches = [];
+      const flags = ['g', caseInsensitive ? 'i' : '', multiline ? 'm' : ''].filter(Boolean).join('');
 
       for (const file of files) {
-        if (matches.length >= 50) break;
+        if (matches.length >= maxResults) break;
         let content;
         try {
           content = await fs.readFile(file, 'utf8');
@@ -812,10 +1273,69 @@ export class ToolExecutor {
           continue;
         }
 
+        // Build the search regex
+        let searchRegex;
+        try {
+          if (fixedString) {
+            const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            searchRegex = new RegExp(escaped, flags);
+          } else {
+            searchRegex = new RegExp(pattern, flags);
+          }
+        } catch {
+          matches.push({ error: `Invalid regex pattern: ${pattern}` });
+          break;
+        }
+
         const lines = content.split(/\r?\n/);
-        for (let i = 0; i < lines.length && matches.length < 50; i++) {
-          if (lines[i].includes(pattern)) {
-            matches.push(`${file}:${i + 1}:${lines[i]}`);
+
+        if (multiline) {
+          // Multiline mode: search across the entire content at once
+          const fullContent = content;
+          let match;
+          while ((match = searchRegex.exec(fullContent)) !== null) {
+            if (matches.length >= maxResults) break;
+            // Find line numbers for the match
+            const textUpToMatch = fullContent.slice(0, match.index);
+            const lineNumber = (textUpToMatch.match(/\n/g) || []).length + 1;
+            const matched = match[0].replace(/\n/g, '\\n').substring(0, 200);
+            matches.push(`${file}:${lineNumber}:${matched}`);
+          }
+        } else {
+          for (let i = 0; i < lines.length && matches.length < maxResults; i++) {
+            const line = lines[i];
+            const isMatch = searchRegex.test(line);
+            // Reset lastIndex for global regex
+            searchRegex.lastIndex = 0;
+
+            if (invertMatch ? !isMatch : isMatch) {
+              let matchStr = '';
+
+              // Add context lines before
+              if (contextBefore > 0) {
+                const start = Math.max(0, i - contextBefore);
+                for (let ci = start; ci < i; ci++) {
+                  matchStr += `${file}:${ci + 1}:${lines[ci]} (context before)\n`;
+                }
+              }
+
+              // The matched line itself
+              if (showLineNumbers) {
+                matchStr += `${file}:${i + 1}:${line}`;
+              } else {
+                matchStr += line;
+              }
+
+              // Add context lines after
+              if (contextAfter > 0) {
+                const end = Math.min(lines.length, i + 1 + contextAfter);
+                for (let ci = i + 1; ci < end; ci++) {
+                  matchStr += `\n${file}:${ci + 1}:${lines[ci]} (context after)`;
+                }
+              }
+
+              matches.push(matchStr);
+            }
           }
         }
       }
@@ -839,8 +1359,10 @@ export class ToolExecutor {
         return [];
       case 'files_with_matches':
         return [...new Set(matches.map(match => {
-          const parsed = match.match(/^(.+):\d+:/);
-          return parsed ? parsed[1] : match;
+          // Handle multi-line context matches: extract file from first line
+          const firstLine = String(match).split('\n')[0];
+          const parsed = firstLine.match(/^(.+?):\d+:/);
+          return parsed ? parsed[1] : firstLine;
         }))];
       case 'content':
       default:
@@ -979,13 +1501,58 @@ export class ToolExecutor {
     return { success: true, tasks: this.repl.session.getPlans() };
   }
 
+  async parallelExecute(calls = [], context = {}) {
+    if (!Array.isArray(calls) || calls.length === 0) {
+      return { success: false, error: 'tools must be a non-empty array' };
+    }
+
+    const safeCalls = calls.slice(0, 8).map((call, index) => ({
+      index,
+      name: this.normalizeToolName(call?.name ?? call?.tool),
+      input: call?.input ?? call?.arguments ?? call?.args ?? {},
+    }));
+
+    for (const call of safeCalls) {
+      if (!call.name || typeof call.name !== 'string') {
+        return {
+          success: false,
+          error: `Parallel tool call at index ${call.index} is missing name`,
+          index: call.index,
+        };
+      }
+      if (await this.permissionManager.shouldPromptForToolPermission?.(call.name)) {
+        return {
+          success: false,
+          error: `Parallel cannot execute sensitive tool without an explicit direct grant: ${call.name}`,
+          tool: call.name,
+        };
+      }
+    }
+
+    const results = await Promise.all(safeCalls.map(async call => {
+      const result = await this.execute(call.name, call.input, context);
+      return {
+        index: call.index,
+        tool: call.name,
+        result,
+      };
+    }));
+
+    return {
+      success: results.every(item => item.result?.success !== false),
+      parallel: true,
+      results,
+    };
+  }
+
   async webFetch(url, prompt) {
     if (typeof url !== 'string' || url.trim() === '') {
       return { success: false, error: 'url is required' };
     }
 
     try {
-      const response = await fetch(url);
+      const retryPolicy = await this.getRetryPolicy();
+      const response = await withRetry(() => fetch(url), retryPolicy);
       const html = await response.text();
       const cleanText = html
         .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
@@ -1012,11 +1579,12 @@ export class ToolExecutor {
 
     try {
       const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-      const response = await fetch(url, {
+      const retryPolicy = await this.getRetryPolicy();
+      const response = await withRetry(() => fetch(url, {
         headers: {
           'User-Agent': 'WinterCLI/1.0',
         },
-      });
+      }), retryPolicy);
       const html = await response.text();
       const results = [...html.matchAll(/<a rel="nofollow" class="result__a" href="([^"]+)">([\s\S]*?)<\/a>/g)]
         .slice(0, 5)
@@ -1059,6 +1627,7 @@ export class ToolExecutor {
     if (!url) return { success: false, error: 'url is required' };
     
     try {
+      const retryPolicy = await this.getRetryPolicy();
       let puppeteer;
       try {
         puppeteer = (await import('puppeteer')).default;
@@ -1066,7 +1635,7 @@ export class ToolExecutor {
         return { success: false, error: 'Thư viện puppeteer chưa được cài đặt. AI HÃY TỰ DÙNG TOOL BASH ĐỂ CHẠY LỆNH: npm install puppeteer --no-save' };
       }
 
-      const browser = await puppeteer.launch({ headless: 'new' });
+      const browser = await withRetry(() => puppeteer.launch({ headless: 'new' }), retryPolicy);
       const page = await browser.newPage();
       
       const consoleLogs = [];
