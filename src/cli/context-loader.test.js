@@ -147,6 +147,36 @@ test('ContextLoader getLocalResourceContext returns empty for missing manifest',
   assert.equal(context, '');
 });
 
+test('ContextLoader getRequiredLocalResourceSummary summarizes mandatory resources', async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), 'winter-required-resources-'));
+  await mkdir(path.join(tmpDir, 'resources', 'local', 'karpathy-tools'), { recursive: true });
+  await mkdir(path.join(tmpDir, 'resources', 'local', 'agents.md'), { recursive: true });
+  await mkdir(path.join(tmpDir, 'resources', 'local', 'awesome-design-md', 'design-md', 'apple'), { recursive: true });
+  await writeFile(
+    path.join(tmpDir, 'resources', 'local', 'karpathy-tools', 'CLAUDE.md'),
+    '# Karpathy Tools\n\n- Think Before Coding\n- Simplicity First\n- Surgical Changes\n- Goal-Driven Execution\n'
+  );
+  await writeFile(
+    path.join(tmpDir, 'resources', 'local', 'agents.md', 'AGENTS.md'),
+    '# Agents\n\nUse development server. Keep dependencies and lockfile in sync. Prefer TypeScript.\n'
+  );
+  await writeFile(
+    path.join(tmpDir, 'resources', 'local', 'awesome-design-md', 'README.md'),
+    '# Awesome Design MD\n\nBrand guideline and design corpus.\n'
+  );
+
+  const loader = new ContextLoader({ projectPath: tmpDir });
+  const summary = await loader.getRequiredLocalResourceSummary();
+
+  assert.match(summary, /\[Required Local Resource Rules\]/);
+  assert.match(summary, /karpathy-tools/);
+  assert.match(summary, /awesome-design-md/);
+  assert.match(summary, /agents\.md/);
+  assert.match(summary, /design-md/);
+  assert.match(summary, /Think Before Coding/);
+  assert.match(summary, /Simplicity First/);
+});
+
 test('ContextLoader compactText truncates long text', () => {
   const loader = new ContextLoader({ projectPath: '/test' });
   const short = 'hello';

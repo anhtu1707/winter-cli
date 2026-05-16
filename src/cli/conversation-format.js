@@ -90,12 +90,15 @@ export function normalizeToolCalls(toolCalls, parseArguments = parseToolArgument
   return toolCalls.map((tc, index) => {
     const fn = tc.function || {};
     const rawArgs = fn.arguments ?? tc.arguments ?? tc.input ?? {};
+    const parsedArgs = parseArguments(rawArgs);
+    const nestedName = parsedArgs?.name || parsedArgs?.tool || parsedArgs?.tool_name;
+    const nestedArgs = parsedArgs?.arguments ?? parsedArgs?.args ?? parsedArgs?.input;
 
     return {
       ...tc,
       id: tc.id || `call-${index}`,
-      toolName: fn.name || tc.name || tc.tool_name || tc.type,
-      toolArgs: parseArguments(rawArgs),
+      toolName: fn.name || tc.name || tc.tool_name || nestedName || tc.type,
+      toolArgs: nestedName && nestedArgs !== undefined ? parseArguments(nestedArgs) : parsedArgs,
     };
   });
 }
@@ -104,24 +107,66 @@ export function extractInlineToolCalls(content, idFactory = index => `inline-${D
   const text = String(content || '');
   const toolCalls = [];
   let cleaned = text;
-  const callPattern = /<minimax:tool_call>\s*<invoke\s+name=["']([^"']+)["']>([\s\S]*?)<\/invoke>\s*<\/minimax:tool_call>/gi;
+  const pushToolCall = (name, args) => {
+    toolCalls.push({
+      id: idFactory(toolCalls.length),
+      type: 'function',
+      function: {
+        name,
+        arguments: typeof args === 'string' ? args : JSON.stringify(args || {}),
+      },
+    });
+  };
 
-  cleaned = cleaned.replace(callPattern, (_match, name, body) => {
+  const invokePattern = /(?:<minimax:tool_call>\s*)?<invoke\s+name=["']([^"']+)["']>([\s\S]*?)<\/invoke>\s*(?:<\/minimax:tool_call>)?/gi;
+
+  cleaned = cleaned.replace(invokePattern, (_match, name, body) => {
     const args = {};
     const paramPattern = /<parameter\s+name=["']([^"']+)["']>([\s\S]*?)<\/parameter>/gi;
     let param;
     while ((param = paramPattern.exec(body))) {
       args[param[1]] = decodeXmlEntities(param[2].trim());
     }
-    toolCalls.push({
-      id: idFactory(toolCalls.length),
-      type: 'function',
-      function: {
-        name,
-        arguments: JSON.stringify(args),
-      },
-    });
+    pushToolCall(name, args);
     return '';
+  }).trim();
+
+  const namedToolPattern = /<tool_call\s+name=["']([^"']+)["']>([\s\S]*?)<\/tool_call>/gi;
+  cleaned = cleaned.replace(namedToolPattern, (_match, name, body) => {
+    pushToolCall(name, decodeXmlEntities(body.trim()));
+    return '';
+  }).trim();
+
+  const jsonToolPattern = /<tool_call>([\s\S]*?)<\/tool_call>/gi;
+  cleaned = cleaned.replace(jsonToolPattern, (_match, body) => {
+    const parsed = parseToolArguments(decodeXmlEntities(body.trim()));
+    const name = parsed.name || parsed.tool || parsed.tool_name;
+    const args = parsed.arguments ?? parsed.args ?? parsed.input ?? parsed;
+    if (name) pushToolCall(name, args);
+    return name ? '' : _match;
+  }).trim();
+
+  const functionPattern = /<function(?:\s+name=["']([^"']+)["']|=([^>\s]+))>([\s\S]*?)<\/function>/gi;
+  cleaned = cleaned.replace(functionPattern, (_match, quotedName, bareName, body) => {
+    pushToolCall(quotedName || bareName, decodeXmlEntities(body.trim()));
+    return '';
+  }).trim();
+
+  const fencedToolPattern = /```(?:tool|tool_call|function)\s*\n([\s\S]*?)```/gi;
+  cleaned = cleaned.replace(fencedToolPattern, (_match, body) => {
+    const trimmed = body.trim();
+    const parsed = parseToolArguments(trimmed);
+    const name = parsed.name || parsed.tool || parsed.tool_name;
+    if (name) {
+      pushToolCall(name, parsed.arguments ?? parsed.args ?? parsed.input ?? parsed);
+      return '';
+    }
+    const lineMatch = trimmed.match(/^([A-Za-z][\w.-]*)\s+([\s\S]+)$/);
+    if (lineMatch) {
+      pushToolCall(lineMatch[1], lineMatch[2].trim());
+      return '';
+    }
+    return _match;
   }).trim();
 
   return { content: cleaned, toolCalls };
@@ -154,11 +199,44 @@ export function parseToolArguments(rawArgs) {
       } catch {}
     }
 
+    for (const repaired of buildJsonRepairCandidates(extracted || text)) {
+      try {
+        return JSON.parse(repaired);
+      } catch {}
+    }
+
     return {
       __toolArgParseError: error.message,
       __rawToolArgs: text.length > 800 ? `${text.slice(0, 800)}...` : text,
     };
   }
+}
+
+export function buildJsonRepairCandidates(text) {
+  const value = String(text || '').trim();
+  if (!value) return [];
+  const candidates = [];
+
+  candidates.push(
+    value
+      .replace(/([{,]\s*)([A-Za-z_$][\w$-]*)(\s*:)/g, '$1"$2"$3')
+      .replace(/:\s*'([^'\\]*(?:\\.[^'\\]*)*)'/g, (_m, inner) => `: "${inner.replace(/"/g, '\\"')}"`)
+      .replace(/:\s*([^'",{}\[\]\r\n][^,}\]\r\n]*)/g, (_m, inner) => {
+        const trimmed = inner.trim();
+        if (trimmed.startsWith('"')) return `: ${trimmed}`;
+        if (/^(true|false|null|-?\d+(?:\.\d+)?)$/i.test(trimmed)) return `: ${trimmed}`;
+        return `: "${trimmed.replace(/"/g, '\\"')}"`;
+      })
+      .replace(/,\s*([}\]])/g, '$1')
+  );
+
+  candidates.push(
+    value
+      .replace(/'/g, '"')
+      .replace(/,\s*([}\]])/g, '$1')
+  );
+
+  return [...new Set(candidates)].filter(candidate => candidate && candidate !== value);
 }
 
 export function extractFirstJsonObject(text) {

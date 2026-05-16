@@ -3,8 +3,9 @@
  * Extracted from WinterREPL to reduce repl.js size.
  */
 export class PromptBuilder {
-  constructor({ session, tools, projectPath, sessionPermissionGrants, compactText, summarizePrompts } = {}) {
+  constructor({ session, ai, tools, projectPath, sessionPermissionGrants, compactText, summarizePrompts } = {}) {
     this.session = session;
+    this.ai = ai;
     this.tools = tools;
     this.projectPath = projectPath;
     this.sessionPermissionGrants = sessionPermissionGrants;
@@ -13,10 +14,12 @@ export class PromptBuilder {
   }
 
   buildSessionSignalsPrompt() {
-    const activeProvider = this.session?.ai?.getActiveProvider?.() || 'unavailable';
-    const activeModel = this.session?.ai?.providers?.[activeProvider]?.model || 'unavailable';
+    const activeProvider = this.ai?.getActiveProvider?.() || 'unavailable';
+    const activeModel = this.ai?.providers?.[activeProvider]?.model || 'unavailable';
     const sessionContext = this.session?.getContext?.() || {};
-    const activeSkills = sessionContext.activeSkills?.value || [];
+    const activeSkills = Array.isArray(sessionContext.activeSkills?.value)
+      ? sessionContext.activeSkills.value
+      : (Array.isArray(sessionContext.activeSkills) ? sessionContext.activeSkills : []);
     const toolAllowlist = [...(this.sessionPermissionGrants || [])];
 
     return [
@@ -29,14 +32,24 @@ export class PromptBuilder {
     ].join('\n');
   }
 
-  buildSystemPrompt(context = '') {
+  getRequiredLocalResources() {
+    const sessionContext = this.session?.getContext?.() || {};
+    const value = sessionContext.requiredLocalResources?.value ?? sessionContext.requiredLocalResources;
+    return typeof value === 'string' ? value : '';
+  }
+
+  buildSystemPrompt(context = '', options = {}) {
     const memories = this.session?.getMemory?.() || [];
     const plans = this.session?.getPlans?.() || [];
     const sessionContext = this.session?.getContext?.() || {};
     const environmentSummary = this.tools?.getRuntimeEnvironmentSummary?.() || this._defaultEnvironmentSummary();
+    const requiredLocalResources = this.getRequiredLocalResources();
 
     const memoryStr = memories.length > 0
       ? this._formatMemories(memories)
+      : '';
+    const requiredResourcesStr = requiredLocalResources
+      ? `\n## Required Local Resource Rules\n${this._compactText(requiredLocalResources, 1800, 'required local resources')}`
       : '';
     const plansStr = plans.length > 0
       ? this._formatPlans(plans)
@@ -56,20 +69,22 @@ export class PromptBuilder {
       environmentSummary,
       ``,
       `## Core Principles`,
+      `0. Required Local Resources - Always follow Required Local Resource Rules when present; they override generic behavior.`,
       `1. Think Before Coding — State assumptions, ask when uncertain, surface tradeoffs.`,
       `2. Simplicity First — Minimum code that solves the problem. Nothing speculative.`,
       `3. Surgical Changes — Touch only what you must. Clean up only your own mess.`,
       `4. Goal-Driven Execution — Define success criteria. Loop until verified.`,
       ``,
       `## Tool Usage`,
-      `You have access to various tools (Read, Write, Edit, Bash, Glob, Grep, etc.).`,
-      `Use tools proactively. If you need information, look it up — don't guess.`,
+      `Use tools when they materially help. For coding tasks: inspect first, edit second, verify third.`,
+      `Prefer Read/Grep/Glob before editing. Use Write/Edit for file changes.`,
+      `When a task touches coding, agents, UI, brand, or design, inspect the relevant required local resource in depth before deciding.`,
       ``,
       `## Session`,
       `Working directory: ${this.projectPath}`,
       `Current session: ${this.session?.getSessionId?.()?.substring(0, 8) || 'unknown'}`,
-      `${memoryStr}${plansStr}${skillsStr}${startupPlanStr}${sessionSignalsStr}`,
-      context ? `\n## Project Context\n${this._compactText(context, 6000, 'project context')}` : '',
+      `${requiredResourcesStr}${memoryStr}${plansStr}${skillsStr}${startupPlanStr}${sessionSignalsStr}`,
+      context ? `\n## Project Context\n${this._compactText(context, options.projectContextBudget || 3200, 'project context')}` : '',
       ``,
       `Be helpful, be precise, and get things done. Always respond in Vietnamese.`,
     ].join('\n');
@@ -77,6 +92,10 @@ export class PromptBuilder {
 
   buildFastSystemPrompt() {
     const memories = this.session?.getMemory?.() || [];
+    const requiredLocalResources = this.getRequiredLocalResources();
+    const requiredResourcesStr = requiredLocalResources
+      ? `\nQuy tac resource bat buoc:\n${this._compactText(requiredLocalResources, 900, 'required local resources')}`
+      : '';
     const memoryStr = memories.length > 0
       ? `\nContext nhớ ngắn:\n${this._summarizePrompts(memories.slice(-8), {
           limit: 8,
@@ -90,6 +109,8 @@ export class PromptBuilder {
       'Bạn là Winter, trợ lý AI trả lời ngắn gọn bằng tiếng Việt.',
       'Ưu tiên dùng tool và context khi cần; không bịa thông tin.',
       'Nếu người dùng yêu cầu sửa file/chạy lệnh/đọc dự án thì hãy gọi tool tương ứng thay vì chỉ nói chung chung.',
+      'Luon tuan thu Required Local Resource Rules neu co; khong ha chat luong theo model.',
+      requiredResourcesStr,
       memoryStr,
     ].filter(Boolean).join('\n');
   }
@@ -98,9 +119,13 @@ export class PromptBuilder {
     const memories = this.session?.getMemory?.() || [];
     const plans = this.session?.getPlans?.() || [];
     const sessionContext = this.session?.getContext?.() || {};
+    const requiredLocalResources = this.getRequiredLocalResources();
 
-    const memoryStr = memories.length > 0 ? this._formatMemories(memories) : '';
-    const plansStr = plans.length > 0 ? this._formatPlans(plans) : '';
+    const memoryStr = memories.length > 0 ? this._formatMemories(memories, { maxTotalChars: 900 }) : '';
+    const requiredResourcesStr = requiredLocalResources
+      ? `\n## Required Local Resource Rules\n${this._compactText(requiredLocalResources, 1600, 'required local resources')}`
+      : '';
+    const plansStr = plans.length > 0 ? this._formatPlans(plans, { maxTotalChars: 900 }) : '';
     const skillsStr = Array.isArray(sessionContext.activeSkills) && sessionContext.activeSkills.length > 0
       ? `\n## Auto-applied Skills\n${sessionContext.activeSkills.slice(0, 12).map(skill => `- ${skill}`).join('\n')}${sessionContext.activeSkills.length > 12 ? '\n- ...' : ''}`
       : '';
@@ -124,6 +149,7 @@ export class PromptBuilder {
 
     return [
       '## CRITICAL AI RULES (MUST FOLLOW STRICTLY):',
+      '0. [REQUIRED LOCAL RESOURCES]: Always obey Required Local Resource Rules when present. They override generic behavior and apply to every model size.',
       '1. [THINKING BEFORE CODING]: State assumptions, constraints, and a brief plan before making changes. Be thorough enough to be useful, and do not invent facts.',
       '2. [DESIGN EXCELLENCE]: Use rich aesthetics. Default to modern UI frameworks if applicable. Never output plain, ugly HTML/CSS. Ensure responsive, premium feel with micro-animations.',
       '3. [CODE QUALITY]: Write clean, modular, SOLID code. Check for syntax errors carefully. Do not generate incomplete code blocks.',
@@ -143,27 +169,27 @@ export class PromptBuilder {
       '## Project',
       `Working directory: ${this.projectPath}`,
       `Current session: ${this.session?.getSessionId?.()?.substring(0, 8) || 'unknown'}`,
-      `${memoryStr}${plansStr}${skillsStr}${startupPlanStr}`,
-      context ? `\n## Project Context\n${this._compactText(context, 6000, 'project context')}` : '',
+      `${requiredResourcesStr}${memoryStr}${plansStr}${skillsStr}${startupPlanStr}`,
+      context ? `\n## Project Context\n${this._compactText(context, 3200, 'project context')}` : '',
     ].join('\n');
   }
 
   /** @private */
-  _formatMemories(memories) {
+  _formatMemories(memories, options = {}) {
     return `\n## Memories (Important Context)\n${this._summarizePrompts(memories, {
       limit: 8,
       maxEntryChars: 220,
-      maxTotalChars: 1600,
+      maxTotalChars: options.maxTotalChars || 1200,
       mapper: memory => memory.text,
     })}`;
   }
 
   /** @private */
-  _formatPlans(plans) {
+  _formatPlans(plans, options = {}) {
     return `\n## Active Plans & Tasks\n${this._summarizePrompts(plans, {
       limit: 6,
       maxEntryChars: 260,
-      maxTotalChars: 1600,
+      maxTotalChars: options.maxTotalChars || 1200,
       mapper: plan => `[${plan.status}] ${plan.title}: ${plan.description}`,
     })}`;
   }

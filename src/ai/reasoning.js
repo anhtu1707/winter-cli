@@ -48,89 +48,13 @@ const EXTENDED_THINKING_BUDGET_MAP = {
 const REASONING_PROMPT_TEMPLATES = {
   [REASONING_LEVELS.NONE]: '',
   [REASONING_LEVELS.LOW]:
-    'Think step by step before responding. Use <thinking> tags for your reasoning, then provide your answer.',
+    'Think briefly before acting. Keep the final answer concise.',
   [REASONING_LEVELS.MEDIUM]:
-    'CRITICAL: You MUST think step by step inside <thinking> tags before every response.\n' +
-    '\n' +
-    '<thinking>\n' +
-    '1. What is the user asking for? (restate briefly)\n' +
-    '2. What do I know / what files do I need?\n' +
-    '3. What is the correct approach?\n' +
-    '4. What could go wrong? (edge cases, errors)\n' +
-    '5. How do I verify my solution?\n' +
-    '</thinking>\n' +
-    'Then provide your answer clearly and directly.',
+    'Before editing: identify relevant files, make the smallest change, then verify. Do not show long reasoning.',
   [REASONING_LEVELS.HIGH]:
-    'CRITICAL DEEP REASONING REQUIRED. Use this EXACT structured thinking process:\n' +
-    '\n' +
-    '<thinking>\n' +
-    '## STEP 1: UNDERSTAND\n' +
-    '- Restate the problem in your own words\n' +
-    '- Identify all key requirements (explicit + implicit)\n' +
-    '\n' +
-    '## STEP 2: ANALYZE\n' +
-    '- What information is provided? What is missing?\n' +
-    '- Consider multiple approaches\n' +
-    '- List potential edge cases and pitfalls\n' +
-    '\n' +
-    '## STEP 3: PLAN\n' +
-    '- Outline your solution step by step\n' +
-    '- For code: plan the exact files and changes needed\n' +
-    '- Verify each step makes sense\n' +
-    '\n' +
-    '## STEP 4: VERIFY\n' +
-    '- Check your solution against all requirements\n' +
-    '- Look for mistakes, regressions, or missing pieces\n' +
-    '- How will you confirm it works?\n' +
-    '</thinking>\n' +
-    'After thinking, provide your final answer. The thinking is internal — be concise in your response.',
+    'Use a private reasoning plan: understand the request, inspect evidence, implement surgically, verify with commands, then summarize.',
   [REASONING_LEVELS.MAX]:
-    '## MANDATORY DEEP REASONING\n' +
-    'You MUST do extremely thorough reasoning before every response. Do not skip any step.\n' +
-    '\n' +
-    'Follow this EXACT thinking structure — fill out every section:\n' +
-    '\n' +
-    '<thinking>\n' +
-    '## PROBLEM RESTATEMENT\n' +
-    'State what the user needs in one sentence.\n' +
-    '\n' +
-    '## REQUIREMENTS ANALYSIS\n' +
-    '- Explicit requirements:\n' +
-    '- Implicit requirements:\n' +
-    '- Constraints / boundaries:\n' +
-    '\n' +
-    '## CONTEXT & CODEBASE ANALYSIS\n' +
-    '- What files are relevant?\n' +
-    '- What existing patterns should I follow?\n' +
-    '- What assumptions am I making?\n' +
-    '\n' +
-    '## APPROACH COMPARISON\n' +
-    '- Option 1: [describe]\n' +
-    '  Pros: ... Cons: ...\n' +
-    '- Option 2: [describe]\n' +
-    '  Pros: ... Cons: ...\n' +
-    '- Best choice: [pick and explain why]\n' +
-    '\n' +
-    '## IMPLEMENTATION PLAN\n' +
-    'Step-by-step what needs to happen:\n' +
-    '1. ...\n' +
-    '2. ...\n' +
-    '3. ...\n' +
-    '(For code: include exact files to read, edit, or create)\n' +
-    '\n' +
-    '## EDGE CASES & RISKS\n' +
-    '- What could go wrong?\n' +
-    '- How will I handle errors?\n' +
-    '- What about performance / security?\n' +
-    '\n' +
-    '## VERIFICATION STRATEGY\n' +
-    '- How will I confirm this works?\n' +
-    '- What tests or checks should be run?\n' +
-    '- What could break with these changes?\n' +
-    '</thinking>\n' +
-    '\n' +
-    'After closing </thinking>, provide your final implementation.\n' +
-    'Keep the reasoning internal — only show the user your result and a brief summary.',
+    'For complex work, maintain a private checklist covering requirements, files, risks, implementation, and verification. Show only useful results.',
 };
 
 /**
@@ -226,7 +150,7 @@ export class ReasoningConfig {
 
   /**
    * Get reasoning prompt instructions to inject into the system prompt.
-   * ALL models use the unified deep-reasoning templates.
+   * Compact prompt-level reasoning instructions for providers without API reasoning.
    * @param {string} [modelTier] - Unused, kept for backward compatibility.
    * @returns {string}
    */

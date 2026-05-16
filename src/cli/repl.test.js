@@ -96,12 +96,26 @@ test('project context includes winter.md rules', async () => {
 
 test('project context includes local resource manifest summary', async () => {
   const repl = new WinterREPL({ projectPath: process.cwd() });
-  const context = await repl.getProjectContext();
+  const context = await repl.getProjectContext('show codex resources and local skills');
 
+  assert.match(context, /\[Required Local Resource Rules\]/);
   assert.match(context, /\[Local Resources\]/);
   assert.match(context, /agents\.md/);
   assert.match(context, /awesome-design-md/);
   assert.match(context, /codex/);
+});
+
+test('project context always includes required local resource rules without full catalog', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  repl.readProjectInstructionFiles = async () => [];
+  repl.getRequiredLocalResourceSummary = async () => '[Required Local Resource Rules]\n- karpathy-tools\n- awesome-design-md\n- agents.md';
+  repl.getLocalResourceContext = async () => '[Local Resources]\n- huge catalog';
+
+  const context = await repl.getProjectContext('fix a small bug');
+
+  assert.match(context, /\[Required Local Resource Rules\]/);
+  assert.match(context, /karpathy-tools/);
+  assert.doesNotMatch(context, /\[Local Resources\]/);
 });
 
 test('local resource context indexes Claude and Codex resource roots', async () => {
@@ -183,6 +197,7 @@ test('bootstrapProjectCapabilities creates a startup plan and stores skills', as
   const repl = new WinterREPL({ projectPath: process.cwd() });
   repl.contextLoader.getStartupSkillCatalog = async () => new Set(['coding', 'debug', 'refactor', 'test']);
   repl.contextLoader.getProjectSignals = async () => ['node', 'cli'];
+  repl.contextLoader.getRequiredLocalResourceSummary = async () => '[Required Local Resource Rules]\n- karpathy-tools\n- awesome-design-md\n- agents.md';
 
   const contextStore = {};
   const plans = [];
@@ -208,8 +223,10 @@ test('bootstrapProjectCapabilities creates a startup plan and stores skills', as
 
   assert.equal(plans.length, 1);
   assert.equal(contextStore.bootstrapPlan.title, 'Bootstrap project context');
+  assert.match(contextStore.requiredLocalResources, /karpathy-tools/);
   assert.deepEqual(contextStore.activeSkills, ['coding', 'debug', 'refactor', 'test']);
-  assert.match(memoryWrites[0].content, /Auto-applied skills/);
+  assert(memoryWrites.some(write => write.prefix === '[Required local resources]' && /awesome-design-md/.test(write.content)));
+  assert(memoryWrites.some(write => /Auto-applied skills/.test(write.content)));
 });
 
 test('shouldUseTools keeps agent mode enabled by default', () => {
@@ -242,7 +259,7 @@ test('runConversation routes review-like prompts to Claude when available', asyn
 
   const answer = await repl.runConversation([{ role: 'user', content: 'Please review this bug fix' }], 'Test', []);
 
-  assert.equal(answer, 'done');
+  assert.equal(answer.finalContent, 'done');
   assert.equal(requests[0].options.provider, 'claude');
   assert.equal(requests[0].options.model, 'claude-sonnet-4-20250514');
 });
@@ -258,6 +275,30 @@ test('getAgentTools scopes tool access by agent role', () => {
   assert(!reviewTools.includes('Write'));
   assert(debugTools.includes('Write'));
   assert(debugTools.includes('Bash'));
+});
+
+test('general chat tools stay focused for weaker models', () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  const toolNames = repl.getAgentTools('general').map(tool => tool.name);
+
+  assert.deepEqual(toolNames, ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep']);
+});
+
+test('getProjectContext skips local resource catalog unless task asks for it', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  repl.readProjectInstructionFiles = async () => [];
+  repl.getRequiredLocalResourceSummary = async () => '[Required Local Resource Rules]\n- mandatory';
+  repl.getLocalResourceContext = async () => '[Local Resources]\n- huge catalog';
+  repl.tools = {
+    getRuntimeEnvironmentSummary: () => 'test',
+  };
+
+  const normal = await repl.getProjectContext('fix a bug in repl');
+  const resource = await repl.getProjectContext('check codex resources and skills');
+
+  assert(normal.includes('[Required Local Resource Rules]'));
+  assert(!normal.includes('[Local Resources]'));
+  assert(resource.includes('[Local Resources]'));
 });
 
 test('extractModelIdsFromCache reads model slugs without service tier ids', () => {
@@ -291,7 +332,7 @@ test('system prompt compresses oversized memories and project context', () => {
 
   const prompt = repl.getSystemPrompt('Project context ' + 'z'.repeat(18000));
 
-  assert(prompt.length < 30000);
+  assert(prompt.length < 12000);
   assert.match(prompt, /Memories \(Important Context\)/);
   assert.match(prompt, /truncated/i);
   assert.match(prompt, /project context truncated/i);
@@ -334,6 +375,30 @@ test('provider slash command switches and persists configured provider', async (
 
   assert.equal(repl.ai.getActiveProvider(), 'custom');
   assert.deepEqual(saved, ['custom']);
+});
+
+test('model slash command updates active provider model without fake SetModel tool', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  const saved = [];
+  let executedTool = null;
+  repl.config = {
+    setProviderModel: async (provider, model) => saved.push({ provider, model }),
+  };
+  repl.ai = {
+    providers: { custom: { model: 'old-model' } },
+    getActiveProvider: () => 'custom',
+    updateActiveModelTier: () => { repl.tierUpdated = true; },
+  };
+  repl.tools = {
+    execute: async (name) => { executedTool = name; return { success: true }; },
+  };
+
+  await repl.handleSlashCommand('/model smarter-small-model');
+
+  assert.equal(repl.ai.providers.custom.model, 'smarter-small-model');
+  assert.deepEqual(saved, [{ provider: 'custom', model: 'smarter-small-model' }]);
+  assert.equal(repl.tierUpdated, true);
+  assert.equal(executedTool, null);
 });
 
 test('shouldUseTools keeps agent mode enabled by default', () => {
@@ -380,7 +445,7 @@ test('runConversation streams direct assistant answers', async () => {
   try {
     const answer = await repl.runConversation([{ role: 'user', content: 'hello' }], 'Test', [{ name: 'Read' }]);
 
-    assert.equal(answer, 'Real time');
+    assert.equal(answer.finalContent, 'Real time');
     assert.match(writes.join(''), /Real time/);
     assert.match(writes.join(''), /Tokens: 5 total \(3 in, 2 out\)/);
   } finally {
@@ -449,7 +514,7 @@ test('runConversation executes streamed tool calls then streams final answer', a
 
   const answer = await repl.runConversation([{ role: 'user', content: 'read it' }], 'Test', [{ name: 'Read' }]);
 
-  assert.equal(answer, 'Done');
+  assert.equal(answer.finalContent, 'Done');
   assert.deepEqual(executed, [{ name: 'Read', args: { file_path: 'README.md' } }]);
 });
 
@@ -527,7 +592,7 @@ test('runConversation executes multiple tool calls across multiple turns before 
 
   const answer = await repl.runConversation([{ role: 'user', content: 'analyze README and search it' }], 'Test', [{ name: 'Read' }, { name: 'Grep' }]);
 
-  assert.equal(answer, 'Finished');
+  assert.equal(answer.finalContent, 'Finished');
   assert.deepEqual(executed, [
     { name: 'Read', args: { file_path: 'README.md' } },
     { name: 'Grep', args: { pattern: 'Winter', path: 'README.md' } },
@@ -580,8 +645,72 @@ test('runConversation reports malformed tool arguments instead of executing empt
 
   const answer = await repl.runConversation([{ role: 'user', content: 'run it' }], 'Test', [{ name: 'Bash' }]);
 
-  assert.equal(answer, 'Recovered');
+  assert.equal(answer.finalContent, 'Recovered');
   assert.deepEqual(executed, []);
+});
+
+test('runConversation recovers simple string tool arguments', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+
+  let streamCount = 0;
+  const executed = [];
+  repl.ai = {
+    tools: [],
+    setTools() {},
+    streamRequest: async function* () {
+      streamCount++;
+      if (streamCount === 1) {
+        yield {
+          raw: {
+            choices: [{
+              delta: {
+                tool_calls: [{
+                  index: 0,
+                  id: 'call-read-string',
+                  type: 'function',
+                  function: { name: 'read_file', arguments: '"README.md"' },
+                }],
+              },
+              finish_reason: 'tool_calls',
+            }],
+          },
+        };
+        return;
+      }
+
+      yield { content: 'Done' };
+    },
+  };
+  repl.tools = {
+    normalizeToolName: name => name === 'read_file' ? 'Read' : name,
+    normalizeToolInput: (name, input) => name === 'Read' && typeof input === 'string' ? { file_path: input } : input,
+    async execute(name, args) {
+      executed.push({ name, args });
+      return { success: true, path: args.file_path, lines: 1, size: 10, content: 'ok' };
+    },
+  };
+
+  const answer = await repl.runConversation([{ role: 'user', content: 'read readme' }], 'Test', [{ name: 'Read' }]);
+
+  assert.equal(answer.finalContent, 'Done');
+  assert.deepEqual(executed, [{ name: 'Read', args: { file_path: 'README.md' } }]);
+});
+
+test('runConversation recovers non-json raw Bash arguments but rejects broken JSON', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+
+  const executed = [];
+  repl.tools = {
+    normalizeToolName: name => name,
+    normalizeToolInput: (name, input) => name === 'Bash' && typeof input === 'string' ? { command: input } : input,
+    async execute(name, args) {
+      executed.push({ name, args });
+      return { success: true, stdout: args.command };
+    },
+  };
+
+  assert.deepEqual(repl.recoverToolArgs('Bash', 'npm test'), { command: 'npm test' });
+  assert.equal(repl.recoverToolArgs('Bash', '{"command":'), null);
 });
 
 test('runConversation stops repeating identical tool calls and asks for a final answer', async () => {
@@ -631,9 +760,9 @@ test('runConversation stops repeating identical tool calls and asks for a final 
 
   const answer = await repl.runConversation([{ role: 'user', content: 'read it' }], 'Test', [{ name: 'Read' }]);
 
-  assert.equal(answer, 'Final answer');
-  assert.equal(executed.length, 1);
-  assert(streamCount >= 2);
+  assert.equal(answer.finalContent, 'Final answer');
+  assert.equal(executed.length, 2);  // executes twice before 3rd repeat triggers loop detection
+  assert(streamCount >= 3);
 });
 
 test('runConversation can grant Bash permission for the whole session', async () => {
@@ -718,7 +847,7 @@ test('runConversation can grant Bash permission for the whole session', async ()
 
   const answer = await repl.runConversation([{ role: 'user', content: 'run commands' }], 'Test', [{ name: 'Bash' }]);
 
-  assert.equal(answer, 'Final answer');
+  assert.equal(answer.finalContent, 'Final answer');
   assert.equal(prompts.length, 1);
   assert.equal(executed.length, 2);
   assert(repl.sessionPermissionGrants.has('Bash'));
@@ -767,7 +896,7 @@ test('runConversation executes inline XML tool calls without printing pseudo syn
   try {
     const answer = await repl.runConversation([{ role: 'user', content: 'read it' }], 'Test', [{ name: 'Read' }]);
 
-    assert.equal(answer, 'Đã đọc xong');
+    assert.equal(answer.finalContent, 'Đã đọc xong');
     assert.deepEqual(executed, [{ name: 'Read', args: { path: 'README.md' } }]);
     assert.doesNotMatch(writes.join(''), /minimax:tool_call/);
   } finally {

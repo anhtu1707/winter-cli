@@ -24,6 +24,9 @@ test('usage helpers aggregate OpenAI and Anthropic style token usage', () => {
 
 test('tool argument parser recovers embedded JSON and reports malformed args', () => {
   assert.deepEqual(parseToolArguments('prefix {"command":"npm test"} suffix'), { command: 'npm test' });
+  assert.deepEqual(parseToolArguments("{command:'npm test',}"), { command: 'npm test' });
+  assert.deepEqual(parseToolArguments("{file_path:'README.md'}"), { file_path: 'README.md' });
+  assert.deepEqual(parseToolArguments('{command:npm test, timeout:1000}'), { command: 'npm test', timeout: 1000 });
 
   const bad = parseToolArguments('{"command":');
   assert.match(bad.__toolArgParseError, /Unexpected/);
@@ -38,6 +41,25 @@ test('inline minimax tool calls are extracted and normalized', () => {
   assert.equal(extracted.content, 'run');
   assert.equal(normalized[0].toolName, 'Bash');
   assert.deepEqual(normalized[0].toolArgs, { command: 'echo "ok"' });
+});
+
+test('inline tool extraction accepts common XML and fenced formats', () => {
+  const content = [
+    '<tool_call name="Read">{"file_path":"README.md"}</tool_call>',
+    '<tool_call>{"name":"Bash","arguments":{"command":"npm test"}}</tool_call>',
+    '```tool\nGrep {"pattern":"Winter","path":"README.md"}\n```',
+  ].join('\n');
+  const extracted = extractInlineToolCalls(content, index => `id-${index}`);
+  const normalized = normalizeToolCalls(extracted.toolCalls);
+
+  assert.equal(normalized.length, 3);
+  assert.equal(normalized[0].toolName, 'Read');
+  assert.deepEqual(normalized[0].toolArgs, { file_path: 'README.md' });
+  assert.equal(normalized[1].toolName, 'Bash');
+  assert.deepEqual(normalized[1].toolArgs, { command: 'npm test' });
+  assert.equal(normalized[2].toolName, 'Grep');
+  assert.deepEqual(normalized[2].toolArgs, { pattern: 'Winter', path: 'README.md' });
+  assert(!extracted.content.includes('tool_call'));
 });
 
 test('tool result and signature helpers stay compact', () => {

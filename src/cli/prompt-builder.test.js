@@ -160,3 +160,39 @@ test('PromptBuilder buildSystemPrompt includes memories and plans', () => {
   assert(result.includes('Important memory'));
   assert(result.includes('Fix bug'));
 });
+
+test('PromptBuilder includes required local resource rules in all prompt modes', () => {
+  const session = createMockSession([], [], {
+    requiredLocalResources: '[Required Local Resource Rules]\n- karpathy-tools\n- awesome-design-md\n- agents.md',
+  });
+  const builder = new PromptBuilder({
+    session,
+    projectPath: '/test',
+    compactText: (t) => t,
+    summarizePrompts: () => '',
+  });
+
+  const system = builder.buildSystemPrompt();
+  const fast = builder.buildFastSystemPrompt();
+  const agent = builder.buildAgentSystemPrompt('coding');
+
+  assert(system.includes('Required Local Resource Rules'));
+  assert(system.includes('override generic behavior'));
+  assert(system.includes('karpathy-tools'));
+  assert(fast.includes('Required Local Resource Rules'));
+  assert(agent.includes('REQUIRED LOCAL RESOURCES'));
+  assert(agent.includes('awesome-design-md'));
+});
+
+test('PromptBuilder system prompt stays compact for small model context', () => {
+  const builder = new PromptBuilder({
+    session: createMockSession(),
+    projectPath: '/test',
+    compactText: (text, maxChars) => String(text).slice(0, maxChars),
+    summarizePrompts: () => '',
+  });
+  const result = builder.buildSystemPrompt('x'.repeat(20000), { projectContextBudget: 1200 });
+
+  assert(result.length < 3500);
+  assert(!result.includes('CRITICAL AI RULES'));
+});

@@ -10,6 +10,7 @@ import { DesignCommands } from '../design/commands.js';
 import { SkillManager } from '../skills/manager.js';
 import { PluginManager } from '../plugins/manager.js';
 import { MCPClient } from '../mcp/client.js';
+import { BenchmarkRunner } from '../ai/benchmark.js';
 import { redactSecrets } from './secret-env.js';
 
 export { redactSecrets } from './secret-env.js';
@@ -45,6 +46,7 @@ export class CommandParser {
     this.commands = {
       chat: this.handleChat.bind(this),
       call: this.handleCallAll.bind(this),
+      benchmark: this.handleBenchmark.bind(this),
       session: this.handleSession.bind(this),
       project: this.handleProject.bind(this),
       skill: this.handleSkill.bind(this),
@@ -155,6 +157,66 @@ export class CommandParser {
         console.log(`   ${result.content.substring(0, 200)}...`);
       }
       console.log('');
+    }
+  }
+
+  async handleBenchmark(args) {
+    const runner = new BenchmarkRunner(this.ai);
+
+    // Parse arguments: winter benchmark [providers...] [--tasks] [--questions]
+    const providerNames = [];
+    let runTasks = true;
+    let runQuestions = true;
+
+    for (const arg of args) {
+      if (arg === '--tasks-only') {
+        runQuestions = false;
+      } else if (arg === '--questions-only') {
+        runTasks = false;
+      } else if (arg.startsWith('--')) {
+        // skip unknown flags
+      } else {
+        providerNames.push(arg);
+      }
+    }
+
+    // If no providers specified, use active
+    if (providerNames.length === 0) {
+      await this.ai.init();
+      const active = this.ai.getActiveProvider();
+      if (active) providerNames.push(active);
+      // Also add any other ready providers
+      const providers = this.ai.listProviders?.() || [];
+      for (const p of providers) {
+        if (p.name !== active && p.ready && !providerNames.includes(p.name)) {
+          providerNames.push(p.name);
+        }
+      }
+    }
+
+    if (providerNames.length === 0) {
+      console.log(`${colors.yellow}No providers configured. Run 'winter config' first.${colors.reset}`);
+      return;
+    }
+
+    console.log(`\n${colors.dim}Benchmarking providers: ${providerNames.join(', ')}${colors.reset}`);
+    if (!runQuestions) console.log(`${colors.dim}(Coding tasks only)${colors.reset}`);
+    if (!runTasks) console.log(`${colors.dim}(Questions only)${colors.reset}`);
+    console.log('');
+
+    try {
+      const result = await runner.run(providerNames, { questions: runQuestions, tasks: runTasks });
+      console.log(runner.formatResults(result));
+
+      // Save to session history
+      try {
+        await this.session.addToHistory({
+          role: 'system',
+          content: `[Benchmark Results]\n${runner.formatHistorySummary(result)}`,
+        });
+      } catch {}
+    } catch (err) {
+      console.log(`${colors.red}${statusIcons.error} Benchmark failed: ${err.message}${colors.reset}`);
     }
   }
 

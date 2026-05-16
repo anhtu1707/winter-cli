@@ -574,3 +574,55 @@ test('_getReasoningParam builds param from reasoningLevel string', async () => {
   const param = ai._getReasoningParam({ reasoningLevel: 'high' }, ai.providers.openai);
   assert.deepEqual(param, { reasoning_effort: 'high' });
 });
+
+test('small model system prompt stays compact and uses real tool names', async () => {
+  const ai = new AIProviderManager({
+    async load() {
+      return {
+        defaultProvider: 'ollama',
+        ollama: {
+          baseURL: 'http://ollama.test/v1',
+          model: 'llama3.2:3b',
+        },
+      };
+    },
+  });
+  ai.loadAuthToken = async () => null;
+  ai.setTools([{ name: 'Read' }, { name: 'Write' }, { name: 'Bash' }]);
+  await ai.init();
+
+  const prompt = ai.getSystemPrompt({ task: 'fix a bug' });
+
+  assert(prompt.length < 2500);
+  assert.match(prompt, /Read, Write, Bash/);
+  assert(!prompt.includes('<thinking>'));
+  assert(!prompt.includes('MANDATORY DEEP REASONING'));
+});
+
+test('model tier updates when switching provider', async () => {
+  const ai = new AIProviderManager({
+    async load() {
+      return {
+        defaultProvider: 'ollama',
+        ollama: {
+          baseURL: 'http://ollama.test/v1',
+          model: 'llama3.2:3b',
+        },
+        custom: {
+          baseURL: 'http://custom.test/v1',
+          apiKey: 'not-required',
+          model: 'qwen2.5-72b',
+        },
+      };
+    },
+  });
+  ai.loadAuthToken = async () => null;
+  await ai.init();
+  const smallPrompt = ai.getSystemPrompt({ task: 'fix bug' });
+
+  await ai.switchProvider('custom');
+  const largePrompt = ai.getSystemPrompt({ task: 'fix bug' });
+
+  assert(smallPrompt.includes('small local model'));
+  assert(!largePrompt.includes('small local model'));
+});

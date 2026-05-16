@@ -470,26 +470,26 @@ export class ToolExecutor {
   }
 
   async executeInternal(toolName, input, context = {}) {
-    input = input && typeof input === 'object' ? input : {};
     toolName = this.normalizeToolName(toolName);
+    input = this.normalizeToolInput(toolName, input);
     const cwd = context.cwd || this.projectPath;
     const resolvedPath = (p) => this.resolveInputPath(p, cwd);
 
     switch (toolName) {
       case 'Read':
-        return await this.readFile(this.resolveInputPath(input.file_path ?? input.path ?? input.file, cwd));
+        return await this.readFile(this.resolveInputPath(input.file_path ?? input.filePath ?? input.filepath ?? input.path ?? input.file ?? input.filename ?? input.target_file ?? input.targetFile, cwd));
       case 'Write':
-        return await this.writeFile(this.resolveInputPath(input.file_path ?? input.path ?? input.file, cwd), input.content);
+        return await this.writeFile(this.resolveInputPath(input.file_path ?? input.filePath ?? input.filepath ?? input.path ?? input.file ?? input.filename ?? input.target_file ?? input.targetFile, cwd), input.content ?? input.text ?? input.data ?? input.value ?? input.body);
       case 'Edit':
         return await this.executeEdit(input, cwd);
       case 'Bash':
-        return await this.bash(input.command ?? input.cmd, input.cwd || cwd, input.timeout, input.shell);
+        return await this.bash(input.command ?? input.cmd ?? input.script ?? input.code ?? input.input, input.cwd || input.path || cwd, input.timeout, input.shell);
       case 'Glob':
         return await this.glob(input.pattern ?? input.glob ?? '**/*', input.cwd || input.path || cwd);
       case 'Grep':
         return await this.grep(
           input.pattern ?? input.query ?? input.q,
-          input.path || cwd,
+          input.path || input.cwd || cwd,
           input.glob,
           input.output_mode,
           {
@@ -519,9 +519,9 @@ export class ToolExecutor {
       case 'BrowserDebug':
         return await this.browserDebug(input.url ?? input.uri, input.action);
       case 'WebFetch':
-        return await this.webFetch(input.url ?? input.uri, input.prompt);
+        return await this.webFetch(input.url ?? input.uri ?? input.href, input.prompt ?? input.query ?? input.extract);
       case 'WebSearch':
-        return await this.webSearch(input.query ?? input.q);
+        return await this.webSearch(input.query ?? input.q ?? input.search ?? input.search_query ?? input.searchQuery);
       case 'NotebookRead':
         return await this.notebookTool.read(this.resolveInputPath(input.notebook_path ?? input.path ?? input.file, cwd));
       case 'NotebookEdit':
@@ -651,41 +651,67 @@ export class ToolExecutor {
   }
 
   normalizeToolName(toolName) {
-    const normalized = String(toolName || '').replace(/[-_\s]/g, '').toLowerCase();
+    const raw = String(toolName || '').trim();
+    const normalized = raw
+      .replace(/^functions[._-]/i, '')
+      .replace(/^tools?[._-]/i, '')
+      .replace(/^winter[._-]/i, '')
+      .replace(/^[\w-]+[.:/](?=[A-Za-z])/i, '')
+      .replace(/[-_\s]/g, '')
+      .toLowerCase();
     const aliases = {
       read: 'Read',
       readfile: 'Read',
+      fileread: 'Read',
       openfile: 'Read',
       viewfile: 'Read',
+      view: 'Read',
       cat: 'Read',
+      getfile: 'Read',
+      readfilecontent: 'Read',
       write: 'Write',
       writefile: 'Write',
+      filewrite: 'Write',
       writetofile: 'Write',
       createfile: 'Write',
       savefile: 'Write',
+      create: 'Write',
+      overwritefile: 'Write',
       edit: 'Edit',
       editfile: 'Edit',
+      fileedit: 'Edit',
       replaceinfile: 'Edit',
       strreplace: 'Edit',
       strreplaceeditor: 'Edit',
+      strreplaceedit: 'Edit',
       applydiff: 'Edit',
+      applypatch: 'Edit',
       patch: 'Edit',
       bash: 'Bash',
       shell: 'Bash',
       command: 'Bash',
       commandexecutor: 'Bash',
       executecommand: 'Bash',
+      runterminalcmd: 'Bash',
+      runterminalcommand: 'Bash',
       runcommand: 'Bash',
+      runcmd: 'Bash',
+      exec: 'Bash',
       terminal: 'Bash',
       powershell: 'Bash',
+      cmd: 'Bash',
       glob: 'Glob',
       listfiles: 'Glob',
+      list: 'Glob',
       ls: 'Glob',
       findfiles: 'Glob',
+      find: 'Glob',
       grep: 'Grep',
       search: 'Grep',
       searchfiles: 'Grep',
+      grepsearch: 'Grep',
       searchtext: 'Grep',
+      searchcode: 'Grep',
       rg: 'Grep',
       rgfull: 'Grep',
       searchadvanced: 'Grep',
@@ -707,12 +733,17 @@ export class ToolExecutor {
       webfetch: 'WebFetch',
       fetch: 'WebFetch',
       fetchurl: 'WebFetch',
+      geturl: 'WebFetch',
       websearch: 'WebSearch',
       searchweb: 'WebSearch',
+      internetsearch: 'WebSearch',
+      googlesearch: 'WebSearch',
       browserdebug: 'BrowserDebug',
       browser: 'BrowserDebug',
+      browserinspect: 'BrowserDebug',
       parallel: 'Parallel',
       parallelexecute: 'Parallel',
+      paralleltools: 'Parallel',
       batch: 'Parallel',
       // New tools
       webarchive: 'WebArchive',
@@ -746,7 +777,45 @@ export class ToolExecutor {
       subagent: 'Agent',
       agentrun: 'Agent',
     };
-    return aliases[normalized] || toolName;
+    return aliases[normalized] || raw;
+  }
+
+  normalizeToolInput(toolName, input) {
+    if (input && typeof input === 'object' && !Array.isArray(input)) {
+      return this.unwrapToolInput(input);
+    }
+
+    if (typeof input !== 'string') return {};
+    const value = input.trim();
+    if (!value) return {};
+
+    switch (toolName) {
+      case 'Read':
+      case 'NotebookRead':
+        return { file_path: value };
+      case 'Write':
+        return { content: value };
+      case 'Bash':
+        return { command: value };
+      case 'Glob':
+        return { pattern: value };
+      case 'Grep':
+      case 'WebSearch':
+        return { query: value };
+      case 'WebFetch':
+      case 'WebArchive':
+      case 'BrowserDebug':
+        return { url: value };
+      case 'TaskCreate':
+      case 'TodoWrite':
+        return { title: value };
+      case 'ScheduleWakeup':
+        return { prompt: value };
+      case 'Agent':
+        return { task: value };
+      default:
+        return { input: value };
+    }
   }
 
   resolveInputPath(filePath, cwd) {

@@ -103,14 +103,15 @@ export class AIProviderManager {
       if (available) this.activeProvider = available;
     }
 
-    // Auto-detect model capability tier
-    const providerConfig = this.providers[this.activeProvider] || {};
-    this._modelTier = classifyModelTier(providerConfig.model, this.activeProvider);
-
-    // Eager-load local resources (design systems, agent instructions) for contextual injection
-    this._loadResourceContext(); // fire-and-forget
+    this.updateActiveModelTier();
 
     this.initialized = true;
+  }
+
+  updateActiveModelTier() {
+    const providerConfig = this.providers[this.activeProvider] || {};
+    this._modelTier = classifyModelTier(providerConfig.model, this.activeProvider);
+    return this._modelTier;
   }
 
   async loadAuthToken() {
@@ -172,6 +173,7 @@ export class AIProviderManager {
     const providerName = this.normalizeProviderName(name);
     if (this.providers[providerName]) {
       this.activeProvider = providerName;
+      this.updateActiveModelTier();
       return true;
     }
     return false;
@@ -594,7 +596,9 @@ export class AIProviderManager {
 
   getSystemPrompt(options = {}) {
     const taskInfo = options.task ? classifyTask(options.task) : null;
-    const tools = this.tools ? Object.keys(this.tools) : [];
+    const tools = Array.isArray(this.tools)
+      ? this.tools.map(tool => tool?.function?.name || tool?.name).filter(Boolean)
+      : [];
     const sessionInfo = {
       memory: options.memory || [],
       plans: options.plans || [],
@@ -633,8 +637,7 @@ export class AIProviderManager {
       ? '\n\n' + SuccessCriteria.fromRequest(options.task).buildPrompt()
       : '';
 
-    // Use cached resource context (eager-loaded in init())
-    const resourceContext = this._cachedResourceContext || '';
+    const resourceContext = options.includeResources ? (this._cachedResourceContext || '') : '';
 
     // Auto-detect relevant design guide for UI/design tasks
     let designGuide = null;

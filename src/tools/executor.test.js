@@ -28,14 +28,32 @@ test('tool names accept common model aliases', () => {
   const tools = new ToolExecutor({ projectPath: process.cwd() });
 
   assert.equal(tools.normalizeToolName('read_file'), 'Read');
+  assert.equal(tools.normalizeToolName('tool.read_file_content'), 'Read');
   assert.equal(tools.normalizeToolName('write_to_file'), 'Write');
   assert.equal(tools.normalizeToolName('replace_in_file'), 'Edit');
   assert.equal(tools.normalizeToolName('command_executor'), 'Bash');
   assert.equal(tools.normalizeToolName('execute_command'), 'Bash');
+  assert.equal(tools.normalizeToolName('run_terminal_cmd'), 'Bash');
   assert.equal(tools.normalizeToolName('list_files'), 'Glob');
   assert.equal(tools.normalizeToolName('search_files'), 'Grep');
+  assert.equal(tools.normalizeToolName('grep_search'), 'Grep');
   assert.equal(tools.normalizeToolName('shell'), 'Bash');
   assert.equal(tools.normalizeToolName('web-search'), 'WebSearch');
+});
+
+test('tools coerce string inputs into valid arguments', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-string-tool-'));
+  await writeFile(path.join(root, 'README.md'), 'Winter CLI\n');
+  const tools = new ToolExecutor({ projectPath: root });
+
+  const read = await tools.execute('Read', 'README.md');
+  const bash = await tools.execute('Bash', process.platform === 'win32' ? 'echo ok' : 'printf ok');
+
+  assert.equal(read.success, true);
+  assert.equal(read.content, 'Winter CLI\n');
+  assert.equal(bash.success, true);
+  assert.deepEqual(tools.normalizeToolInput('WebSearch', 'winter cli'), { query: 'winter cli' });
+  assert.deepEqual(tools.normalizeToolInput('WebFetch', 'https://example.com'), { url: 'https://example.com' });
 });
 
 test('Edit accepts common model argument aliases', async () => {

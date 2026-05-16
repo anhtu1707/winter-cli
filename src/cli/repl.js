@@ -21,6 +21,7 @@ import { formatMarkdown } from './markdown-format.js';
 import { Spinner } from './spinner.js';
 import { ContextLoader } from './context-loader.js';
 import { PromptBuilder } from './prompt-builder.js';
+import { classifyModelTier, isSmallModel } from '../ai/model-capabilities.js';
 import {
   addUsage as mergeUsage,
   buildToolCallSignature as buildToolCallSignatureText,
@@ -65,6 +66,7 @@ export class WinterREPL {
     this.contextLoader = new ContextLoader({ projectPath: this.projectPath, session: this.session, tools: this.tools });
     this.promptBuilder = new PromptBuilder({
       session: this.session,
+      ai: this.ai,
       tools: this.tools,
       projectPath: this.projectPath,
       sessionPermissionGrants: this.sessionPermissionGrants,
@@ -228,6 +230,111 @@ export class WinterREPL {
       }
     }
 
+    // ── Tự động tạo design.md, skill.md, rule.md nếu chưa có ──────────────
+    const autoCreateDocs = [
+      {
+        filename: 'design.md',
+        generate: async () => {
+          const designDir = this.getResourcePaths().designs;
+          let brands = [];
+          try {
+            const entries = await fsPromises.readdir(designDir, { withFileTypes: true });
+            brands = entries.filter(e => e.isDirectory()).map(e => e.name).sort();
+          } catch {}
+          return `# Design Resources
+
+Danh sách các design system có sẵn trong local resources:
+
+## Available Brands (${brands.length})
+
+${brands.length > 0 ? brands.map(b => `- ${b}`).join('\n') : '- Không tìm thấy design system nào.'}
+
+---
+*File này được tự động tạo bởi Winter CLI.*`;
+        },
+      },
+      {
+        filename: 'skill.md',
+        generate: async () => {
+          const catalog = await this.contextLoader.getStartupSkillCatalog();
+          const skills = [...catalog].sort();
+          return `# Available Skills
+
+Danh sách các skill có sẵn trong hệ thống:
+
+## Core Skills
+- **coding**: Code analysis, generation, review
+- **design**: Design system integration
+- **debug**: Debugging assistance
+- **refactor**: Code refactoring
+- **test**: Test generation
+- **security**: Security review
+- **performance**: Performance optimization
+
+## All Available Skills (${skills.length})
+
+${skills.map(s => `- ${s}`).join('\n')}
+
+---
+*File này được tự động tạo bởi Winter CLI.*`;
+        },
+      },
+      {
+        filename: 'rule.md',
+        generate: async () => {
+          const parts = ['# Project Rules', '', '## Quy tắc dự án', ''];
+          // Load từ các instruction files đã có
+          const files = await this.readProjectInstructionFiles();
+          for (const file of files) {
+            if (file.relativePath === 'rule.md') continue; // skip self
+            parts.push(`- [${file.relativePath}](./${file.relativePath})`);
+          }
+          // Liệt kê các thư mục rules
+          const rulesDirs = [
+            this.getResourcePaths().codex.rules,
+            this.getUserResourcePaths()?.codexRules,
+          ].filter(Boolean);
+          for (const dir of rulesDirs) {
+            try {
+              const entries = await fsPromises.readdir(dir, { withFileTypes: true });
+              const ruleFiles = entries.filter(e => e.isFile() && e.name.endsWith('.md')).map(e => e.name);
+              if (ruleFiles.length > 0) {
+                parts.push('', `## Rules from ${path.basename(path.dirname(dir))}/${path.basename(dir)}`, '');
+                for (const f of ruleFiles) {
+                  parts.push(`- ${f}`);
+                }
+              }
+            } catch {}
+          }
+          // Liệt kê local resource rules
+          parts.push('', '## Local Resource Guidelines', '');
+          parts.push('- Karpathy tools guidelines available in local resources');
+          parts.push('- Agents.md project guidelines available in local resources');
+          parts.push('', '---', '*File này được tự động tạo bởi Winter CLI.*');
+          return parts.join('\n');
+        },
+      },
+    ];
+
+    for (const doc of autoCreateDocs) {
+      const filePath = path.join(this.projectPath, doc.filename);
+      try {
+        await fsPromises.stat(filePath);
+        // File đã tồn tại, bỏ qua
+      } catch {
+        // File chưa tồn tại, tự động tạo
+        try {
+          const content = await doc.generate();
+          await fsPromises.writeFile(filePath, content, 'utf8');
+          console.log(`${colors.green}✓ Đã tự động tạo file ${doc.filename} từ local resources!${colors.reset}`);
+          const memoryKey = `[Quy tắc dự án từ ${doc.filename}]`;
+          await this.session.replaceMemory(memoryKey, content);
+        } catch (err) {
+          // Bỏ qua nếu không tạo được
+        }
+      }
+    }
+
     await this.bootstrapProjectCapabilities();
 
     const activeProvider = this.ai.getActiveProvider();
@@ -286,21 +393,23 @@ export class WinterREPL {
     });
 
     // Hiển thị prompt lần đầu tiên ngay khi khởi động xong
-    this.rl.prompt();
+    this.showInputPrompt();
 
     this.rl.on('line', (line) => {
       this.inputQueue = this.inputQueue
         .then(async () => {
+          this.closeInputBox();
           const input = line.trim();
           if (input) {
             await this.handleInput(input);
           } else {
-            if (this.running && !this.readlineClosed) this.rl.prompt();
+            if (this.running && !this.readlineClosed) this.showInputPrompt();
           }
         })
         .catch((error) => {
+          this.closeInputBox();
           console.log(`\n${colors.red}✖ Error: ${error.message}${colors.reset}\n`);
-          if (this.running && !this.readlineClosed) this.rl.prompt();
+          if (this.running && !this.readlineClosed) this.showInputPrompt();
         });
     });
 
@@ -310,6 +419,28 @@ export class WinterREPL {
       console.log(`\n${colors.dim}Goodbye.${colors.reset}\n`);
       process.exit(0);
     });
+  }
+
+  showInputPrompt() {
+    if (!this.running || this.readlineClosed) return;
+    const w = Math.max(20, terminalWidth() - 2);
+    process.stdout.write(`
+${colors.magenta}╭${'─'.repeat(w)}╮${colors.reset}
+`);
+    process.stdout.write(`${colors.magenta}│${colors.reset} `);
+    this.rl.setPrompt(`${colors.bright}${colors.cyan}winter❄️: ${colors.reset}`);
+    this.rl.prompt();
+  }
+
+  closeInputBox() {
+    const w = Math.max(20, terminalWidth() - 2);
+    readline.moveCursor(process.stdout, 0, -1);
+    readline.cursorTo(process.stdout, terminalWidth() - 1);
+    process.stdout.write(`${colors.magenta}│${colors.reset}`);
+    process.stdout.write(`
+`);
+    process.stdout.write(`${colors.magenta}╰${'─'.repeat(w)}╯${colors.reset}
+`);
   }
 
   showStatus() {
@@ -500,7 +631,7 @@ export class WinterREPL {
         const nextTask = this.taskQueue.shift();
         setTimeout(() => this.processInputTask(nextTask), 0);
       } else {
-        if (!this.readlineClosed) this.rl.prompt(true);
+        if (!this.readlineClosed) this.showInputPrompt();
       }
     }
   }
@@ -946,8 +1077,18 @@ ${colors.reset}
       case 'research':
         return byName(['Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch']);
       default:
-        return byName(['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'TaskCreate', 'TaskUpdate', 'TaskList']);
+        return byName(['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep']);
     }
+  }
+
+  getActiveModelTier() {
+    const providerName = this.ai?.getActiveProvider?.();
+    const model = this.ai?.providers?.[providerName]?.model || '';
+    return classifyModelTier(model, providerName);
+  }
+
+  shouldUseCompactPrompt() {
+    return isSmallModel(this.getActiveModelTier());
   }
 
   selectExecutionProfile(messages = [], options = {}) {
@@ -1001,9 +1142,10 @@ ${colors.reset}
     let finalContent = '';
     let reachedToolLimit = true;
     let usedTools = false;
+    let verified = false;
     const toolSummaries = [];
     const totalUsage = {};
-    let lastToolSignature = null;
+    const toolSignatureHistory = [];
     const executionProfile = this.selectExecutionProfile(messages, { enableTools: true });
     try {
       for (let i = 0; i < 8; i++) {
@@ -1042,13 +1184,21 @@ ${colors.reset}
         if (this.spinner) this.spinner.stop();
 
         const currentToolSignature = this.buildToolCallSignature(toolCalls);
-        if (currentToolSignature && currentToolSignature === lastToolSignature) {
-          console.log(`
-${colors.yellow}ℹ AI tool loop detected. Breaking out.${colors.reset}`);
-          reachedToolLimit = false;
-          break;
+        if (currentToolSignature) {
+          toolSignatureHistory.push(currentToolSignature);
+          if (toolSignatureHistory.length > 3) {
+            toolSignatureHistory.shift();
+          }
+          // Only break if 3+ consecutive identical signatures — 2 repeats is normal iteration
+          if (toolSignatureHistory.length === 3 &&
+              toolSignatureHistory[0] === currentToolSignature &&
+              toolSignatureHistory[1] === currentToolSignature) {
+            console.log(`
+${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). Breaking out.${colors.reset}`);
+            reachedToolLimit = false;
+            break;
+          }
         }
-        lastToolSignature = currentToolSignature;
 
         const BOX_WIDTH = terminalWidth(76, 116, 92);
         messages.push({
@@ -1061,12 +1211,17 @@ ${colors.yellow}ℹ AI tool loop detected. Breaking out.${colors.reset}`);
           const { toolName, toolArgs } = tc;
           const canonicalToolName = this.tools.normalizeToolName(toolName);
           const argParseError = toolArgs?.__toolArgParseError;
-          const enrichedArgs = argParseError ? {} : this.enrichToolArgs(canonicalToolName, toolArgs, messages);
+          const recoveredArgs = argParseError ? this.recoverToolArgs(canonicalToolName, toolArgs.__rawToolArgs) : null;
+          const canUseRecoveredArgs = recoveredArgs && Object.keys(recoveredArgs).length > 0;
+          const normalizedArgs = argParseError && !canUseRecoveredArgs
+            ? {}
+            : this.tools.normalizeToolInput?.(canonicalToolName, canUseRecoveredArgs ? recoveredArgs : toolArgs) ?? toolArgs;
+          const enrichedArgs = argParseError && !canUseRecoveredArgs ? {} : this.enrichToolArgs(canonicalToolName, normalizedArgs, messages);
 
           const icon = canonicalToolName === 'Bash' ? '⚙' : canonicalToolName === 'Read' ? '📖' : canonicalToolName === 'Write' ? '✏️' : canonicalToolName === 'Edit' ? '🔧' : canonicalToolName === 'Grep' ? '🔍' : canonicalToolName === 'Glob' ? '📂' : '⚡';
 
           let proceed = true;
-          if (await this.shouldPromptForToolPermission(canonicalToolName) && !argParseError) {
+          if (await this.shouldPromptForToolPermission(canonicalToolName) && (!argParseError || canUseRecoveredArgs)) {
             const cmd = enrichedArgs.command || enrichedArgs.cmd || 'unknown';
             if (this.sessionPermissionGrants.has(canonicalToolName)) {
               proceed = true;
@@ -1088,11 +1243,12 @@ ${colors.yellow}ℹ AI tool loop detected. Breaking out.${colors.reset}`);
           }
 
           let result;
-          if (argParseError) {
+          if (argParseError && !canUseRecoveredArgs) {
             result = {
               success: false,
               error: `Invalid ${canonicalToolName} tool arguments JSON: ${toolArgs.__toolArgParseError}`,
               rawArgs: toolArgs.__rawToolArgs,
+              recovery: 'Use valid JSON object arguments, for example {"file_path":"README.md"} for Read or {"command":"npm test"} for Bash.',
             };
           } else if (!proceed) {
             result = { success: false, error: 'User denied permission to execute this command.' };
@@ -1142,7 +1298,7 @@ ${colors.yellow}ℹ AI tool loop detected. Breaking out.${colors.reset}`);
       console.log(`\n${colors.yellow}${finalContent}${colors.reset}\n`);
     }
 
-    return finalContent;
+    return { finalContent, usedTools };
   }
 
   async requestAssistantTurn(messages, options, startedAt, totalUsage) {
@@ -1430,7 +1586,7 @@ ${colors.yellow}ℹ AI tool loop detected. Breaking out.${colors.reset}`);
   }
 
   enrichToolArgs(toolName, toolArgs = {}, messages = []) {
-    const args = toolArgs && typeof toolArgs === 'object' ? { ...toolArgs } : {};
+    const args = this.tools.normalizeToolInput?.(toolName, toolArgs) || (toolArgs && typeof toolArgs === 'object' ? { ...toolArgs } : {});
     const fallbackPath = this.extractPathFromMessages(messages);
 
     if (fallbackPath) {
@@ -1458,6 +1614,21 @@ ${colors.yellow}ℹ AI tool loop detected. Breaking out.${colors.reset}`);
     }
 
     return args;
+  }
+
+  recoverToolArgs(toolName, rawArgs) {
+    const raw = String(rawArgs || '').trim();
+    if (!raw) return null;
+    if (/^[{[]/.test(raw)) return null;
+
+    const cleaned = raw
+      .replace(/^```(?:json|tool|tool_call)?\s*/i, '')
+      .replace(/```$/i, '')
+      .trim()
+      .replace(/^['"]|['"]$/g, '');
+    if (!cleaned) return null;
+
+    return this.tools.normalizeToolInput?.(toolName, cleaned) || null;
   }
 
   extractPathFromMessages(messages = []) {
@@ -1793,7 +1964,7 @@ ${colors.yellow}ℹ AI tool loop detected. Breaking out.${colors.reset}`);
   async chat(message, imageAttachments = []) {
     try {
       const needsTools = true;
-      const context = await this.getProjectContext();
+      const context = await this.getProjectContext(message);
       const messages = [
         { role: 'system', content: this.getSystemPrompt(context) }
       ];
@@ -1802,7 +1973,7 @@ ${colors.yellow}ℹ AI tool loop detected. Breaking out.${colors.reset}`);
       const promptHistory = this.getCompressedPromptHistory({
         limit: 20,
         keepRecent: 14,
-        maxTotalChars: 12000,
+        maxTotalChars: this.shouldUseCompactPrompt() ? 5000 : 12000,
       });
       if (promptHistory.summary) {
         messages.push({ role: 'system', content: `Compressed prior conversation:\n${promptHistory.summary}` });
@@ -1827,14 +1998,98 @@ ${colors.yellow}ℹ AI tool loop detected. Breaking out.${colors.reset}`);
       }
 
       const tools = this.getAgentTools('general');
-      const finalContent = await this.runConversation(messages, 'Thinking', tools);
+      const { finalContent, usedTools } = await this.runConversation(messages, 'Thinking', tools);
 
       await this.session.addToHistory({ role: 'user', content: message });
       await this.session.addToHistory({ role: 'assistant', content: finalContent });
 
+      // Tự động verify: nếu AI đã dùng tools (sửa code), chạy test/build
+      if (usedTools && finalContent) {
+        await this.verifyAndHeal(messages, tools, 5);
+      }
+
     } catch (error) {
       console.log(`\n${colors.red}✖ Error: ${error.message}${colors.reset}\n`);
     }
+  }
+
+  /**
+   * Chạy verification commands (test, build) và trả về kết quả
+   */
+  async runVerification(commands = ['npm test']) {
+    const { execSync } = await import('child_process');
+    const results = [];
+
+    for (const cmd of commands) {
+      try {
+        const output = execSync(cmd, {
+          timeout: 120000,
+          encoding: 'utf8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        results.push({ cmd, passed: true, output: output.trim() });
+      } catch (error) {
+        const stderr = error.stderr || '';
+        const stdout = error.stdout || '';
+        results.push({ cmd, passed: false, output: (stdout + '\n' + stderr).trim() });
+      }
+    }
+
+    return {
+      passed: results.every(r => r.passed),
+      details: results,
+    };
+  }
+
+  /**
+   * Vòng lặp tự động verify + sửa lỗi:
+   * - Chạy test/build
+   * - Nếu fail, gửi lỗi cho AI fix
+   * - Lặp đến khi pass hết hoặc hết số lần thử
+   */
+  async verifyAndHeal(messages, tools, maxAttempts = 5) {
+    const verifCommands = ['npm test'];
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      console.log(`\n${colors.cyan}=== Verification Attempt ${attempt}/${maxAttempts} ===${colors.reset}`);
+
+      const result = await this.runVerification(verifCommands);
+
+      if (result.passed) {
+        console.log(`\n${colors.green}✅ All verifications passed!${colors.reset}\n`);
+        return;
+      }
+
+      // Collect error details
+      const errorDetails = result.details
+        .filter(r => !r.passed)
+        .map(r => `Command: ${r.cmd}\n${r.output}`)
+        .join('\n\n---\n\n');
+
+      console.log(`\n${colors.yellow}⚠ Verification failed. Sending errors back to AI for fix...${colors.reset}\n`);
+
+      // Push error output as user message for AI to fix
+      const fixPrompt = `VERIFICATION FAILED (attempt ${attempt}/${maxAttempts}):
+
+The following commands produced errors:
+
+${errorDetails}
+
+The system will re-run verification automatically after you fix. Please FIX ALL ERRORS above.
+Do NOT stop until all errors are resolved.`;
+
+      messages.push({ role: 'user', content: fixPrompt });
+
+      // Let the AI fix the issues
+      const { usedTools: fixUsedTools } = await this.runConversation(messages, 'Fixing', tools);
+
+      if (!fixUsedTools) {
+        console.log(`\n${colors.red}⚠ AI did not attempt to fix the errors. Stopping.${colors.reset}\n`);
+        break;
+      }
+    }
+
+    console.log(`\n${colors.red}⚠ Max verification attempts (${maxAttempts}) reached. Some issues may remain.${colors.reset}\n`);
   }
 
   shouldUseTools(message = '', imageAttachments = []) {
@@ -1863,12 +2118,16 @@ ${colors.yellow}ℹ AI tool loop detected. Breaking out.${colors.reset}`);
   }
 
   async runAgent(role, task) {
-    const context = await this.getProjectContext();
+    const context = await this.getProjectContext(task);
     const messages = [
       { role: 'system', content: this.getAgentSystemPrompt(role, context) }
     ];
 
-    const promptHistory = this.getCompressedPromptHistory({ limit: 30, keepRecent: 14, maxTotalChars: 12000 });
+    const promptHistory = this.getCompressedPromptHistory({
+      limit: this.shouldUseCompactPrompt() ? 14 : 30,
+      keepRecent: this.shouldUseCompactPrompt() ? 8 : 14,
+      maxTotalChars: this.shouldUseCompactPrompt() ? 5000 : 12000,
+    });
     if (promptHistory.summary) {
       messages.push({ role: 'system', content: `Compressed prior conversation:\n${promptHistory.summary}` });
     }
@@ -1878,19 +2137,29 @@ ${colors.yellow}ℹ AI tool loop detected. Breaking out.${colors.reset}`);
 
     messages.push({ role: 'user', content: `Task: ${task}` });
 
-    const finalContent = await this.runConversation(messages, `Subagent [${role}]`, this.getAgentTools(role));
+    const agentTools = this.getAgentTools(role);
+    const { finalContent, usedTools } = await this.runConversation(messages, `Subagent [${role}]`, agentTools);
 
     await this.session.addToHistory({ role: 'user', content: `[subagent:${role}] ${task}` });
     await this.session.addToHistory({ role: 'assistant', content: finalContent });
+
+    if (usedTools && finalContent) {
+      await this.verifyAndHeal(messages, agentTools, 3);
+    }
   }
 
-  async getProjectContext() {
+  async getProjectContext(task = '') {
     const context = [];
+    const requiredLocalResources = await this.getRequiredLocalResourceSummary();
+    if (requiredLocalResources) {
+      context.push(requiredLocalResources);
+    }
+
     const projectInstructionFiles = await this.readProjectInstructionFiles();
 
     for (const file of projectInstructionFiles) {
       try {
-        const preview = this.compactText(file.content, 900, 'project instruction');
+        const preview = this.compactText(file.content, this.shouldUseCompactPrompt() ? 450 : 900, 'project instruction');
         context.push(`[${file.relativePath}]\n${preview}`);
       } catch { }
     }
@@ -1900,11 +2169,12 @@ ${colors.yellow}ℹ AI tool loop detected. Breaking out.${colors.reset}`);
       const stat = await fs.stat(packageJsonPath);
       if (stat.isFile()) {
         const content = await fs.readFile(packageJsonPath, 'utf-8');
-        context.push(`[package.json]\n${this.compactText(content, 1200, 'package.json')}`);
+        context.push(`[package.json]\n${this.compactText(content, this.shouldUseCompactPrompt() ? 650 : 1200, 'package.json')}`);
       }
     } catch { }
 
-    const localResources = await this.getLocalResourceContext();
+    const shouldIncludeResources = /\b(resource|resources|skill|skills|plugin|plugins|claude|codex|agent|agents|design|ui|figma|brand|mcp)\b/i.test(String(task || ''));
+    const localResources = shouldIncludeResources ? await this.getLocalResourceContext() : '';
     if (localResources) {
       context.push(localResources);
     }
@@ -1918,24 +2188,28 @@ ${colors.yellow}ℹ AI tool loop detected. Breaking out.${colors.reset}`);
 
         const gitSummary = execSync('git diff --stat --summary', { cwd: this.projectPath, encoding: 'utf8', stdio: 'pipe', maxBuffer: 1024 * 50 }).trim();
         if (gitSummary) {
-          context.push(`[Git Summary]\n${this.compactText(gitSummary, 1200, 'git summary')}`);
+          context.push(`[Git Summary]\n${this.compactText(gitSummary, this.shouldUseCompactPrompt() ? 650 : 1200, 'git summary')}`);
         }
 
         // Get brief git diff for context
         const gitDiff = execSync('git diff', { cwd: this.projectPath, encoding: 'utf8', stdio: 'pipe', maxBuffer: 1024 * 50 }).trim().split('\n').slice(0, 30).join('\n');
         if (gitDiff) {
-          context.push(`[Git Diff]\n${this.compactText(gitDiff, 1800, 'git diff')}`);
+          context.push(`[Git Diff]\n${this.compactText(gitDiff, this.shouldUseCompactPrompt() ? 900 : 1800, 'git diff')}`);
         }
       }
     } catch (e) {
       // Not a git repo or git not installed
     }
 
-    return this.compactText(context.join('\n\n') || 'No project context found.', 9000, 'project context');
+    return this.compactText(context.join('\n\n') || 'No project context found.', this.shouldUseCompactPrompt() ? 4200 : 9000, 'project context');
   }
 
   async getLocalResourceContext() {
     return this.contextLoader.getLocalResourceContext();
+  }
+
+  async getRequiredLocalResourceSummary() {
+    return this.contextLoader.getRequiredLocalResourceSummary();
   }
 
   async bootstrapProjectCapabilities() {
@@ -1947,16 +2221,22 @@ ${colors.yellow}ℹ AI tool loop detected. Breaking out.${colors.reset}`);
         'Inspect rules, resources, and likely skills before doing any task work.'
       );
       await this.session.addPlanStep(plan.id, {
-        description: 'Read project rules, local resources, and attached skill libraries.',
+        description: 'Read required local resources, project rules, and attached skill libraries.',
       });
       await this.session.addPlanStep(plan.id, {
-        description: 'Choose the smallest relevant skill set before making changes.',
+        description: 'Ground every model in required resource rules before making changes.',
       });
       await this.session.updateContext('bootstrapPlan', {
         id: plan.id,
         title: plan.title,
         description: plan.description,
       });
+    }
+
+    const requiredLocalResources = await this.getRequiredLocalResourceSummary();
+    if (requiredLocalResources) {
+      await this.session.updateContext('requiredLocalResources', requiredLocalResources);
+      await this.session.replaceMemory('[Required local resources]', requiredLocalResources, 'resource');
     }
 
     const skillSnapshot = await this.inferStartupSkills();
@@ -2018,119 +2298,18 @@ ${colors.yellow}ℹ AI tool loop detected. Breaking out.${colors.reset}`);
   }
   getSystemPrompt(context = '') {
     this.hydrateSessionToolPermissions();
-    const memories = this.session.getMemory();
-    const plans = this.session.getPlans();
-    const sessionContext = this.session.getContext() || {};
-    const environmentSummary = this.tools?.getRuntimeEnvironmentSummary?.() || [
-      `Host OS: ${process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'macOS' : process.platform === 'linux' ? 'Linux' : process.platform}`,
-      `Node platform: ${process.platform}`,
-      `Current shell hint: ${process.platform === 'win32' ? 'powershell-capable or cmd/unknown' : (process.env.SHELL || 'bash/sh')}`,
-      process.platform === 'win32'
-        ? 'Shell rule: Use shell:"powershell" for PowerShell cmdlets, shell:"cmd" for cmd.exe syntax, and shell:"auto" when unsure.'
-        : 'Shell rule: Use the native POSIX shell on non-Windows hosts and leave shell unspecified unless a specific shell is required.',
-    ].join('\n');
-
-    let memoryStr = memories.length > 0 ? `\n## Memories (Important Context)\n${this.summarizePromptList(memories, {
-      limit: 8,
-      maxEntryChars: 220,
-      maxTotalChars: 1600,
-      mapper: memory => memory.text,
-    })}` : '';
-    let plansStr = plans.length > 0 ? `\n## Active Plans & Tasks\n${this.summarizePromptList(plans, {
-      limit: 6,
-      maxEntryChars: 260,
-      maxTotalChars: 1600,
-      mapper: plan => `[${plan.status}] ${plan.title}: ${plan.description}`,
-    })}` : '';
-    let skillsStr = Array.isArray(sessionContext.activeSkills) && sessionContext.activeSkills.length > 0
-      ? `\n## Auto-applied Skills\n${sessionContext.activeSkills.slice(0, 12).map(skill => `- ${skill}`).join('\n')}${sessionContext.activeSkills.length > 12 ? '\n- ...' : ''}`
-      : '';
-    let startupPlanStr = sessionContext.bootstrapPlan?.title
-      ? `\n## Startup Plan\n- ${sessionContext.bootstrapPlan.title}: ${sessionContext.bootstrapPlan.description}`
-      : '';
-    const sessionSignalsStr = `\n${this.buildSessionSignalsPrompt()}`;
-
-    return `You are Winter, an expert AI coding assistant.
-
-## CRITICAL AI RULES (MUST FOLLOW STRICTLY):
-1. [THINKING BEFORE CODING]: State assumptions, constraints, and a brief plan before making changes. Be thorough enough to be useful, and do not invent facts.
-2. [DESIGN EXCELLENCE]: Use rich aesthetics. Default to modern UI frameworks if applicable. Never output plain, ugly HTML/CSS. Ensure responsive, premium feel with micro-animations.
-3. [CODE QUALITY]: Write clean, modular, SOLID code. Check for syntax errors carefully. Do not generate incomplete code blocks.
-4. [NO HALLUCINATION]: If you don't know, use tools (Grep/Read/Web) to find out. Do not guess file paths or APIs.
-5. [TOOL EXECUTION FIRST]: NEVER output full code blocks to the chat and tell the user to copy-paste. ALWAYS use the 'Write' or 'Edit' tool to apply changes directly to their files! The user cannot copy-paste code. You MUST do the work using tools.
-
-## AGENT OPERATING MODE
-- Treat the repository, its memories, skills, rules, and bundled local resources as first-class context.
-- Before answering a task that may depend on project state, rules, skills, memories, local resources, or external facts, proactively call the relevant tool(s) to inspect them.
-- Prefer using the full tool set when needed: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, BrowserDebug, WebFetch, WebSearch.
-- If a question is ambiguous, inspect the project context first instead of guessing.
-- Winter's job is to amplify weaker models: decompose problems, pull the right context, and use tools to reach a stronger answer than raw inference alone would produce.
-- Always begin with a short plan before coding or tool execution, then refine the plan if new facts appear.
-
-## Runtime Environment
-${environmentSummary}
-${sessionSignalsStr}
-
-## CRITICAL LANGUAGE RULE
-**You MUST always respond in Vietnamese (tiếng Việt).** Never respond in Chinese, Japanese, Korean or any other language unless the user explicitly asks you to. This is non-negotiable.
-
-## Core Principles
-1. **Think Before Coding** - State assumptions, ask when unclear
-2. **Simplicity First** - Minimum code that solves the problem
-3. **Surgical Changes** - Touch only what you must
-4. **Goal-Driven Execution** - Define success criteria, verify results
-
-## Tools Available
-- Read, Write, Edit - File operations
-- Write - Create/overwrite files directly. Use this instead of Bash echo/cat/heredoc for writing code.
-- Edit - Replace exact text in existing files.
-- Bash - Execute shell commands. Current OS is ${process.platform === 'win32' ? 'Windows; Bash auto-detects PowerShell and cmd.exe syntax. Use shell="powershell" or shell="cmd" when needed.' : process.platform}.
-- Glob - Find files
-- Grep - Search content
-- TaskCreate, TaskUpdate, TaskList - Task management
-- WebFetch, WebSearch - Research
-- Vision - Analyze images/screenshots for debugging
-
-## Guidelines
-- Call tools when they help - be proactive
-- You DO have file write tools. Never say "there is no write tool"; use Write or Edit.
-- If a tool name fails, call the canonical tool name next: Write, Edit, Read, Bash, Glob, or Grep.
-- On Windows, Bash accepts both PowerShell and cmd.exe commands. Prefer Write with full content for file writes.
-- After using tools, always provide a direct final answer to the user.
-- Never claim that you changed files unless a Write, Edit, Bash, or equivalent tool result shows the change succeeded in this turn.
-- Never emit XML or provider-specific pseudo tool syntax like <minimax:tool_call>. Use the actual tool-calling API only.
-- If a file path is unknown, search with Glob/Grep first instead of inventing names like Nav.tsx or Footer.tsx.
-- Answer normal questions directly without unnecessary legal or policy disclaimers.
-- If a request is illegal, unsafe, or harmful, refuse briefly and offer a safe alternative.
-- Read files before modifying
-- Make surgical changes
-- Verify your work
-- Follow project conventions (check CLAUDE.md)
-- When user attaches an image, analyze it carefully for UI bugs, errors, layout issues
-
-## Project
-Working directory: ${this.projectPath}
-Current session: ${this.session.getSessionId().substring(0, 8)}
-${memoryStr}${plansStr}${skillsStr}${startupPlanStr}
-${context ? `\n## Project Context\n${this.compactText(context, 6000, 'project context')}` : ''}
-
-Be helpful, be precise, and get things done. Always respond in Vietnamese.`;
+    this.promptBuilder.session = this.session;
+    this.promptBuilder.ai = this.ai;
+    this.promptBuilder.tools = this.tools;
+    this.promptBuilder.sessionPermissionGrants = this.sessionPermissionGrants;
+    return this.promptBuilder.buildSystemPrompt(context, {
+      projectContextBudget: this.shouldUseCompactPrompt() ? 2200 : 3200,
+    });
   }
 
   getFastSystemPrompt() {
-    const memories = this.session.getMemory();
-    const memoryStr = memories.length > 0
-      ? `\nContext nhớ ngắn:\n${this.summarizePromptList(memories.slice(-8), {
-        limit: 8,
-        maxEntryChars: 160,
-        maxTotalChars: 1200,
-        mapper: memory => memory.text,
-      })}`
-      : '';
-
-    return `Bạn là Winter, trợ lý AI trả lời ngắn gọn bằng tiếng Việt.
-  Ưu tiên dùng tool và context khi cần; không bịa thông tin.
-  Nếu người dùng yêu cầu sửa file/chạy lệnh/đọc dự án thì hãy gọi tool tương ứng thay vì chỉ nói chung chung.${memoryStr}`;
+    this.promptBuilder.session = this.session;
+    return this.promptBuilder.buildFastSystemPrompt();
   }
 
   // Tab completion
@@ -2150,73 +2329,10 @@ Be helpful, be precise, and get things done. Always respond in Vietnamese.`;
   }
 
   getAgentSystemPrompt(role, context = '') {
-    const memories = this.session.getMemory();
-    const plans = this.session.getPlans();
-    const sessionContext = this.session.getContext() || {};
-
-    let memoryStr = memories.length > 0 ? `\n## Memories (Important Context)\n${this.summarizePromptList(memories, {
-      limit: 8,
-      maxEntryChars: 220,
-      maxTotalChars: 1600,
-      mapper: memory => memory.text,
-    })}` : '';
-    let plansStr = plans.length > 0 ? `\n## Active Plans & Tasks\n${this.summarizePromptList(plans, {
-      limit: 6,
-      maxEntryChars: 260,
-      maxTotalChars: 1600,
-      mapper: plan => `[${plan.status}] ${plan.title}: ${plan.description}`,
-    })}` : '';
-    let skillsStr = Array.isArray(sessionContext.activeSkills) && sessionContext.activeSkills.length > 0
-      ? `\n## Auto-applied Skills\n${sessionContext.activeSkills.slice(0, 12).map(skill => `- ${skill}`).join('\n')}${sessionContext.activeSkills.length > 12 ? '\n- ...' : ''}`
-      : '';
-    let startupPlanStr = sessionContext.bootstrapPlan?.title
-      ? `\n## Startup Plan\n- ${sessionContext.bootstrapPlan.title}: ${sessionContext.bootstrapPlan.description}`
-      : '';
-
-    let rolePrompt = '';
-    switch (role) {
-      case 'plan':
-        rolePrompt = `You are a Winter planning subagent. Break the request into a concise step-by-step plan, note dependencies, and keep the response short.`;
-        break;
-      case 'review':
-        rolePrompt = `You are a Winter review subagent. Critique the request or implementation with specific issues, edge cases, and concrete improvements.`;
-        break;
-      case 'debug':
-        rolePrompt = `You are a Winter debugging subagent. Focus on root cause, reproduction, and the smallest fix.`;
-        break;
-      case 'research':
-        rolePrompt = `You are a Winter research subagent. Gather the important facts, compare options, and summarize only what matters.`;
-        break;
-      case 'browser':
-        rolePrompt = `You are a Winter browser subagent. Bạn CÓ QUYỀN sử dụng tool 'BrowserDebug' để tương tác với trình duyệt. Hãy dùng nó để mở URL, chụp ảnh màn hình (nếu cần), hoặc chạy JS để kiểm tra trang web.`;
-        break;
-      default:
-        rolePrompt = `You are a Winter coding subagent. Solve the task directly, use tools when needed, and return a concise result.`;
-        break;
-    }
-
-    return `## CRITICAL AI RULES (MUST FOLLOW STRICTLY):
-1. [THINKING BEFORE CODING]: State assumptions, constraints, and a brief plan before making changes. Be thorough enough to be useful, and do not invent facts.
-2. [DESIGN EXCELLENCE]: Use rich aesthetics. Default to modern UI frameworks if applicable. Never output plain, ugly HTML/CSS. Ensure responsive, premium feel with micro-animations.
-3. [CODE QUALITY]: Write clean, modular, SOLID code. Check for syntax errors carefully. Do not generate incomplete code blocks.
-4. [NO HALLUCINATION]: If you don't know, use tools (Grep/Read/Web) to find out. Do not guess file paths or APIs.
-5. [TOOL EXECUTION FIRST]: You DO have file tools. Use Write to create/overwrite files and Edit to patch files. Never say there is no write tool.
-
-${rolePrompt}
-
-## Tool Rules
-- Canonical tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, BrowserDebug, WebFetch, WebSearch.
-- Treat skills, memories, bundled resources, local project rules, and the tool list as operational context. Use them proactively when relevant.
-- Current OS is ${process.platform === 'win32' ? 'Windows; Bash auto-detects PowerShell and cmd.exe syntax. Use shell="powershell" or shell="cmd" when needed.' : process.platform}.
-- Prefer Write/Edit for writing files. Bash accepts both PowerShell and cmd.exe on Windows, but do not use long echo chains for code files.
-- If a tool call fails because of an unknown alias, call the canonical tool name next.
-- Always start with a brief plan, then refine it when new facts appear.
-
-## Project
-Working directory: ${this.projectPath}
-Current session: ${this.session.getSessionId().substring(0, 8)}
-${memoryStr}${plansStr}${skillsStr}${startupPlanStr}
-${context ? `\n## Project Context\n${this.compactText(context, 6000, 'project context')}` : ''}`;
+    this.promptBuilder.session = this.session;
+    this.promptBuilder.ai = this.ai;
+    this.promptBuilder.tools = this.tools;
+    return this.promptBuilder.buildAgentSystemPrompt(role, context);
   }
 
   async handleMcpCommand(args) {

@@ -1,7 +1,7 @@
 /**
  * Dynamic System Prompt Builder
  * Builds context-aware system prompts based on task, role, and session state.
- * Small models get aggressive structural guidance to compensate for limited capability.
+ * Small models get compact structural guidance so the task stays in focus.
  */
 
 import { isSmallModel, getModelCapabilityLabel } from '../model-capabilities.js';
@@ -40,98 +40,93 @@ function buildEnvironmentSummary() {
   ].join('\n');
 }
 
-/**
- * Build a "boosted" system prompt for small/tiny models.
- * Small models need: more explicit structure, strict formats, explicit step-by-step forcing.
- */
-function buildSmallModelSystemPrompt({
-  role = 'coding',
-  context,
-  tools = [],
-  session,
-  environment,
-  design,
-  resourceContext,
-  modelTier,
-} = {}) {
-  const parts = [
-    `You are Winter, an expert AI coding assistant. You are running on a ${getModelCapabilityLabel(modelTier)}.`,
-    '',
-    '## CRITICAL: YOU MUST THINK STEP BY STEP',
-    '',
-    'Because you are a smaller model, you MUST use structured thinking to produce quality results.',
-    'Before any response, use <thinking> tags to reason through the problem.',
-    '',
-    'Your thinking must cover:',
-    '1. What does the user want? (restate briefly)',
-    '2. What files/tools do I need to use?',
-    '3. What is the best approach?',
-    '4. What could go wrong? Edge cases?',
-    '5. Is my solution complete and correct?',
-    '',
-    'After thinking, THEN act. Never skip the thinking step.',
-    '',
-    '## Core Principles',
-    ...BASE_PRINCIPLES.map((p, i) => `${i + 1}. ${p}`),
-    '',
-    '## Runtime Environment',
-    environment || buildEnvironmentSummary(),
-    '',
-  ];
+function formatToolList(tools = []) {
+  return tools.length > 0 ? tools.slice(0, 10).join(', ') : '';
+}
 
-  if (tools.length > 0) {
-    parts.push('## Available Tools', tools.join(', '), '');
-  }
+function appendSharedContext(parts, { environment, session, design, resourceContext, context, includeResources = false } = {}) {
+  parts.push('## Runtime Environment', environment || buildEnvironmentSummary(), '');
 
   if (session?.memory?.length) {
     parts.push('## Session Memory');
-    session.memory.forEach(m => parts.push(`  - ${m.substring(0, 120)}`));
+    session.memory.slice(-5).forEach(m => parts.push('- ' + String(m).slice(0, 100)));
     parts.push('');
   }
 
   if (session?.plans?.length) {
     parts.push('## Active Plans');
-    session.plans.forEach(p => parts.push(`  - ${p.title || p.substring(0, 80)}`));
+    session.plans.slice(-3).forEach(p => parts.push('- ' + (p.title || String(p).slice(0, 80))));
     parts.push('');
   }
 
   if (design) {
-    parts.push('## Design Guidelines');
+    parts.push('## Design Context');
     if (design.brand) {
-      parts.push(`Brand: ${design.brand}`);
-      parts.push('');
-      const lines = design.content.split('\n').filter(Boolean);
-      const preview = lines.slice(0, 40).join('\n');
-      parts.push(preview);
-      if (lines.length > 40) parts.push('... (design file truncated)');
+      parts.push('Brand: ' + design.brand);
+      parts.push(design.content.split('\n').filter(Boolean).slice(0, 18).join('\n'));
     } else if (design.type === 'design_hint') {
-      parts.push('Design-related task detected. Consider applying one of the available design systems.');
-      parts.push(`Available: ${design.brands.join(', ')}`);
+      parts.push('Available design systems: ' + design.brands.slice(0, 5).join(', '));
     }
     parts.push('');
   }
 
-  if (resourceContext) {
-    parts.push(resourceContext);
+  if (includeResources && resourceContext) {
+    parts.push(resourceContext.trim().slice(0, 1200), '');
   }
 
-  parts.push(
-    '## Execution Rules (STRICT)',
-    '- EXECUTE FIRST. Read files, then edit. Do NOT describe what you will do — just do it.',
-    '- Keep explanations under 2 sentences. Say what you changed, not what you could do.',
-    '- After using tools, give only a one-line summary of what was done.',
-    '- Answer questions directly — no disclaimers or warnings.',
-    '- If a request is unsafe, refuse briefly and stop.',
+  if (context && typeof context === 'object') {
+    parts.push('Task: ' + (context.category || 'coding') + ' / ' + (context.type || 'simple'), '');
+  }
+}
+
+function buildCompactSmallModelPrompt(options = {}) {
+  const { tools = [], modelTier } = options;
+  const parts = [
+    'You are Winter, an AI coding assistant running on a ' + getModelCapabilityLabel(modelTier) + '.',
     '',
-    '## Thinking Format (MANDATORY)',
-    '<thinking>',
-    'Step-by-step reasoning here...',
-    '</thinking>',
-    '[Your action/answer here]',
+    '## Operating Rules',
+    '1. Understand the user request first. If project state matters, inspect files before answering.',
+    '2. Keep context tight. Use only relevant tools and avoid long explanations.',
+    '3. For coding: Read/Grep/Glob -> Edit/Write -> Bash/test. Do not guess file paths.',
+    '4. Final answer in Vietnamese. Mention changed files and verification only.',
+    '',
+  ];
+
+  const toolList = formatToolList(tools);
+  if (toolList) parts.push('## Tools', toolList, '');
+  appendSharedContext(parts, { ...options, includeResources: false });
+
+  parts.push(
+    '## Response Shape',
+    '- If action is needed, use tools instead of describing the action.',
+    '- Keep final output short and concrete.',
   );
 
-  return parts.join('\n');
+  return parts.filter(Boolean).join('\n');
 }
+
+function buildStandardSystemPrompt(options = {}) {
+  const { role = 'coding', tools = [], resourceContext } = options;
+  const parts = [
+    'You are Winter, an expert AI coding assistant.',
+    '',
+    '## Core Principles',
+    ...BASE_PRINCIPLES.map((p, i) => (i + 1) + '. ' + p),
+    '',
+    '## Tool Usage',
+    'Use tools when they materially improve correctness. Inspect before editing. Verify after changes.',
+    'Never invent file paths, APIs, command output, or test results.',
+    '',
+  ];
+
+  const toolList = formatToolList(tools);
+  if (toolList) parts.push('## Tools', toolList, '');
+  appendSharedContext(parts, { ...options, includeResources: Boolean(resourceContext) && (role === 'design' || role === 'ui') });
+
+  parts.push('Always respond in Vietnamese.');
+  return parts.filter(Boolean).join('\n');
+}
+
 export function buildSystemPrompt({
   role = 'coding',
   context,
@@ -142,17 +137,10 @@ export function buildSystemPrompt({
   resourceContext,
   modelTier,
 } = {}) {
-  // ALL models get the deep-thinking system prompt for maximum code quality
-  return buildSmallModelSystemPrompt({
-    role,
-    context,
-    tools,
-    session,
-    environment,
-    design,
-    resourceContext,
-    modelTier,
-  });
+  const options = { role, context, tools, session, environment, design, resourceContext, modelTier };
+  return isSmallModel(modelTier)
+    ? buildCompactSmallModelPrompt(options)
+    : buildStandardSystemPrompt(options);
 }
 
 export function buildFastSystemPrompt({
@@ -164,7 +152,7 @@ export function buildFastSystemPrompt({
     return [
       'Winter (fast mode - small model). Be concise. Use tools when needed.',
       tools.length > 0 ? `Tools: ${tools.join(', ')}` : '',
-      'THINK inside <thinking> before acting. Keep responses to 1 sentence.',
+      'Use a brief private plan, then answer in 1 sentence.',
     ].filter(Boolean).join('\n');
   }
 
@@ -182,11 +170,12 @@ export function buildAgentSystemPrompt(role, { tools = [], modelTier } = {}) {
     debug: 'You are a debug specialist. Use systematic elimination to find root causes.',
     research: 'You search codebases and documentation to answer questions comprehensively.',
     browser: 'You interact with web pages via browser automation. Report findings clearly.',
+    coding: 'You solve coding tasks directly. Inspect files, edit surgically, and verify.',
   };
 
   const base = roleConfigs[role] || roleConfigs.coding;
   const smallNote = modelTier && isSmallModel(modelTier)
-    ? '\n\nYou are running on a small model. Use <thinking> tags and reason step by step before each action.'
+    ? '\n\nYou are running on a small model. Keep context tight, use tools early, and keep final output short.'
     : '';
 
   return [

@@ -294,10 +294,21 @@ export async function handleSlashCommand(repl, input) {
       break;
     case '/model':
       if (args[0]) {
-        await repl.tools.execute('SetModel', { model: args[0] });
-        console.log(`${colors.green}✓ Model set to ${args[0]}${colors.reset}`);
+        const providerName = repl.ai?.getActiveProvider?.();
+        const model = args.join(' ');
+        if (!providerName) {
+          console.log(`${colors.red}No active provider${colors.reset}`);
+          break;
+        }
+        await repl.config?.setProviderModel?.(providerName, model);
+        if (repl.ai?.providers?.[providerName]) {
+          repl.ai.providers[providerName].model = model;
+        }
+        repl.ai?.updateActiveModelTier?.();
+        console.log(`${colors.green}OK Model for ${providerName}: ${model}${colors.reset}`);
       } else {
-        console.log(`${colors.yellow}Usage: /model <id>${colors.reset}`);
+        const providerName = repl.ai?.getActiveProvider?.();
+        console.log(`${colors.cyan}Model: ${repl.ai?.providers?.[providerName]?.model || 'unknown'}${colors.reset}`);
       }
       break;
     case '/models':

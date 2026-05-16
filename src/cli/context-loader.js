@@ -14,7 +14,7 @@ export class ContextLoader {
   }
 
   getProjectInstructionFiles() {
-    return ['winter.md', 'WINTER.md', 'CLAUDE.md', '.claude/CLAUDE.md'];
+    return ['winter.md', 'WINTER.md', 'CLAUDE.md', '.claude/CLAUDE.md', 'design.md', 'skill.md', 'rule.md'];
   }
 
   async readProjectInstructionFiles() {
@@ -66,6 +66,17 @@ export class ContextLoader {
       manifest: path.join(localRoot, 'manifest.json'),
       localRoot,
     };
+  }
+
+  async readTextIfExists(filePath, maxChars = 2000) {
+    try {
+      const stat = await fs.stat(filePath).catch(() => null);
+      if (!stat || !stat.isFile()) return '';
+      const content = await fs.readFile(filePath, 'utf8');
+      return this.compactText(content.replace(/^\uFEFF/, ''), maxChars, filePath);
+    } catch {
+      return '';
+    }
   }
 
   getUserResourcePaths() {
@@ -178,6 +189,58 @@ export class ContextLoader {
     } catch {
       return '';
     }
+  }
+
+  async getRequiredLocalResourceSummary() {
+    const paths = this.getResourcePaths();
+    const karpathyPath = path.join(paths.karpathy, 'CLAUDE.md');
+    const agentsPath = path.join(paths.agents, 'AGENTS.md');
+    const designReadmePath = path.join(paths.localRoot, 'awesome-design-md', 'README.md');
+
+    const [karpathy, agents, designReadme, designBrands] = await Promise.all([
+      this.readTextIfExists(karpathyPath, 2200),
+      this.readTextIfExists(agentsPath, 1800),
+      this.readTextIfExists(designReadmePath, 1600),
+      this.listPathEntries(paths.designs, 40),
+    ]);
+
+    const hasRequired = Boolean(karpathy || agents || designReadme || designBrands.length > 0);
+    if (!hasRequired) return '';
+
+    const lines = [];
+    lines.push('[Required Local Resource Rules]');
+    lines.push('- These rules are mandatory for every project session and every model size. Do not route quality down for smaller models.');
+    lines.push(`- Karpathy tools: ${path.relative(this.projectPath, karpathyPath)}`);
+    lines.push('  Apply: think before coding, state assumptions when needed, keep solutions simple, make surgical changes, and verify against concrete success criteria.');
+    lines.push(`- Agent rules: ${path.relative(this.projectPath, agentsPath)}`);
+    lines.push('  Apply: inspect source before edits, keep dependency and lockfile changes synced, prefer TypeScript for new TS/Next utilities, and use the appropriate dev/test command for the task.');
+    lines.push(`- Design system corpus: ${path.relative(this.projectPath, designReadmePath)} and ${path.relative(this.projectPath, paths.designs)}`);
+    lines.push('  Apply: for UI/brand/design tasks, search the design-md corpus first and follow the closest existing brand/design guidance instead of inventing style from scratch.');
+    lines.push('- Use Read/Grep/Glob to inspect the full resource files whenever task details require more than this startup summary.');
+
+    const brandNames = designBrands
+      .filter(item => item.isDirectory)
+      .map(item => item.name)
+      .slice(0, 16);
+    if (brandNames.length > 0) {
+      lines.push(`- Available design-md examples include: ${brandNames.join(', ')}${designBrands.length > brandNames.length ? ', ...' : ''}`);
+    }
+
+    const evidence = [];
+    if (/Think Before Coding|Simplicity First|Surgical Changes|Goal-Driven Execution/i.test(karpathy)) {
+      evidence.push('karpathy-tools confirms Think Before Coding, Simplicity First, Surgical Changes, and Goal-Driven Execution.');
+    }
+    if (/development server|dependencies|lockfile|TypeScript/i.test(agents)) {
+      evidence.push('agents.md confirms workflow, dependency, lockfile, and TypeScript guidance.');
+    }
+    if (/design|brand|guideline/i.test(designReadme)) {
+      evidence.push('awesome-design-md provides brand/design guidance to consult on UI work.');
+    }
+    if (evidence.length > 0) {
+      lines.push(`- Startup evidence: ${evidence.join(' ')}`);
+    }
+
+    return lines.join('\n');
   }
 
   async getProjectSignals() {

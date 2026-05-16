@@ -17,7 +17,7 @@ const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url),
 const version = pkg.version;
 
 const COMMANDS = new Set([
-  'chat', 'call', 'session', 'skill', 'plugin', 'design', 'config', 'init',
+  'chat', 'call', 'benchmark', 'session', 'skill', 'plugin', 'design', 'config', 'init',
   'help', 'project', 'code', 'review', 'mcp', 'permissions',
   'provider', 'providers', 'model', 'models',
 ]);
@@ -53,6 +53,7 @@ Usage:
 Commands:
 
   winter call <prompt>        Call all configured providers
+  winter benchmark [providers] Benchmark model intelligence
   winter session <action>     Session management
   winter skill <action>       Skill management
   winter plugin <action>      Plugin management
