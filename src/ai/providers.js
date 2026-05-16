@@ -9,6 +9,8 @@ import { buildSystemPrompt, buildFastSystemPrompt, buildAgentSystemPrompt } from
 import { classifyTask } from './prompts/task-classifier.js';
 import SuccessCriteria from './prompts/success-criteria.js';
 import { ReasoningConfig, REASONING_LEVELS, complexityToReasoningLevel } from './reasoning.js';
+import { buildResourceContext, getRelevantDesignGuide } from '../context/resource-loader.js';
+import { classifyModelTier } from './model-capabilities.js';
 
 function isAuthError(error) {
   const msg = String(error?.message || error || '');
@@ -24,6 +26,10 @@ export class AIProviderManager {
     this.tools = [];
     this.initialized = false;
     this.authToken = null;
+    this._cachedResourceContext = '';
+    this._cachedDesignGuide = null;
+    this._fallbackWarned = false;
+    this._modelTier = null;
   }
 
   async init() {
@@ -96,6 +102,13 @@ export class AIProviderManager {
       const available = Object.keys(this.providers).find(k => this.providers[k].ready);
       if (available) this.activeProvider = available;
     }
+
+    // Auto-detect model capability tier
+    const providerConfig = this.providers[this.activeProvider] || {};
+    this._modelTier = classifyModelTier(providerConfig.model, this.activeProvider);
+
+    // Eager-load local resources (design systems, agent instructions) for contextual injection
+    this._loadResourceContext(); // fire-and-forget
 
     this.initialized = true;
   }
@@ -242,7 +255,10 @@ export class AIProviderManager {
       }), { maxAttempts: 3, baseDelayMs: 150 });
     } catch (error) {
       if (isAuthError(error) && routedProvider !== defaultProvider && defaultProvider) {
-        console.warn(`[winter] ${executionProfile.provider} provider auth error, falling back to ${this.activeProvider}`);
+        if (!this._fallbackWarned) {
+          console.warn(`[winter] ${executionProfile.provider} auth error, falling back to ${this.activeProvider}`);
+          this._fallbackWarned = true;
+        }
         return await withRetry(() => this.sendRequestToProvider(defaultProvider, messages, {
           ...options,
           model: options.model || defaultProvider.model,
@@ -277,7 +293,10 @@ export class AIProviderManager {
       });
     } catch (error) {
       if (isAuthError(error) && routedProvider !== defaultProvider && defaultProvider) {
-        console.warn(`[winter] ${executionProfile.provider} provider auth error, falling back to ${this.activeProvider}`);
+        if (!this._fallbackWarned) {
+          console.warn(`[winter] ${executionProfile.provider} auth error, falling back to ${this.activeProvider}`);
+          this._fallbackWarned = true;
+        }
         yield* this.streamRequestToProvider(defaultProvider, messages, {
           ...options,
           model: options.model || defaultProvider.model,
@@ -587,6 +606,7 @@ export class AIProviderManager {
       reasoningPrompt = options.reasoningPrompt || new ReasoningConfig({
         level: options.reasoningLevel || REASONING_LEVELS.MEDIUM,
         provider: this.activeProvider,
+        modelTier: this._modelTier,
       }).getPromptInstructions();
     } else if (taskInfo) {
       // Auto-inject based on task complexity for providers without API reasoning
@@ -594,6 +614,7 @@ export class AIProviderManager {
       const config = new ReasoningConfig({
         level,
         provider: this.activeProvider,
+        modelTier: this._modelTier,
       });
       if (config.needsPromptInjection && level !== REASONING_LEVELS.NONE) {
         reasoningPrompt = config.getPromptInstructions();
@@ -601,23 +622,63 @@ export class AIProviderManager {
     }
 
     if (options.role === 'agent') {
-      return buildAgentSystemPrompt(options.agentRole || 'coding', { tools }) + reasoningPrompt;
+      return buildAgentSystemPrompt(options.agentRole || 'coding', { tools, modelTier: this._modelTier }) + reasoningPrompt;
     }
 
     if (options.fast) {
-      return buildFastSystemPrompt({ role: 'coding', tools });
+      return buildFastSystemPrompt({ role: 'coding', tools, modelTier: this._modelTier });
     }
 
     const successPrompt = options.task
       ? '\n\n' + SuccessCriteria.fromRequest(options.task).buildPrompt()
       : '';
 
+    // Use cached resource context (eager-loaded in init())
+    const resourceContext = this._cachedResourceContext || '';
+
+    // Auto-detect relevant design guide for UI/design tasks
+    let designGuide = null;
+    if (taskInfo && (taskInfo.category === 'design' || taskInfo.category === 'ui')) {
+      this._designGuidePromise = this._designGuidePromise || this._loadDesignGuide(options.task);
+    }
+    const design = this._cachedDesignGuide || null;
+
     return buildSystemPrompt({
       role: taskInfo?.category || 'coding',
       context: taskInfo,
       tools,
       session: sessionInfo,
+      design,
+      resourceContext,
+      modelTier: this._modelTier,
     }) + reasoningPrompt + successPrompt;
+  }
+
+  /**
+   * Load resource context (cached for session lifetime).
+   */
+  async _loadResourceContext() {
+    try {
+      this._cachedResourceContext = await buildResourceContext();
+    } catch (e) {
+      this._cachedResourceContext = '';
+    }
+    return this._cachedResourceContext;
+  }
+
+  /**
+   * Load relevant design guide for a task.
+   */
+  async _loadDesignGuide(task) {
+    try {
+      const guide = await getRelevantDesignGuide(task);
+      if (guide) {
+        this._cachedDesignGuide = guide;
+      }
+    } catch (e) {
+      // Silently fail - design context is optional
+    }
+    return this._cachedDesignGuide;
   }
 
   classifyTask(userInput) {

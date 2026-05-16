@@ -1,5 +1,6 @@
 import path from 'path';
 import { colors } from './snowflake-logo.js';
+import { SLASH_COMMANDS } from './slash-commands.js';
 
 /**
  * Handle slash commands in the Winter REPL.

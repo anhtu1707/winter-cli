@@ -12,57 +12,80 @@ function flattenMessageText(messages) {
 }
 
 import { ReasoningConfig, REASONING_LEVELS } from '../ai/reasoning.js';
+import { classifyModelTier, isSmallModel, getReasoningBump, MODEL_TIERS } from '../ai/model-capabilities.js';
 
-export function selectExecutionProfile({ messages = [], activeProvider = null, providers = {}, options = {} } = {}) {
-  const text = flattenMessageText(messages);
-  const providerNames = Object.keys(providers).filter(name => providers[name]?.ready || providers[name]?.model);
-  const hasProvider = name => providerNames.includes(name);
-
-  const explicitProvider = options.provider && hasProvider(options.provider) ? options.provider : null;
-  let provider = explicitProvider || (activeProvider && hasProvider(activeProvider) ? activeProvider : providerNames[0] || null);
-
-  if (explicitProvider) {
-    provider = explicitProvider;
-  } else if (/\b(review|refactor|debug|fix|bug|error|stack trace|test|tool|patch|code)\b/.test(text) && hasProvider('claude')) {
-    provider = 'claude';
-  } else if (/\b(summary|summarize|commit message|changelog|docs|explain|rewrite)\b/.test(text) && hasProvider('openai')) {
-    provider = 'openai';
-  } else if (/\b(local|offline|privacy|private|on-device)\b/.test(text) && hasProvider('ollama')) {
-    provider = 'ollama';
-  } else if (/\b(quick|brief|short|fast)\b/.test(text) && hasProvider('groq')) {
-    provider = 'groq';
-  }
-
-  const model = options.model || providers[provider]?.model || providers[activeProvider]?.model || null;
-
-  // Determine reasoning level based on task complexity signals
-  let reasoningLevel = options.reasoningLevel || REASONING_LEVELS.MEDIUM;
-  if (!options.reasoningLevel) {
-    // Default: use heuristic from text signals
-    const hasDeepSignals = /\b(refactor|architecture|redesign|migrate|complex|full stack|e2e|end to end|security|optimize|performance)\b/.test(text);
-    const hasComplexSignals = /\b(debug|fix|test|multiple|integrate|implement|design|plan)\b/.test(text);
-
-    if (hasDeepSignals && text.length > 100) {
-      reasoningLevel = REASONING_LEVELS.MAX;
-    } else if (hasComplexSignals && text.length > 60) {
-      reasoningLevel = REASONING_LEVELS.HIGH;
-    } else if (text.split(/\s+/).length > 30) {
-      reasoningLevel = REASONING_LEVELS.MEDIUM;
-    } else if (text.split(/\s+/).length < 5) {
-      reasoningLevel = REASONING_LEVELS.LOW;
-    } else {
-      reasoningLevel = REASONING_LEVELS.LOW;
-    }
-  }
+/**
+ * Bump reasoning level by N steps.
+ */
+function bumpReasoningLevel(level, steps) {
+  const order = [REASONING_LEVELS.NONE, REASONING_LEVELS.LOW, REASONING_LEVELS.MEDIUM, REASONING_LEVELS.HIGH, REASONING_LEVELS.MAX];
+  const idx = order.indexOf(level);
+  if (idx === -1) return level;
+  const newIdx = Math.min(idx + steps, order.length - 1);
+  return order[newIdx];
+}	export function selectExecutionProfile({ messages = [], activeProvider = null, providers = {}, options = {} } = {}) {
+	  const text = flattenMessageText(messages);
+	  const providerNames = Object.keys(providers).filter(name => providers[name]?.ready || providers[name]?.model);
+	  const hasProvider = name => providerNames.includes(name);
+	
+	  const explicitProvider = options.provider && hasProvider(options.provider) ? options.provider : null;
+	  let provider = explicitProvider || (activeProvider && hasProvider(activeProvider) ? activeProvider : providerNames[0] || null);
+	
+	  if (explicitProvider) {
+	    provider = explicitProvider;
+	  } else if (/\b(review|refactor|debug|fix|bug|error|stack trace|test|tool|patch|code)\b/.test(text) && hasProvider('claude')) {
+	    provider = 'claude';
+	  } else if (/\b(summary|summarize|commit message|changelog|docs|explain|rewrite)\b/.test(text) && hasProvider('openai')) {
+	    provider = 'openai';
+	  } else if (/\b(local|offline|privacy|private|on-device)\b/.test(text) && hasProvider('ollama')) {
+	    provider = 'ollama';
+	  } else if (/\b(quick|brief|short|fast)\b/.test(text) && hasProvider('groq')) {
+	    provider = 'groq';
+	  }
+	
+	  const providerConfig = providers[provider] || providers[activeProvider] || {};
+	  const model = options.model || providerConfig.model || providers[activeProvider]?.model || null;
+	
+	  // Detect model capability tier
+	  const modelTier = classifyModelTier(model, provider);
+	  const isSmall = isSmallModel(modelTier);
+	  const reasoningBump = getReasoningBump(modelTier);
+	
+	  // Determine reasoning level based on task complexity signals
+	  // Default: HIGH for coding — all models must think deeply
+	  let reasoningLevel = options.reasoningLevel || REASONING_LEVELS.HIGH;
+	  if (!options.reasoningLevel) {
+	    const hasDeepSignals = /\b(refactor|architecture|redesign|migrate|complex|full stack|e2e|end to end|security|optimize|performance|implement|build|create)\b/.test(text);
+	    const hasComplexSignals = /\b(debug|fix|test|multiple|integrate|design|plan|review|analyze)\b/.test(text);
+	
+	    if (hasDeepSignals && text.length > 30) {
+	      reasoningLevel = REASONING_LEVELS.MAX;
+	    } else if (hasComplexSignals && text.length > 20) {
+	      reasoningLevel = REASONING_LEVELS.MAX;
+	    } else if (text.split(/\s+/).length > 10) {
+	      reasoningLevel = REASONING_LEVELS.HIGH;
+	    } else if (text.split(/\s+/).length < 3) {
+	      reasoningLevel = REASONING_LEVELS.MEDIUM;
+	    } else {
+	      reasoningLevel = REASONING_LEVELS.HIGH;
+	    }
+	
+	    // If small model, bump reasoning level even more to compensate
+	    if (isSmall && reasoningBump > 0) {
+	      reasoningLevel = bumpReasoningLevel(reasoningLevel, reasoningBump);
+	    }
+	  }
 
   const reasoning = new ReasoningConfig({
     level: reasoningLevel,
     provider: provider || activeProvider,
+    modelTier,
   });
 
   return {
     provider,
     model,
+    modelTier,
     reasoningLevel,
     reasoningParam: reasoning.getApiReasoningParam(),
     reasoningPrompt: reasoning.getPromptInstructions(),

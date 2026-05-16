@@ -24,6 +24,8 @@ export const TASK_CATEGORIES = {
   TEST: 'test',
   CONFIG: 'config',
   INSTALL: 'install',
+  DESIGN: 'design',
+  UI: 'ui',
 };
 
 const TYPE_KEYWORDS = {
@@ -39,6 +41,8 @@ const TYPE_KEYWORDS = {
   test: ['test', 'unit test', 'integration test', 'assert', 'spec'],
   config: ['config', 'setup', 'install', 'configure', 'initialize'],
   install: ['install', 'npm install', 'pip install', 'gem install', 'cargo install', 'brew install'],
+  design: ['design', 'ui', 'brand', 'style guide', 'make it look', 'pixel perfect', 'layout', 'color scheme', 'palette', 'typography', 'theme'],
+  ui: ['ui', 'interface', 'component', 'button', 'card', 'modal', 'form', 'navbar', 'sidebar', 'header', 'footer', 'dashboard', 'landing page'],
 };
 
 const COMPLEXITY_SIGNALS = {
@@ -108,7 +112,7 @@ export function classifyTask(userInput) {
     wordCount,
     estimatedTokens,
     requiresTools: bestCategory !== TASK_CATEGORIES.EXPLAIN,
-    requiresContext: ['edit', 'refactor', 'debug', 'review', 'test'].includes(bestCategory),
+    requiresContext: ['edit', 'refactor', 'debug', 'review', 'test', 'design', 'ui'].includes(bestCategory),
   };
 }
 

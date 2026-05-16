@@ -241,6 +241,7 @@ export class WinterREPL {
     // Show banner only if not already shown
     if (!process.env.WINTER_BANNER_SHOWN) {
       console.log(welcomeBanner(this.version, info));
+      this.showCommandMenu();
       process.env.WINTER_BANNER_SHOWN = '1';
     } else {
       this.showStatus();
@@ -315,6 +316,7 @@ export class WinterREPL {
     console.log(`${colors.dim}Project: ${this.projectPath}${colors.reset}`);
     console.log(`${colors.dim}Provider: ${this.ai.getActiveProvider()}${colors.reset}`);
     console.log(`${colors.dim}Session: ${this.session.getSessionId().substring(0, 8)}${colors.reset}`);
+    console.log(`${colors.dim}Type ${colors.cyan}/help${colors.dim} for commands or ${colors.cyan}/${colors.dim} for menu${colors.reset}`);
     console.log('');
   }
 
@@ -1042,7 +1044,7 @@ ${colors.reset}
         const currentToolSignature = this.buildToolCallSignature(toolCalls);
         if (currentToolSignature && currentToolSignature === lastToolSignature) {
           console.log(`
-${colors.yellow}ℹ AI đang lặp lại cùng một chuỗi tool call. Dừng vòng lặp để tránh spam.${colors.reset}`);
+${colors.yellow}ℹ AI tool loop detected. Breaking out.${colors.reset}`);
           reachedToolLimit = false;
           break;
         }
