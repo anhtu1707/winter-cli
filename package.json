@@ -1,6 +1,6 @@
 {
   "name": "winter-super-cli",
-  "version": "2026.5.27",
+  "version": "2026.5.28",
   "description": "❄️ AI-Powered Development CLI with Interactive REPL",
   "type": "module",
   "main": "bin/winter.js",
