@@ -20,6 +20,7 @@ import { AgentTool } from './agent.js';
 import { InsertTextTool } from './insert-text.js';
 import { StrReplaceAllTool } from './str-replace-all.js';
 import { WebArchiveTool } from './web-archive.js';
+import { formatRuntimeEnvironmentSummary, getRuntimeEnvironment } from '../cli/runtime-env.js';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -44,28 +45,7 @@ export class ToolExecutor {
   }
 
   getRuntimeEnvironmentSummary() {
-    const hostOs = process.platform === 'win32'
-      ? 'Windows'
-      : process.platform === 'darwin'
-        ? 'macOS'
-        : process.platform === 'linux'
-          ? 'Linux'
-          : process.platform;
-
-    const currentShell = process.platform === 'win32'
-      ? (process.env.PSModulePath ? 'powershell-capable' : 'cmd/unknown')
-      : (process.env.SHELL || 'bash/sh');
-
-    const shellGuidance = process.platform === 'win32'
-      ? 'Use shell:"powershell" for PowerShell cmdlets, shell:"cmd" for cmd.exe syntax, and shell:"auto" when unsure.'
-      : 'Use the native POSIX shell on non-Windows hosts and leave shell unspecified unless a specific shell is required.';
-
-    return [
-      `Host OS: ${hostOs}`,
-      `Node platform: ${process.platform}`,
-      `Current shell hint: ${currentShell}`,
-      `Shell rule: ${shellGuidance}`,
-    ].join('\n');
+    return formatRuntimeEnvironmentSummary(getRuntimeEnvironment());
   }
 
   getToolDefinitions() {
@@ -1057,6 +1037,9 @@ export class ToolExecutor {
     }
 
     try {
+      const executedShell = process.platform === 'win32'
+        ? (requestedShell === 'auto' ? this.detectWindowsShell(command) : requestedShell)
+        : (process.env.SHELL || 'native');
       const { stdout, stderr } = process.platform === 'win32'
         ? await this.execWindowsCommand(command, cwd, timeout, requestedShell)
         : await execAsync(command, { cwd, timeout, shell: true, maxBuffer: 10 * 1024 * 1024 });
@@ -1064,7 +1047,8 @@ export class ToolExecutor {
         success: true,
         stdout: stdout || '',
         stderr: stderr || '',
-        exitCode: 0
+        exitCode: 0,
+        shell: executedShell,
       };
     } catch (error) {
       return {

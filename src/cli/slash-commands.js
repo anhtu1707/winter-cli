@@ -14,6 +14,9 @@ export const SLASH_COMMANDS = [
   { cmd: '/tasks', desc: 'List tasks' },
   { cmd: '/task', desc: 'Create task', usage: '/task <description>' },
   { cmd: '/agent', desc: 'Launch subagent', usage: '/agent <task>' },
+  { cmd: '/auto', desc: 'Auto-heal with test/build loop', usage: '/auto [task]' },
+  { cmd: '/debug', desc: 'Auto-debug errors with tool verification', usage: '/debug [error or task]' },
+  { cmd: '/tdd', desc: 'Alias for auto-healing loop', usage: '/tdd [task]' },
   { cmd: '/read', desc: 'Read file', usage: '/read <file>' },
   { cmd: '/write', desc: 'Write file', usage: '/write <file> <content>' },
   { cmd: '/glob', desc: 'Find files', usage: '/glob <pattern>' },
@@ -47,4 +50,3 @@ export const SLASH_COMMANDS = [
   { cmd: '/exit', desc: 'Exit Winter' },
   { cmd: '/quit', desc: 'Exit Winter' },
 ];
-

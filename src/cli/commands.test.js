@@ -234,6 +234,21 @@ test('model command sets active provider model with and without slash', async ()
   assert.equal(ai.providers.ollama.model, 'llama3.1');
 });
 
+test('debug and auto commands route to chat with auto-debug prompt', async () => {
+  const parser = createParser();
+  const calls = [];
+  parser.ai.chat = async message => {
+    calls.push(message);
+    return { content: 'ok' };
+  };
+
+  await parser.parse(['debug', 'npm', 'test', 'fails']);
+  await parser.parse(['/auto', 'fix', 'lint']);
+
+  assert.match(calls[0], /AUTO DEBUG: npm test fails/);
+  assert.match(calls[1], /AUTO DEBUG: fix lint/);
+});
+
 test('mcp and permissions commands update config state', async () => {
   const saved = [];
   const config = {

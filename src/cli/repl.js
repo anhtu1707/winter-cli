@@ -21,6 +21,7 @@ import { formatMarkdown } from './markdown-format.js';
 import { Spinner } from './spinner.js';
 import { ContextLoader } from './context-loader.js';
 import { PromptBuilder } from './prompt-builder.js';
+import { buildProjectDocs, isWinterGeneratedProjectDoc } from './project-docs.js';
 import { classifyModelTier, isSmallModel } from '../ai/model-capabilities.js';
 import {
   addUsage as mergeUsage,
@@ -231,104 +232,30 @@ export class WinterREPL {
     }
 
     // ── Tự động tạo design.md, skill.md, rule.md nếu chưa có ──────────────
-    const autoCreateDocs = [
-      {
-        filename: 'design.md',
-        generate: async () => {
-          const designDir = this.getResourcePaths().designs;
-          let brands = [];
-          try {
-            const entries = await fsPromises.readdir(designDir, { withFileTypes: true });
-            brands = entries.filter(e => e.isDirectory()).map(e => e.name).sort();
-          } catch {}
-          return `# Design Resources
-
-Danh sách các design system có sẵn trong local resources:
-
-## Available Brands (${brands.length})
-
-${brands.length > 0 ? brands.map(b => `- ${b}`).join('\n') : '- Không tìm thấy design system nào.'}
-
----
-*File này được tự động tạo bởi Winter CLI.*`;
-        },
-      },
-      {
-        filename: 'skill.md',
-        generate: async () => {
-          const catalog = await this.contextLoader.getStartupSkillCatalog();
-          const skills = [...catalog].sort();
-          return `# Available Skills
-
-Danh sách các skill có sẵn trong hệ thống:
-
-## Core Skills
-- **coding**: Code analysis, generation, review
-- **design**: Design system integration
-- **debug**: Debugging assistance
-- **refactor**: Code refactoring
-- **test**: Test generation
-- **security**: Security review
-- **performance**: Performance optimization
-
-## All Available Skills (${skills.length})
-
-${skills.map(s => `- ${s}`).join('\n')}
-
----
-*File này được tự động tạo bởi Winter CLI.*`;
-        },
-      },
-      {
-        filename: 'rule.md',
-        generate: async () => {
-          const parts = ['# Project Rules', '', '## Quy tắc dự án', ''];
-          // Load từ các instruction files đã có
-          const files = await this.readProjectInstructionFiles();
-          for (const file of files) {
-            if (file.relativePath === 'rule.md') continue; // skip self
-            parts.push(`- [${file.relativePath}](./${file.relativePath})`);
-          }
-          // Liệt kê các thư mục rules
-          const rulesDirs = [
-            this.getResourcePaths().codex.rules,
-            this.getUserResourcePaths()?.codexRules,
-          ].filter(Boolean);
-          for (const dir of rulesDirs) {
-            try {
-              const entries = await fsPromises.readdir(dir, { withFileTypes: true });
-              const ruleFiles = entries.filter(e => e.isFile() && e.name.endsWith('.md')).map(e => e.name);
-              if (ruleFiles.length > 0) {
-                parts.push('', `## Rules from ${path.basename(path.dirname(dir))}/${path.basename(dir)}`, '');
-                for (const f of ruleFiles) {
-                  parts.push(`- ${f}`);
-                }
-              }
-            } catch {}
-          }
-          // Liệt kê local resource rules
-          parts.push('', '## Local Resource Guidelines', '');
-          parts.push('- Karpathy tools guidelines available in local resources');
-          parts.push('- Agents.md project guidelines available in local resources');
-          parts.push('', '---', '*File này được tự động tạo bởi Winter CLI.*');
-          return parts.join('\n');
-        },
-      },
-    ];
+    const autoCreateDocs = await buildProjectDocs({
+      projectPath: this.projectPath,
+      resourcePaths: this.getResourcePaths(),
+      userResourcePaths: this.getUserResourcePaths(),
+      contextLoader: this.contextLoader,
+      readProjectInstructionFiles: () => this.readProjectInstructionFiles(),
+    });
 
     for (const doc of autoCreateDocs) {
       const filePath = path.join(this.projectPath, doc.filename);
       try {
-        await fsPromises.stat(filePath);
-        // File đã tồn tại, bỏ qua
+        const existing = await fsPromises.readFile(filePath, 'utf8');
+        if (!isWinterGeneratedProjectDoc(existing)) continue;
+
+        await fsPromises.writeFile(filePath, doc.content, 'utf8');
+        console.log(`${colors.green}✓ Đã nâng cấp file ${doc.filename} từ local resources.${colors.reset}`);
+        const memoryKey = `[Quy tắc dự án từ ${doc.filename}]`;
+        await this.session.replaceMemory(memoryKey, doc.content);
       } catch {
-        // File chưa tồn tại, tự động tạo
         try {
-          const content = await doc.generate();
-          await fsPromises.writeFile(filePath, content, 'utf8');
+          await fsPromises.writeFile(filePath, doc.content, 'utf8');
           console.log(`${colors.green}✓ Đã tự động tạo file ${doc.filename} từ local resources!${colors.reset}`);
           const memoryKey = `[Quy tắc dự án từ ${doc.filename}]`;
-          await this.session.replaceMemory(memoryKey, content);
+          await this.session.replaceMemory(memoryKey, doc.content);
         } catch (err) {
           // Bỏ qua nếu không tạo được
         }
@@ -894,7 +821,8 @@ ${colors.magenta}╭${'─'.repeat(w)}╮${colors.reset}
       row(`${c.yellow}/config${c.reset}  Xem cấu hình`, `${c.yellow}/exit${c.reset}     Thoát`),
       '',
       `${c.bright}AI & Công cụ${c.reset}`,
-      row(`${c.yellow}/auto${c.reset}    TDD tự sửa lỗi`, `${c.yellow}/agent${c.reset}   Chạy sub-agent`),
+      row(`${c.yellow}/auto${c.reset}    TDD t? s?a l?i`, `${c.yellow}/debug${c.reset}   Auto debug l?i`),
+      row(`${c.yellow}/agent${c.reset}   Ch?y sub-agent`, `${c.yellow}/swe${c.reset}     SWE workflow`),
       row(`${c.yellow}/read${c.reset}    Đọc file`, `${c.yellow}/write${c.reset}   Ghi file`),
       row(`${c.yellow}/bash${c.reset}    Chạy lệnh terminal`, `${c.yellow}/grep${c.reset}    Tìm trong file`),
       row(`${c.yellow}/glob${c.reset}    Tìm file theo pattern`, `${c.yellow}/image${c.reset}   Phân tích UI`),
@@ -949,6 +877,8 @@ ${colors.white}Plans & Tasks:${colors.reset}
   /task <desc>      Create task
   /tasks            List tasks
   /agent [role] <task>  Run a subagent
+  /auto [task]      Auto-heal with test/build loop
+  /debug [error]    Auto-debug and verify a failure
 
 ${colors.white}Tools:${colors.reset}
   /read <file>      Read file
@@ -1150,6 +1080,8 @@ ${colors.reset}
     const totalUsage = {};
     const toolSignatureHistory = [];
     const executionProfile = this.selectExecutionProfile(messages, { enableTools: true });
+    const requireToolEvidence = this.actionRequiresTools(messages);
+    let noToolActionRetries = 0;
     try {
       for (let i = 0; i < 8; i++) {
         if (this.isCancelled) throw new Error('AbortError');
@@ -1157,6 +1089,7 @@ ${colors.reset}
           provider: executionProfile.provider,
           model: executionProfile.model,
           enableTools: true,
+          requireToolEvidence: requireToolEvidence && !usedTools,
         }, startedAt, totalUsage);
 
         const assistantMsg = turn.assistantMsg || {};
@@ -1167,6 +1100,25 @@ ${colors.reset}
         }
 
         if (toolCalls.length === 0) {
+          if (turn.finishReason === 'tool_evidence_required') {
+            noToolActionRetries++;
+            if (noToolActionRetries > 2) {
+              finalContent = 'Chưa thực hiện được: model trả lời mà không dùng tool nên Winter đã chặn để tránh báo xạo.';
+              console.log(`\n${colors.yellow}${finalContent}${colors.reset}\n`);
+              reachedToolLimit = false;
+              break;
+            }
+            messages.push({
+              role: 'assistant',
+              content: assistantMsg.content || '',
+            });
+            messages.push({
+              role: 'user',
+              content: this.buildToolEvidenceCorrection(messages),
+            });
+            finalContent = '';
+            continue;
+          }
           if (turn.finishReason === 'length') {
             console.log(`\n${colors.yellow}ℹ Phản hồi bị cắt cụt do hết token. Đang tự động tiếp tục...${colors.reset}`);
             messages.push({
@@ -1304,6 +1256,51 @@ ${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). 
     return { finalContent, usedTools };
   }
 
+  getLatestUserText(messages = []) {
+    const list = Array.isArray(messages) ? messages : [{ role: 'user', content: String(messages || '') }];
+    for (let i = list.length - 1; i >= 0; i--) {
+      const message = list[i];
+      if (message?.role && message.role !== 'user') continue;
+      const content = message?.content;
+      if (typeof content === 'string') return content;
+      if (Array.isArray(content)) {
+        return content.map(part => part?.text || '').filter(Boolean).join('\n');
+      }
+    }
+    return '';
+  }
+
+  actionRequiresTools(messages = []) {
+    const text = this.getLatestUserText(messages).toLowerCase();
+    if (!text.trim()) return false;
+
+    const actionPattern = /\b(fix|repair|bug|debug|implement|create|write|edit|modify|update|delete|remove|refactor|run|test|build|commit|push|publish|install|check|inspect|read|scan|grep|search|change|apply|patch)\b|(?:sửa|fix|làm|tạo|ghi|đọc|xóa|xoá|chạy|test|build|commit|push|publish|kiểm tra|check|cài|thêm|đổi|sửa lỗi|refactor|review|soát|quét|tìm|áp dụng)/i;
+    const targetPattern = /\b(file|repo|project|code|src|test|build|git|npm|node|folder|directory|cli|tool|provider|model|config|readme|package\.json)\b|[A-Za-z]:[\\/]|\.js\b|\.ts\b|\.tsx\b|\.json\b|\.md\b|(?:dự án|mã|thư mục|tệp|file|cấu hình|lỗi|chức năng|tool|provider|model)/i;
+    const pureQuestionPattern = /^(what|why|how|when|where|is|are|can|could|should|would|tại sao|vì sao|là gì|có nên|có phải)\b/i;
+
+    if (pureQuestionPattern.test(text) && !actionPattern.test(text)) return false;
+    return actionPattern.test(text) && targetPattern.test(text);
+  }
+
+  responseNeedsToolEvidence(content = '') {
+    const text = String(content || '').toLowerCase();
+    if (!text.trim()) return false;
+
+    const clarification = /(?:cần thêm|cho mình|vui lòng|please provide|which file|what file|need more|clarify|không rõ|chưa rõ|file nào|thư mục nào)/i;
+    if (clarification.test(text)) return false;
+    return true;
+  }
+
+  buildToolEvidenceCorrection(messages = []) {
+    const request = this.getLatestUserText(messages);
+    return [
+      'Runtime correction: the user requested an action that requires tool evidence.',
+      'Your previous response did not use any tool, so it was blocked to avoid falsely claiming completion.',
+      'Now use the available tools to inspect/edit/run/check as needed. Do not say the task is done until a tool result proves it.',
+      `Original user request: ${request}`,
+    ].join('\n');
+  }
+
   async requestAssistantTurn(messages, options, startedAt, totalUsage) {
     if (typeof this.ai.streamRequest === 'function') {
       try {
@@ -1321,6 +1318,9 @@ ${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). 
     const finishReason = response.choices?.[0]?.finish_reason;
 
     if (assistantMsg.content && toolCalls.length === 0) {
+      if (options?.requireToolEvidence && this.responseNeedsToolEvidence(assistantMsg.content)) {
+        return { assistantMsg, toolCalls, finalContent: '', finishReason: 'tool_evidence_required' };
+      }
       this.printAssistantAnswer(assistantMsg.content, startedAt, totalUsage);
       return { assistantMsg, toolCalls, finalContent: assistantMsg.content, finishReason };
     }
@@ -1389,6 +1389,14 @@ ${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). 
     const visibleContent = inlineToolExtraction.content || content;
 
     if (bufferToolModeContent && toolCalls.length === 0 && visibleContent) {
+      if (options?.requireToolEvidence && this.responseNeedsToolEvidence(visibleContent)) {
+        return {
+          assistantMsg: { content: visibleContent },
+          toolCalls,
+          finalContent: '',
+          finishReason: 'tool_evidence_required',
+        };
+      }
       this.printAssistantAnswer(visibleContent, startedAt, totalUsage);
       return {
         assistantMsg: { content: visibleContent },
@@ -1576,8 +1584,9 @@ ${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). 
     if (query === '/') {
       const preferred = [
         '/help', '/exit', '/pwd', '/cd',
-        '/provider', '/model', '/models', '/providers',
-        '/read', '/write', '/glob', '/grep', '/bash',
+          '/provider', '/model', '/models', '/providers',
+          '/auto', '/debug', '/swe',
+          '/read', '/write', '/glob', '/grep', '/bash',
         '/codex', '/claude', '/karpathy', '/agents',
         '/resources', '/designs', '/skills',
       ];

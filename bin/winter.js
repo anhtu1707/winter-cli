@@ -18,7 +18,7 @@ const version = pkg.version;
 
 const COMMANDS = new Set([
   'chat', 'call', 'benchmark', 'session', 'skill', 'plugin', 'design', 'config', 'init',
-  'help', 'project', 'code', 'review', 'mcp', 'permissions',
+  'help', 'project', 'code', 'review', 'debug', 'auto', 'mcp', 'permissions',
   'provider', 'providers', 'model', 'models',
 ]);
 
@@ -68,6 +68,8 @@ Commands:
   winter config               Show config
   winter init                 Initialize local state
   winter review               Code review mode
+  winter debug <error/task>   Auto-debug with verification
+  winter auto <task>          Auto-heal with test/build loop
   winter code                 Code analysis mode
 
 Flags:

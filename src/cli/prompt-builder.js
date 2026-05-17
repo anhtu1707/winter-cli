@@ -1,3 +1,5 @@
+import { formatRuntimeEnvironmentSummary, getRuntimeEnvironment } from './runtime-env.js';
+
 /**
  * PromptBuilder — Builds system prompts for Winter CLI agents.
  * Extracted from WinterREPL to reduce repl.js size.
@@ -79,6 +81,7 @@ export class PromptBuilder {
       `Use tools when they materially help. For coding tasks: inspect first, edit second, verify third.`,
       `Prefer Read/Grep/Glob before editing. Use Write/Edit for file changes.`,
       `When a task touches coding, agents, UI, brand, or design, inspect the relevant required local resource in depth before deciding.`,
+      `If the user asks you to modify, run, inspect, check, publish, commit, or otherwise act on the project, you MUST use tools. Do not claim completion without a tool result from this turn.`,
       ``,
       `## Session`,
       `Working directory: ${this.projectPath}`,
@@ -143,9 +146,7 @@ export class PromptBuilder {
 
     const rolePrompt = rolePrompts[role] || 'You are a Winter coding subagent. Solve the task directly, use tools when needed, and return a concise result.';
 
-    const osInfo = process.platform === 'win32'
-      ? 'Windows; Bash auto-detects PowerShell and cmd.exe syntax. Use shell="powershell" or shell="cmd" when needed.'
-      : process.platform;
+    const runtimeSummary = this.tools?.getRuntimeEnvironmentSummary?.() || this._defaultEnvironmentSummary();
 
     return [
       '## CRITICAL AI RULES (MUST FOLLOW STRICTLY):',
@@ -161,8 +162,9 @@ export class PromptBuilder {
       '## Tool Rules',
       '- Canonical tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, BrowserDebug, WebFetch, WebSearch.',
       '- Treat skills, memories, bundled resources, local project rules, and the tool list as operational context. Use them proactively when relevant.',
-      `- Current OS is ${osInfo}.`,
+      `- Runtime environment:\n${runtimeSummary}`,
       '- Prefer Write/Edit for writing files. Bash accepts both PowerShell and cmd.exe on Windows, but do not use long echo chains for code files.',
+      '- For action requests, use tools before claiming anything is done. Never claim files changed, tests ran, or checks passed unless this conversation contains the matching tool result.',
       '- If a tool call fails because of an unknown alias, call the canonical tool name next.',
       '- Always start with a brief plan, then refine it when new facts appear.',
       '',
@@ -196,14 +198,7 @@ export class PromptBuilder {
 
   /** @private */
   _defaultEnvironmentSummary() {
-    return [
-      `Host OS: ${process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'macOS' : process.platform === 'linux' ? 'Linux' : process.platform}`,
-      `Node platform: ${process.platform}`,
-      `Current shell hint: ${process.platform === 'win32' ? 'powershell-capable or cmd/unknown' : (process.env.SHELL || 'bash/sh')}`,
-      process.platform === 'win32'
-        ? 'Shell rule: Use shell:"powershell" for PowerShell cmdlets, shell:"cmd" for cmd.exe syntax, and shell:"auto" when unsure.'
-        : 'Shell rule: Use the native POSIX shell on non-Windows hosts and leave shell unspecified unless a specific shell is required.',
-    ].join('\n');
+    return formatRuntimeEnvironmentSummary(getRuntimeEnvironment());
   }
 
   /** @private */

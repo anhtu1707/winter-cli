@@ -51,6 +51,7 @@ test('PromptBuilder buildSystemPrompt includes core principles', () => {
   assert(result.includes('Surgical Changes'));
   assert(result.includes('Goal-Driven'));
   assert(result.includes('Vietnamese'));
+  assert(result.includes('Do not claim completion without a tool result'));
 });
 
 test('PromptBuilder buildSystemPrompt includes project context when provided', () => {

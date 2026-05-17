@@ -40,10 +40,38 @@ export class SessionManager {
       console.log(`\x1b[33m⚠ Không tìm thấy session ${options.sessionId}, tạo session mới...\x1b[0m`);
     }
 
-    // Luôn tạo session mới nếu không yêu cầu load hoặc load thất bại
+    // Mặc định resume session mới nhất của đúng project để /memories không bị rỗng sau restart.
+    if (options.resume !== false && !options.newSession) {
+      const success = await this.loadLatestProjectSession(options.project || process.cwd());
+      if (success) {
+        await this.rememberProject(this.currentSession?.project || options.project || process.cwd());
+        this.initialized = true;
+        return;
+      }
+    }
+
     await this.newSession(options);
     await this.rememberProject(options.project || this.currentSession?.project || process.cwd());
     this.initialized = true;
+  }
+
+  normalizeProjectPath(projectPath) {
+    if (!projectPath) return '';
+    const normalized = path.resolve(projectPath);
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  }
+
+  hydrateSession(session) {
+    this.currentSession = session;
+    this.context = session.context || {};
+    this.plans = session.plans || [];
+    this.memory = session.memory || [];
+    this.currentSession.history = session.history || [];
+  }
+
+  async writeCurrentPointer(sessionId) {
+    const currentPath = path.join(this.sessionsDir, 'active', 'current.json');
+    await fs.writeFile(currentPath, JSON.stringify({ id: sessionId }));
   }
 
   async loadSession(sessionId) {
@@ -60,6 +88,43 @@ export class SessionManager {
       
       return true;
     } catch (e) {
+      return false;
+    }
+  }
+
+  async loadLatestProjectSession(projectPath) {
+    const activeDir = path.join(this.sessionsDir, 'active');
+    const targetProject = this.normalizeProjectPath(projectPath);
+    if (!targetProject) return false;
+
+    try {
+      const files = await fs.readdir(activeDir);
+      const candidates = [];
+
+      for (const file of files) {
+        if (!file.endsWith('.json') || file === 'current.json') continue;
+
+        try {
+          const sessionData = await fs.readFile(path.join(activeDir, file), 'utf8');
+          const session = JSON.parse(sessionData);
+          if (this.normalizeProjectPath(session.project) !== targetProject) continue;
+
+          candidates.push({
+            session,
+            time: Date.parse(session.updatedAt || session.createdAt || 0) || 0,
+          });
+        } catch {
+          // Skip corrupt or partially-written session files.
+        }
+      }
+
+      candidates.sort((a, b) => b.time - a.time);
+      if (candidates.length === 0) return false;
+
+      this.hydrateSession(candidates[0].session);
+      await this.writeCurrentPointer(this.currentSession.id);
+      return true;
+    } catch {
       return false;
     }
   }

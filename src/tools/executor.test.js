@@ -154,6 +154,7 @@ test('Windows Bash accepts explicit cmd and PowerShell shells', async (t) => {
   });
   assert.equal(cmd.success, true);
   assert.match(cmd.stdout, /hello/);
+  assert.equal(cmd.shell, 'cmd');
 
   const ps = await tools.execute('Bash', {
     shell: 'powershell',
@@ -161,6 +162,7 @@ test('Windows Bash accepts explicit cmd and PowerShell shells', async (t) => {
   });
   assert.equal(ps.success, true);
   assert.match(ps.stdout, /world/);
+  assert.equal(ps.shell, 'powershell');
 });
 
 test('Windows Bash auto-detects cmd chaining syntax', async (t) => {

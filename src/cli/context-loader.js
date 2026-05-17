@@ -1,6 +1,10 @@
 import { promises as fs } from 'fs';
+import { existsSync } from 'fs';
 import path from 'path';
 import { homedir } from 'os';
+import { fileURLToPath } from 'url';
+
+const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 /**
  * ContextLoader — Loads project context, resource paths, and instruction files.
@@ -42,8 +46,18 @@ export class ContextLoader {
     return files;
   }
 
+  getResourceRoot() {
+    const projectLocalRoot = path.join(this.projectPath, 'resources', 'local');
+    const packageLocalRoot = path.join(PACKAGE_ROOT, 'resources', 'local');
+
+    if (this.projectPath === PACKAGE_ROOT) return projectLocalRoot;
+    if (existsSync(projectLocalRoot)) return projectLocalRoot;
+
+    return packageLocalRoot;
+  }
+
   getResourcePaths() {
-    const localRoot = path.join(this.projectPath, 'resources', 'local');
+    const localRoot = this.getResourceRoot();
     return {
       codex: {
         root: path.join(localRoot, 'codex'),

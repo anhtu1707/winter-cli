@@ -217,6 +217,10 @@ export async function handleSlashCommand(repl, input) {
       const task = args.join(' ') || 'Run tests until they pass';
       await repl.runAutoHealing(task);
       return;
+    case '/debug':
+      const debugTask = args.join(' ') || 'Find the root cause of the current failure, patch it, and verify with the closest test or build command';
+      await repl.runAutoHealing(`AUTO DEBUG: ${debugTask}`);
+      return;
     case '/plan:':
     case '/plan-gen':
       if (args.length === 0) {

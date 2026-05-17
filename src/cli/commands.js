@@ -12,6 +12,7 @@ import { PluginManager } from '../plugins/manager.js';
 import { MCPClient } from '../mcp/client.js';
 import { BenchmarkRunner } from '../ai/benchmark.js';
 import { redactSecrets } from './secret-env.js';
+import { formatRuntimeEnvironmentSummary, getRuntimeEnvironment } from './runtime-env.js';
 
 export { redactSecrets } from './secret-env.js';
 
@@ -60,6 +61,8 @@ export class CommandParser {
       design: this.handleDesign.bind(this),
       code: this.handleCode.bind(this),
       review: this.handleReview.bind(this),
+      debug: this.handleDebug.bind(this),
+      auto: this.handleDebug.bind(this),
       config: this.handleConfig.bind(this),
       init: this.handleInit.bind(this),
       help: this.handleHelp.bind(this),
@@ -104,6 +107,8 @@ export class CommandParser {
       '/models': () => this.showModels(),
       '/mcp': () => this.handleMcp(args),
       '/permissions': () => this.handlePermissions(args),
+      '/debug': () => this.handleDebug(args),
+      '/auto': () => this.handleDebug(args),
       '/exit': () => process.exit(0),
     };
 
@@ -113,6 +118,11 @@ export class CommandParser {
     } else {
       console.log(`${colors.yellow}Unknown slash command: ${cmd}${colors.reset}`);
     }
+  }
+
+  async handleDebug(args) {
+    const task = args.join(' ') || 'Find the root cause, patch it, and verify with the closest test or build command';
+    return this.handleChat([`AUTO DEBUG: ${task}`]);
   }
 
   async handleChat(args) {
@@ -638,12 +648,7 @@ export class CommandParser {
 
   getWinterSystemPrompt() {
     const environmentSummary = [
-      `Host OS: ${process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'macOS' : process.platform === 'linux' ? 'Linux' : process.platform}`,
-      `Node platform: ${process.platform}`,
-      `Current shell hint: ${process.platform === 'win32' ? 'powershell-capable or cmd/unknown' : (process.env.SHELL || 'bash/sh')}`,
-      process.platform === 'win32'
-        ? 'Shell rule: Use shell:"powershell" for PowerShell cmdlets, shell:"cmd" for cmd.exe syntax, and shell:"auto" when unsure.'
-        : 'Shell rule: Use the native POSIX shell on non-Windows hosts and leave shell unspecified unless a specific shell is required.',
+      formatRuntimeEnvironmentSummary(getRuntimeEnvironment()),
     ].join('\n');
 
     return `You are Winter, an expert AI coding assistant.

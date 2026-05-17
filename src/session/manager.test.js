@@ -71,6 +71,50 @@ test('switchSession updates the remembered project anchor', async () => {
   assert.equal(config.state.project.current, secondProject);
 });
 
+test('init resumes latest session for the same project so memories persist', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-session-resume-'));
+  const config = createConfigStub();
+  const projectPath = path.join(root, 'project');
+
+  const first = new SessionManager(config);
+  first.winterDir = path.join(root, '.winter');
+  first.sessionsDir = path.join(first.winterDir, 'sessions');
+  await first.init({ project: projectPath });
+  await first.addToMemory('persistent project memory');
+  const firstSessionId = first.getSessionId();
+
+  const second = new SessionManager(config);
+  second.winterDir = first.winterDir;
+  second.sessionsDir = first.sessionsDir;
+  await second.init({ project: projectPath });
+
+  assert.equal(second.getSessionId(), firstSessionId);
+  assert.equal(second.getMemory().length, 1);
+  assert.equal(second.getMemory()[0].text, 'persistent project memory');
+});
+
+test('init does not resume a session from a different project', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-session-project-scope-'));
+  const config = createConfigStub();
+  const firstProject = path.join(root, 'project-a');
+  const secondProject = path.join(root, 'project-b');
+
+  const first = new SessionManager(config);
+  first.winterDir = path.join(root, '.winter');
+  first.sessionsDir = path.join(first.winterDir, 'sessions');
+  await first.init({ project: firstProject });
+  await first.addToMemory('project a memory');
+
+  const second = new SessionManager(config);
+  second.winterDir = first.winterDir;
+  second.sessionsDir = first.sessionsDir;
+  await second.init({ project: secondProject });
+
+  assert.notEqual(second.getSessionId(), first.getSessionId());
+  assert.equal(second.currentSession.project, secondProject);
+  assert.deepEqual(second.getMemory(), []);
+});
+
 test('clearMemory removes stored memories and persists the change', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'winter-session-memory-'));
   const config = createConfigStub();

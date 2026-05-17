@@ -142,9 +142,18 @@ test('ContextLoader inferStartupSkills returns filtered active skills', async ()
 
 test('ContextLoader getLocalResourceContext returns empty for missing manifest', async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), 'winter-test-'));
+  await mkdir(path.join(tmpDir, 'resources', 'local'), { recursive: true });
   const loader = new ContextLoader({ projectPath: tmpDir });
   const context = await loader.getLocalResourceContext();
   assert.equal(context, '');
+});
+
+test('ContextLoader falls back to packaged resources for external projects', () => {
+  const loader = new ContextLoader({ projectPath: path.join(tmpdir(), 'external-project-without-resources') });
+  const paths = loader.getResourcePaths();
+
+  assert(paths.localRoot.includes(path.join('winter', 'resources', 'local')));
+  assert(paths.designs.includes(path.join('awesome-design-md', 'design-md')));
 });
 
 test('ContextLoader getRequiredLocalResourceSummary summarizes mandatory resources', async () => {

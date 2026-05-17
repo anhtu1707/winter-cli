@@ -14,6 +14,8 @@ test('slash suggestions include provider, model, and bundled resources', () => {
   assert(commands.includes('/model'));
   assert(commands.includes('/resources'));
   assert(commands.includes('/codex'));
+  assert(commands.includes('/auto'));
+  assert(commands.includes('/debug'));
 });
 
 test('slash menu does not accept on Enter and preserves typed suffix on Tab', () => {
@@ -448,6 +450,76 @@ test('runConversation streams direct assistant answers', async () => {
     assert.equal(answer.finalContent, 'Real time');
     assert.match(writes.join(''), /Real time/);
     assert.match(writes.join(''), /Tokens: 5 total \(3 in, 2 out\)/);
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+});
+
+test('runConversation blocks action completion claims without tool evidence and retries', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+
+  let streamCount = 0;
+  const executed = [];
+  const writes = [];
+  const originalWrite = process.stdout.write;
+  repl.ai = {
+    tools: [],
+    providers: { custom: { model: 'test-model' } },
+    getActiveProvider: () => 'custom',
+    setTools(tools) {
+      this.tools = tools;
+    },
+    async *streamRequest() {
+      streamCount++;
+      if (streamCount === 1) {
+        yield { content: 'Đã sửa xong rồi nhé.' };
+        return;
+      }
+      if (streamCount === 2) {
+        yield {
+          raw: {
+            choices: [{
+              delta: {
+                tool_calls: [{
+                  index: 0,
+                  id: 'call-read',
+                  type: 'function',
+                  function: { name: 'Read', arguments: '{"file_path":"README.md"}' },
+                }],
+              },
+              finish_reason: 'tool_calls',
+            }],
+          },
+        };
+        return;
+      }
+      yield { content: 'Đã kiểm tra README.md bằng tool.' };
+    },
+  };
+  repl.tools = {
+    normalizeToolName: name => name,
+    normalizeToolInput: (_name, input) => input,
+    async execute(name, args) {
+      executed.push({ name, args });
+      return { success: true, path: args.file_path, lines: 1, size: 10, content: 'ok' };
+    },
+  };
+
+  process.stdout.write = (chunk) => {
+    writes.push(String(chunk));
+    return true;
+  };
+
+  try {
+    const answer = await repl.runConversation(
+      [{ role: 'user', content: 'sửa lỗi trong README.md rồi kiểm tra lại' }],
+      'Test',
+      [{ name: 'Read' }]
+    );
+
+    assert.equal(answer.finalContent, 'Đã kiểm tra README.md bằng tool.');
+    assert.deepEqual(executed, [{ name: 'Read', args: { file_path: 'README.md' } }]);
+    assert(!writes.join('').includes('Đã sửa xong rồi nhé.'));
   } finally {
     process.stdout.write = originalWrite;
   }

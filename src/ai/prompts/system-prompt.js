@@ -5,6 +5,7 @@
  */
 
 import { isSmallModel, getModelCapabilityLabel } from '../model-capabilities.js';
+import { formatRuntimeEnvironmentSummary, getRuntimeEnvironment } from '../../cli/runtime-env.js';
 
 const BASE_PRINCIPLES = [
   'Execute, don\'t describe - Do the work, don\'t write plans about doing the work',
@@ -25,18 +26,9 @@ const TOOL_CATEGORIES = {
 };
 
 function buildEnvironmentSummary() {
-  const os = process.platform === 'win32' ? 'Windows'
-    : process.platform === 'darwin' ? 'macOS'
-    : process.platform === 'linux' ? 'Linux' : process.platform;
-
-  const shellHint = process.platform === 'win32'
-    ? 'Use shell:"powershell" for PowerShell, shell:"cmd" for cmd.exe'
-    : `Shell: ${process.env.SHELL || 'bash'}`;
-
   return [
-    `Host OS: ${os}`,
+    formatRuntimeEnvironmentSummary(getRuntimeEnvironment()),
     `Node: ${process.version}`,
-    shellHint,
   ].join('\n');
 }
 
