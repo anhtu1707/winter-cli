@@ -158,7 +158,7 @@ test('anthropic config is accepted as claude-compatible provider config', async 
   assert.equal(ai.providers.claude.model, 'claude-sonnet-4-20250514');
 });
 
-test('selectExecutionProfile routes review-style tasks to Claude when available', async () => {
+test('selectExecutionProfile keeps active custom provider for review-style tasks', async () => {
   const ai = new AIProviderManager({
     async load() {
       return {
@@ -182,8 +182,8 @@ test('selectExecutionProfile routes review-style tasks to Claude when available'
 
   const profile = ai.selectExecutionProfile('Please review this refactor and fix the bug');
 
-  assert.equal(profile.provider, 'claude');
-  assert.equal(profile.model, 'claude-sonnet-4-20250514');
+  assert.equal(profile.provider, 'custom');
+  assert.equal(profile.model, 'custom-model');
 });
 
 test('sendRequest falls back to default provider when routed provider has auth error', async () => {
@@ -231,8 +231,8 @@ test('sendRequest falls back to default provider when routed provider has auth e
     ai.loadAuthToken = async () => null;
     await ai.init();
 
-    // Routing to Claude triggers keyword 'fix', but fallback should go to custom
-    const result = await ai.sendRequest([{ role: 'user', content: 'fix this bug' }]);
+    // Explicit routing to Claude can still fall back to the active/default custom provider.
+    const result = await ai.sendRequest([{ role: 'user', content: 'fix this bug' }], { provider: 'claude' });
 
     assert.equal(calls.length, 4); // 3 retries to Claude + 1 fallback to custom
     assert.equal(calls[0].model, 'claude-model');
@@ -337,7 +337,7 @@ test('streamRequest falls back to default provider when routed provider has auth
     await ai.init();
 
     const chunks = [];
-    for await (const chunk of ai.streamRequest([{ role: 'user', content: 'debug this error' }])) {
+    for await (const chunk of ai.streamRequest([{ role: 'user', content: 'debug this error' }], { provider: 'claude' })) {
       chunks.push(chunk);
     }
 

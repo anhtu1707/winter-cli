@@ -23,28 +23,32 @@ function bumpReasoningLevel(level, steps) {
   if (idx === -1) return level;
   const newIdx = Math.min(idx + steps, order.length - 1);
   return order[newIdx];
-}	export function selectExecutionProfile({ messages = [], activeProvider = null, providers = {}, options = {} } = {}) {
-	  const text = flattenMessageText(messages);
-	  const providerNames = Object.keys(providers).filter(name => providers[name]?.ready || providers[name]?.model);
-	  const hasProvider = name => providerNames.includes(name);
-	
-	  const explicitProvider = options.provider && hasProvider(options.provider) ? options.provider : null;
-	  let provider = explicitProvider || (activeProvider && hasProvider(activeProvider) ? activeProvider : providerNames[0] || null);
-	
-	  if (explicitProvider) {
-	    provider = explicitProvider;
-	  } else if (/\b(review|refactor|debug|fix|bug|error|stack trace|test|tool|patch|code)\b/.test(text) && hasProvider('claude')) {
-	    provider = 'claude';
-	  } else if (/\b(summary|summarize|commit message|changelog|docs|explain|rewrite)\b/.test(text) && hasProvider('openai')) {
-	    provider = 'openai';
-	  } else if (/\b(local|offline|privacy|private|on-device)\b/.test(text) && hasProvider('ollama')) {
-	    provider = 'ollama';
-	  } else if (/\b(quick|brief|short|fast)\b/.test(text) && hasProvider('groq')) {
-	    provider = 'groq';
-	  }
-	
-	  const providerConfig = providers[provider] || providers[activeProvider] || {};
-	  const model = options.model || providerConfig.model || providers[activeProvider]?.model || null;
+}
+
+export function selectExecutionProfile({ messages = [], activeProvider = null, providers = {}, options = {} } = {}) {
+  const text = flattenMessageText(messages);
+  const providerNames = Object.keys(providers).filter(name => providers[name]?.ready || providers[name]?.model);
+  const hasProvider = name => providerNames.includes(name);
+
+  const explicitProvider = options.provider && hasProvider(options.provider) ? options.provider : null;
+  const activeProviderIsValid = activeProvider && hasProvider(activeProvider);
+  let provider = explicitProvider || (activeProviderIsValid ? activeProvider : providerNames[0] || null);
+  const allowAutoRoute = options.autoRouteProvider === true && !explicitProvider && !activeProviderIsValid;
+
+  if (explicitProvider) {
+    provider = explicitProvider;
+  } else if (allowAutoRoute && /\b(review|refactor|debug|fix|bug|error|stack trace|test|tool|patch|code)\b/.test(text) && hasProvider('claude')) {
+    provider = 'claude';
+  } else if (allowAutoRoute && /\b(summary|summarize|commit message|changelog|docs|explain|rewrite)\b/.test(text) && hasProvider('openai')) {
+    provider = 'openai';
+  } else if (allowAutoRoute && /\b(local|offline|privacy|private|on-device)\b/.test(text) && hasProvider('ollama')) {
+    provider = 'ollama';
+  } else if (allowAutoRoute && /\b(quick|brief|short|fast)\b/.test(text) && hasProvider('groq')) {
+    provider = 'groq';
+  }
+
+  const providerConfig = providers[provider] || providers[activeProvider] || {};
+  const model = options.model || providerConfig.model || providers[activeProvider]?.model || null;
 	
 	  // Detect model capability tier
 	  const modelTier = classifyModelTier(model, provider);

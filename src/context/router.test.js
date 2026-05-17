@@ -10,11 +10,22 @@ const providers = {
   groq: { model: 'llama-fast' },
 };
 
-test('router sends coding work to Claude when available', () => {
+test('router keeps active provider for coding work when user selected one', () => {
   const profile = selectExecutionProfile({
     messages: [{ role: 'user', content: 'please fix this bug and run tests' }],
     activeProvider: 'openai',
     providers,
+  });
+
+  assert.equal(profile.provider, 'openai');
+});
+
+test('router only auto-routes when explicitly enabled and no active provider is valid', () => {
+  const profile = selectExecutionProfile({
+    messages: [{ role: 'user', content: 'please fix this bug and run tests' }],
+    activeProvider: 'missing',
+    providers,
+    options: { autoRouteProvider: true },
   });
 
   assert.equal(profile.provider, 'claude');

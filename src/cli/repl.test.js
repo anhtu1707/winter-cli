@@ -236,7 +236,7 @@ test('shouldUseTools keeps agent mode enabled by default', () => {
   assert.equal(repl.shouldUseTools('just chat'), true);
 });
 
-test('runConversation routes review-like prompts to Claude when available', async () => {
+test('runConversation keeps the active custom provider for review-like prompts', async () => {
   const repl = new WinterREPL({ projectPath: process.cwd() });
   const requests = [];
 
@@ -260,8 +260,8 @@ test('runConversation routes review-like prompts to Claude when available', asyn
   const answer = await repl.runConversation([{ role: 'user', content: 'Please review this bug fix' }], 'Test', []);
 
   assert.equal(answer.finalContent, 'done');
-  assert.equal(requests[0].options.provider, 'claude');
-  assert.equal(requests[0].options.model, 'claude-sonnet-4-20250514');
+  assert.equal(requests[0].options.provider, 'custom');
+  assert.equal(requests[0].options.model, 'custom-model');
 });
 
 test('getAgentTools scopes tool access by agent role', () => {

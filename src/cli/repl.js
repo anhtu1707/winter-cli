@@ -1112,14 +1112,17 @@ ${colors.reset}
     const activeProvider = this.ai?.getActiveProvider?.() || Object.keys(providers)[0] || null;
     const hasProvider = name => !!providers[name]?.model || !!providers[name]?.ready;
 
-    let provider = activeProvider;
-    if (/\b(review|refactor|debug|fix|bug|error|stack trace|test|tool|patch|code)\b/.test(text) && hasProvider('claude')) {
+    const activeProviderIsValid = activeProvider && hasProvider(activeProvider);
+    const allowAutoRoute = options.autoRouteProvider === true && !activeProviderIsValid;
+
+    let provider = activeProviderIsValid ? activeProvider : Object.keys(providers).find(hasProvider) || activeProvider;
+    if (allowAutoRoute && /\b(review|refactor|debug|fix|bug|error|stack trace|test|tool|patch|code)\b/.test(text) && hasProvider('claude')) {
       provider = 'claude';
-    } else if (/\b(summary|summarize|commit message|changelog|docs|explain|rewrite)\b/.test(text) && hasProvider('openai')) {
+    } else if (allowAutoRoute && /\b(summary|summarize|commit message|changelog|docs|explain|rewrite)\b/.test(text) && hasProvider('openai')) {
       provider = 'openai';
-    } else if (/\b(local|offline|privacy|private|on-device)\b/.test(text) && hasProvider('ollama')) {
+    } else if (allowAutoRoute && /\b(local|offline|privacy|private|on-device)\b/.test(text) && hasProvider('ollama')) {
       provider = 'ollama';
-    } else if (/\b(quick|brief|short|fast)\b/.test(text) && hasProvider('groq')) {
+    } else if (allowAutoRoute && /\b(quick|brief|short|fast)\b/.test(text) && hasProvider('groq')) {
       provider = 'groq';
     }
 
