@@ -976,6 +976,75 @@ test('runConversation executes inline XML tool calls without printing pseudo syn
   }
 });
 
+test('runConversation executes provider-agnostic inline XML tool calls from non-stream responses', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+
+  const executed = [];
+  const writes = [];
+  const originalWrite = process.stdout.write;
+  const originalLog = console.log;
+  let requestCount = 0;
+  repl.ai = {
+    providers: { custom: { model: 'test-model' } },
+    getActiveProvider: () => 'custom',
+    setTools() {},
+    async sendRequest() {
+      requestCount++;
+      if (requestCount > 1) {
+        return {
+          choices: [{
+            message: { content: 'Đã kiểm tra xong.' },
+            finish_reason: 'stop',
+          }],
+        };
+      }
+      return {
+        choices: [{
+          message: {
+            content: [
+              'Để tôi kiểm tra Sidebar.',
+              '<some-model:tool_call>',
+              '<invoke name="Read">',
+              '<parameter name="path">G:\\AI\\app\\kira\\kira-sqlite-viewer\\src\\renderer\\src\\components\\Sidebar.tsx</parameter>',
+              '</invoke>',
+              '</some-model:tool_call>',
+            ].join('\n'),
+          },
+          finish_reason: 'stop',
+        }],
+      };
+    },
+  };
+  repl.tools = {
+    normalizeToolName: name => name,
+    async execute(name, args) {
+      executed.push({ name, args });
+      return { success: true, path: args.path, lines: 1, size: 2, content: 'ok' };
+    },
+  };
+
+  process.stdout.write = (chunk) => {
+    writes.push(String(chunk));
+    return true;
+  };
+  console.log = (...args) => {
+    writes.push(args.join(' '));
+  };
+
+  try {
+    await repl.runConversation([{ role: 'user', content: 'read sidebar' }], 'Test', [{ name: 'Read' }]);
+
+    assert.equal(executed.length, 1);
+    assert.equal(executed[0].name, 'Read');
+    assert.equal(executed[0].args.path, 'G:\\AI\\app\\kira\\kira-sqlite-viewer\\src\\renderer\\src\\components\\Sidebar.tsx');
+    assert.doesNotMatch(writes.join(''), /some-model:tool_call/);
+    assert.doesNotMatch(writes.join(''), /<invoke name="Read">/);
+  } finally {
+    process.stdout.write = originalWrite;
+    console.log = originalLog;
+  }
+});
+
 test('interactive prompt and system prompt do not brand Winter with emoji', () => {
   const repl = new WinterREPL({ projectPath: process.cwd() });
 

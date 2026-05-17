@@ -33,14 +33,24 @@ test('tool argument parser recovers embedded JSON and reports malformed args', (
   assert.equal(bad.__rawToolArgs, '{"command":');
 });
 
-test('inline minimax tool calls are extracted and normalized', () => {
-  const inline = '<minimax:tool_call><invoke name="Bash"><parameter name="command">echo &quot;ok&quot;</parameter></invoke></minimax:tool_call>';
+test('inline XML invoke tool calls are extracted and normalized for any provider wrapper', () => {
+  const inline = '<provider:tool_call><invoke name="Bash"><parameter name="command">echo &quot;ok&quot;</parameter></invoke></provider:tool_call>';
   const extracted = extractInlineToolCalls(`run ${inline}`, index => `id-${index}`);
   const normalized = normalizeToolCalls(extracted.toolCalls);
 
   assert.equal(extracted.content, 'run');
   assert.equal(normalized[0].toolName, 'Bash');
   assert.deepEqual(normalized[0].toolArgs, { command: 'echo "ok"' });
+});
+
+test('inline XML invoke tool calls work without provider-specific wrapper', () => {
+  const inline = '<invoke name="Read"><parameter name="path">src/cli/repl.js</parameter></invoke>';
+  const extracted = extractInlineToolCalls(`check ${inline}`, index => `id-${index}`);
+  const normalized = normalizeToolCalls(extracted.toolCalls);
+
+  assert.equal(extracted.content, 'check');
+  assert.equal(normalized[0].toolName, 'Read');
+  assert.deepEqual(normalized[0].toolArgs, { path: 'src/cli/repl.js' });
 });
 
 test('inline tool extraction accepts common XML and fenced formats', () => {

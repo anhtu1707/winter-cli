@@ -118,7 +118,7 @@ export function extractInlineToolCalls(content, idFactory = index => `inline-${D
     });
   };
 
-  const invokePattern = /(?:<minimax:tool_call>\s*)?<invoke\s+name=["']([^"']+)["']>([\s\S]*?)<\/invoke>\s*(?:<\/minimax:tool_call>)?/gi;
+  const invokePattern = /(?:<[\w.-]+:tool_call>\s*)?<invoke\s+name=["']([^"']+)["']>([\s\S]*?)<\/invoke>\s*(?:<\/[\w.-]+:tool_call>)?/gi;
 
   cleaned = cleaned.replace(invokePattern, (_match, name, body) => {
     const args = {};

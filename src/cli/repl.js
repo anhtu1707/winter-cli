@@ -1314,7 +1314,15 @@ ${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). 
     const response = await this.ai.sendRequest(messages, options);
     this.addUsage(totalUsage, response.usage);
     const assistantMsg = response.choices?.[0]?.message || {};
-    const toolCalls = this.normalizeToolCalls(assistantMsg.tool_calls || []);
+    const inlineToolExtraction = this.extractInlineToolCalls(assistantMsg.content || '');
+    const toolCalls = this.normalizeToolCalls([
+      ...(assistantMsg.tool_calls || []),
+      ...inlineToolExtraction.toolCalls,
+    ]);
+    if (inlineToolExtraction.toolCalls.length > 0) {
+      assistantMsg.content = inlineToolExtraction.content;
+      assistantMsg.tool_calls = this.formatToolCallsForMessage(toolCalls);
+    }
     const finishReason = response.choices?.[0]?.finish_reason;
 
     if (assistantMsg.content && toolCalls.length === 0) {
