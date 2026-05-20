@@ -72,6 +72,41 @@ test('inline tool extraction accepts common XML and fenced formats', () => {
   assert(!extracted.content.includes('tool_call'));
 });
 
+test('inline tool extraction accepts provider fallback JSON and command formats', () => {
+  const cases = [
+    '{"tool":"Read","arguments":{"path":"README.md"}}',
+    '```json\n{"name":"Grep","args":{"pattern":"Winter","path":"README.md"}}\n```',
+    'Tool: Bash\nArguments: {"command":"npm test"}',
+    'CALL_TOOL Read {"file_path":"src/cli/repl.js"}',
+    '<tool name="Glob">{"pattern":"src/**/*.js"}</tool>',
+  ];
+
+  const normalized = cases.flatMap((content, caseIndex) => {
+    const extracted = extractInlineToolCalls(content, index => `case-${caseIndex}-${index}`);
+    return normalizeToolCalls(extracted.toolCalls);
+  });
+
+  assert.deepEqual(normalized.map(call => call.toolName), ['Read', 'Grep', 'Bash', 'Read', 'Glob']);
+  assert.deepEqual(normalized[0].toolArgs, { path: 'README.md' });
+  assert.deepEqual(normalized[1].toolArgs, { pattern: 'Winter', path: 'README.md' });
+  assert.deepEqual(normalized[2].toolArgs, { command: 'npm test' });
+  assert.deepEqual(normalized[3].toolArgs, { file_path: 'src/cli/repl.js' });
+  assert.deepEqual(normalized[4].toolArgs, { pattern: 'src/**/*.js' });
+});
+
+test('inline tool extraction accepts arrays of JSON tool calls', () => {
+  const extracted = extractInlineToolCalls(JSON.stringify([
+    { tool: 'Read', arguments: { path: 'README.md' } },
+    { action: 'Bash', params: { command: 'npm test' } },
+  ]));
+  const normalized = normalizeToolCalls(extracted.toolCalls);
+
+  assert.equal(extracted.content, '');
+  assert.equal(normalized.length, 2);
+  assert.equal(normalized[0].toolName, 'Read');
+  assert.deepEqual(normalized[1].toolArgs, { command: 'npm test' });
+});
+
 test('tool result and signature helpers stay compact', () => {
   const result = formatToolResultForConsole('Bash', { success: true, stdout: 'x'.repeat(1300) });
   assert.match(result, /truncated/);

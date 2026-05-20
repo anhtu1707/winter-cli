@@ -50,6 +50,10 @@ test('PromptBuilder buildSystemPrompt includes core principles', () => {
   assert(result.includes('Simplicity First'));
   assert(result.includes('Surgical Changes'));
   assert(result.includes('Goal-Driven'));
+  assert(result.includes('Agentic Execution'));
+  assert(result.includes('Debug Excellence'));
+  assert(result.includes('Design Excellence'));
+  assert(result.includes('Image Inputs'));
   assert(result.includes('Vietnamese'));
   assert(result.includes('Do not claim completion without a tool result'));
 });
@@ -65,6 +69,8 @@ test('PromptBuilder buildSystemPrompt includes project context when provided', (
 
   assert(result.includes('Project Context'));
   assert(result.includes('Some project specific context'));
+  assert(result.includes('Tool call compatibility'));
+  assert(result.includes('CALL_TOOL Read'));
 });
 
 test('PromptBuilder buildFastSystemPrompt returns short Vietnamese prompt', () => {
@@ -78,6 +84,7 @@ test('PromptBuilder buildFastSystemPrompt returns short Vietnamese prompt', () =
   assert(result.includes('Winter'));
   assert(result.includes('tiếng Việt'));
   assert(result.includes('tool'));
+  assert(result.includes('ảnh'));
 });
 
 test('PromptBuilder buildFastSystemPrompt includes memories when available', () => {
@@ -122,6 +129,8 @@ test('PromptBuilder buildAgentSystemPrompt includes CRITICAL AI RULES', () => {
   assert(result.includes('NO HALLUCINATION'));
   assert(result.includes('TOOL EXECUTION FIRST'));
   assert(result.includes('CODE QUALITY'));
+  assert(result.includes('AGENT LOOP'));
+  assert(result.includes('IMAGE INPUTS'));
 });
 
 test('PromptBuilder buildAgentSystemPrompt includes project context', () => {

@@ -1,4 +1,4 @@
-import { renderBox, terminalWidth } from './terminal-ui.js';
+import { renderBox, supportsUnicodeUi, terminalWidth } from './terminal-ui.js';
 
 export const colors = {
   reset: '\x1b[0m',
@@ -16,6 +16,15 @@ export const colors = {
   bgCyan: '\x1b[46m',
   bgMagenta: '\x1b[45m',
 };
+
+const DARK_THEME = { cyan: '\x1b[36m', blue: '\x1b[34m', magenta: '\x1b[35m', white: '\x1b[37m', red: '\x1b[31m', yellow: '\x1b[33m', green: '\x1b[32m', dim: '\x1b[2m' };
+const LIGHT_THEME = { cyan: '\x1b[96m', blue: '\x1b[94m', magenta: '\x1b[95m', white: '\x1b[97m', red: '\x1b[91m', yellow: '\x1b[93m', green: '\x1b[92m', dim: '\x1b[2m' };
+
+export function applyColorTheme(theme = 'dark') {
+  const selected = String(theme || '').toLowerCase() === 'light' ? LIGHT_THEME : DARK_THEME;
+  Object.assign(colors, selected, { theme: String(theme || 'dark').toLowerCase() === 'light' ? 'light' : 'dark' });
+  return colors.theme;
+}
 
 const snowflakeArt = String.raw`
                           ii
@@ -42,7 +51,7 @@ const snowflakeArt = String.raw`
                            ;i. 
 `;
 
-export const miniLogo = `${colors.cyan}❄${colors.reset}`;
+export const miniLogo = `${colors.cyan}${supportsUnicodeUi() ? '❄' : '*'}${colors.reset}`;
 
 export function welcomeBanner(version, info = {}) {
   const pPath = info.project || 'Unknown';
@@ -54,7 +63,8 @@ export function welcomeBanner(version, info = {}) {
   // Tính toán chiều rộng động (nhỏ hơn 5% cửa sổ, tối thiểu 60, tối đa 100 cho đẹp)
   const columns = process.stdout.columns || 80;
   const W = Math.max(60, Math.min(Math.floor(columns * 0.95), 100));
-  const dot = `${colors.green}●${colors.reset}`;
+  const unicode = supportsUnicodeUi();
+  const dot = `${colors.green}${unicode ? '●' : '*'}${colors.reset}`;
 
   // Căn giữa Snowflake Art
   const artLines = snowflakeArt.split('\n').filter(l => l.trim() !== '' || l.length > 0);
@@ -92,13 +102,13 @@ ${renderBox({
 }
 
 export const statusIcons = {
-  online: `${colors.green}●${colors.reset}`,
-  offline: `${colors.dim}○${colors.reset}`,
-  warning: `${colors.yellow}◆${colors.reset}`,
-  error: `${colors.red}✖${colors.reset}`,
-  success: `${colors.green}✓${colors.reset}`,
-  thinking: `${colors.cyan}◉${colors.reset}`,
-  queue: `${colors.magenta}◎${colors.reset}`,
+  online: `${colors.green}${supportsUnicodeUi() ? '●' : 'on'}${colors.reset}`,
+  offline: `${colors.dim}${supportsUnicodeUi() ? '○' : 'off'}${colors.reset}`,
+  warning: `${colors.yellow}${supportsUnicodeUi() ? '◆' : '!'}${colors.reset}`,
+  error: `${colors.red}${supportsUnicodeUi() ? '✖' : 'x'}${colors.reset}`,
+  success: `${colors.green}${supportsUnicodeUi() ? '✓' : 'ok'}${colors.reset}`,
+  thinking: `${colors.cyan}${supportsUnicodeUi() ? '◉' : '...'}${colors.reset}`,
+  queue: `${colors.magenta}${supportsUnicodeUi() ? '◎' : 'queue'}${colors.reset}`,
 };
 
 export function sessionIndicator(sessionId) {

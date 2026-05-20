@@ -12,6 +12,19 @@ import { ReasoningConfig, REASONING_LEVELS, complexityToReasoningLevel } from '.
 import { buildResourceContext, getRelevantDesignGuide } from '../context/resource-loader.js';
 import { classifyModelTier } from './model-capabilities.js';
 
+const RESERVED_CONFIG_SECTIONS = new Set([
+  'analytics',
+  'defaultprovider',
+  'mcp',
+  'permissions',
+  'project',
+  'reliability',
+  'routing',
+  'sandbox',
+  'session',
+  'ui',
+]);
+
 function isAuthError(error) {
   const msg = String(error?.message || error || '');
   return /\b(401|403)\b/.test(msg) || /authentication_error|invalid_api_key|unauthorized|auth\s*failed/i.test(msg);
@@ -92,6 +105,8 @@ export class AIProviderManager {
       };
     }
 
+    this.registerDynamicProviders(cfg);
+
     // Set default
     const defaultProvider = this.normalizeProviderName(cfg.defaultProvider || 'claude') === 'anthropic'
       ? 'claude'
@@ -160,6 +175,64 @@ export class AIProviderManager {
 
   normalizeProviderName(name) {
     return String(name || '').trim().toLowerCase();
+  }
+
+  registerDynamicProviders(cfg = {}) {
+    for (const [rawName, section] of Object.entries(cfg)) {
+      const providerName = this.normalizeProviderName(rawName);
+      if (this.providers[providerName]) continue;
+      if (!this.isProviderConfigSection(providerName, section)) continue;
+
+      this.providers[providerName] = this.buildProviderFromConfig(providerName, section);
+    }
+  }
+
+  isProviderConfigSection(providerName, section) {
+    if (RESERVED_CONFIG_SECTIONS.has(providerName)) return false;
+    if (providerName === 'anthropic') return false;
+    if (!section || typeof section !== 'object' || Array.isArray(section)) return false;
+
+    return Boolean(
+      section.baseURL ||
+      section.apiKey ||
+      section.authToken
+    );
+  }
+
+  buildProviderFromConfig(providerName, section) {
+    return {
+      name: this.getProviderDisplayName(providerName),
+      baseURL: section.baseURL || this.getProviderDefaultBaseURL(providerName),
+      authToken: section.authToken,
+      apiKey: section.apiKey || 'not-required',
+      model: section.model || this.getProviderDefaultModel(providerName),
+      ready: Boolean(section.authToken || section.apiKey || section.baseURL),
+    };
+  }
+
+  getProviderDisplayName(providerName) {
+    const labels = {
+      anthropic: 'Claude-compatible API',
+      claude: 'Claude-compatible API',
+      custom: 'Custom API',
+      groq: 'Groq',
+      ollama: 'Ollama Local',
+      openai: 'OpenAI',
+    };
+    return labels[providerName] || `${providerName} API`;
+  }
+
+  getProviderDefaultBaseURL(providerName) {
+    if (providerName === 'openai') return 'https://api.openai.com/v1';
+    if (providerName === 'groq') return 'https://api.groq.com/openai/v1';
+    if (providerName === 'ollama') return 'http://localhost:11434/v1';
+    return 'http://localhost:4000/v1';
+  }
+
+  getProviderDefaultModel(providerName) {
+    if (providerName === 'groq') return 'llama-3.1-70b-versatile';
+    if (providerName === 'ollama') return 'llama3';
+    return 'gpt-4-turbo';
   }
 
   async reload() {

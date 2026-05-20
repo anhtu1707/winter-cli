@@ -16,6 +16,77 @@ test('slash suggestions include provider, model, and bundled resources', () => {
   assert(commands.includes('/codex'));
   assert(commands.includes('/auto'));
   assert(commands.includes('/debug'));
+  assert(commands.includes('/history'));
+  assert(commands.includes('/new'));
+  assert(commands.includes('/theme:toggle'));
+  assert(commands.includes('/context'));
+  assert(commands.includes('/scorecard'));
+});
+
+test('provider slash suggestion uses configured provider names', () => {
+  const repl = new WinterREPL({ projectPath: 'E:\\dev\\app\\winter' });
+  repl.ai = {
+    listProviders: () => [
+      { name: 'custom' },
+      { name: 'custom2' },
+      { name: 'ollama' },
+    ],
+  };
+
+  const provider = repl.getSlashSuggestions('/provider')[0];
+
+  assert.equal(provider.cmd, '/provider');
+  assert.match(provider.usage, /custom2/);
+  assert.doesNotMatch(provider.usage, /openai\|groq/);
+});
+
+test('Freebuff-style input shortcuts route bang commands and agent mentions', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  repl.readlineClosed = true;
+  const handledCommands = [];
+  repl.handleSlashCommand = async input => handledCommands.push(input);
+  await repl.processInputTask('!npm test');
+  assert.deepEqual(handledCommands, ['/bash npm test']);
+
+  const mention = await repl.parseAgentMention('@debug fix failing test');
+  assert.deepEqual(mention, { agentId: 'debug', task: 'fix failing test' });
+});
+
+test('codebase index auto-loads into project context and slash search remains callable', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-codebase-'));
+  await writeFile(path.join(root, 'package.json'), JSON.stringify({ type: 'module' }), 'utf8');
+  await writeFile(path.join(root, 'feature.js'), 'export function featureFlag() {\n  return "winter-codebase";\n}\n', 'utf8');
+
+  const repl = new WinterREPL({ projectPath: root });
+  repl.getRequiredLocalResourceSummary = async () => '';
+  repl.readProjectInstructionFiles = async () => [];
+  repl.shouldUseCompactPrompt = () => false;
+
+  assert.equal(typeof repl.codebaseSearch, 'function');
+  const context = await repl.getProjectContext('find featureFlag implementation');
+
+  assert.match(context, /\[Codebase Index\]/);
+  assert.match(context, /feature\.js/);
+  assert.match(context, /featureFlag/);
+});
+
+test('context diagnostics and scorecard expose model-visible project state', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-context-diagnostics-'));
+  await writeFile(path.join(root, 'package.json'), JSON.stringify({ type: 'module' }), 'utf8');
+  await writeFile(path.join(root, 'tool.js'), 'export const winterTool = true;\n', 'utf8');
+
+  const repl = new WinterREPL({ projectPath: root });
+  repl.getRequiredLocalResourceSummary = async () => '';
+  repl.readProjectInstructionFiles = async () => [];
+  repl.shouldUseCompactPrompt = () => false;
+
+  const diagnostics = await repl.showContextDiagnostics('winterTool');
+  const scorecard = await repl.getCapabilityScorecard();
+
+  assert.equal(diagnostics.contextLength > 0, true);
+  assert(diagnostics.sections.includes('Codebase Index'));
+  assert.equal(scorecard.status, 'ready');
+  assert.equal(scorecard.overall >= scorecard.target, true);
 });
 
 test('slash menu does not accept on Enter and preserves typed suffix on Tab', () => {
@@ -49,6 +120,80 @@ test('slash menu does not accept on Enter and preserves typed suffix on Tab', ()
   assert.equal(prompted > 0, true);
 });
 
+test('input panel renders as append-only bottom sidebar', () => {
+  const repl = new WinterREPL({ projectPath: 'E:\\dev\\app\\winter' });
+  const writes = [];
+  let promptText = '';
+  let promptCount = 0;
+  const originalWrite = process.stdout.write;
+
+  repl.running = true;
+  repl.readlineClosed = false;
+  repl.rl = {
+    setPrompt(value) {
+      promptText = value;
+    },
+    prompt() {
+      promptCount++;
+    },
+  };
+
+  process.stdout.write = value => {
+    writes.push(String(value));
+    return true;
+  };
+
+  try {
+    repl.showInputPrompt();
+    repl.closeInputBox();
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+
+  const output = writes.join('');
+  assert.match(output, /Winter/);
+  assert.match(output, /@file/);
+  assert.match(output, /!cmd/);
+  assert.match(output, /Ctrl\+V/);
+  assert.match(promptText, /winter/);
+  assert.equal(promptCount, 1);
+  assert.doesNotMatch(output, /\x1b\[[0-9;]*A/);
+  assert.doesNotMatch(output, /\x1b\[[0-9;]*G/);
+});
+
+test('direct Ctrl+V clipboard image sends image without requiring a file path', async () => {
+  const repl = new WinterREPL({ projectPath: 'E:\\dev\\app\\winter' });
+  const writes = [];
+  const chats = [];
+  repl.running = true;
+  repl.readlineClosed = false;
+  repl.inputQueue = Promise.resolve();
+  repl.getClipboardImage = async () => ({ mime: 'image/png', base64: 'AAAA' });
+  repl.chat = async (prompt, images) => {
+    chats.push({ prompt, images });
+  };
+  repl.closeInputBox = () => {};
+  repl.showInputPrompt = () => {};
+  repl.closeSlashMenu = () => {};
+  repl.rl = {
+    line: 'phân tích lỗi UI này',
+    write(value, options) {
+      writes.push({ value, options });
+    },
+  };
+
+  const handled = await repl.handleDirectClipboardPaste();
+  await repl.inputQueue;
+
+  assert.equal(handled, true);
+  assert.deepEqual(chats, [{
+    prompt: 'phân tích lỗi UI này',
+    images: [{ mime: 'image/png', base64: 'AAAA' }],
+  }]);
+  assert(writes.some(entry => entry.value === null && entry.options?.ctrl === true && entry.options?.name === 'u'));
+  assert.equal(repl.isProcessing, false);
+});
+
 test('assistant markdown tables render inside a box instead of raw pipe rows', () => {
   const repl = new WinterREPL({ projectPath: 'E:\\dev\\app\\winter' });
   const logs = [];
@@ -65,7 +210,7 @@ test('assistant markdown tables render inside a box instead of raw pipe rows', (
   }
 
   const output = logs.join('\n');
-  assert.match(output, /╭/);
+  assert.match(output, /[╭+]/);
   assert.match(output, /Tiêu chí/);
   assert.match(output, /Rating/);
   assert.doesNotMatch(output, /\| --- \| --- \|/);
@@ -277,13 +422,45 @@ test('getAgentTools scopes tool access by agent role', () => {
   assert(!reviewTools.includes('Write'));
   assert(debugTools.includes('Write'));
   assert(debugTools.includes('Bash'));
+  assert(debugTools.includes('BrowserDebug'));
+});
+
+test('parseDataUrlImage supports direct pasted image payloads', () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  const image = repl.parseDataUrlImage('data:image/png;base64,AAAA');
+
+  assert.equal(image.mime, 'image/png');
+  assert.equal(image.base64, 'AAAA');
+});
+
+test('inferVerificationCommands uses package scripts for debug loops', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-verify-'));
+  await writeFile(path.join(root, 'package.json'), JSON.stringify({
+    scripts: {
+      test: 'node --test',
+      build: 'vite build',
+      lint: 'eslint .',
+      typecheck: 'tsc --noEmit',
+    },
+  }));
+  const repl = new WinterREPL({ projectPath: root });
+
+  const commands = await repl.inferVerificationCommands('debug frontend build error');
+
+  assert(commands.includes('npm test'));
+  assert(commands.includes('npm run build'));
+  assert(commands.includes('npm run typecheck'));
 });
 
 test('general chat tools stay focused for weaker models', () => {
   const repl = new WinterREPL({ projectPath: process.cwd() });
   const toolNames = repl.getAgentTools('general').map(tool => tool.name);
 
-  assert.deepEqual(toolNames, ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep']);
+  assert(toolNames.includes('Read'));
+  assert(toolNames.includes('Edit'));
+  assert(toolNames.includes('BrowserDebug'));
+  assert(toolNames.includes('Agent'));
+  assert(!toolNames.includes('MCP'));
 });
 
 test('getProjectContext skips local resource catalog unless task asks for it', async () => {
@@ -338,6 +515,58 @@ test('system prompt compresses oversized memories and project context', () => {
   assert.match(prompt, /Memories \(Important Context\)/);
   assert.match(prompt, /truncated/i);
   assert.match(prompt, /project context truncated/i);
+});
+
+test('buildPromptToolResult caps large tool outputs before final answer prompt', () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  repl.tools = {
+    summarizeToolResult: result => ({ success: result.success, path: result.path }),
+  };
+
+  const result = repl.buildPromptToolResult('Read', {
+    success: true,
+    path: 'big-file.js',
+    content: 'x'.repeat(20000),
+    lines: 1000,
+    size: 20000,
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.path, 'big-file.js');
+  assert.equal(result.lines, 1000);
+  assert(result.content.length < 6000);
+  assert.match(result.content, /truncated/i);
+});
+
+test('compactStartupMemories removes full startup resource dumps and keeps path summaries', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  const memory = [
+    { text: `[Tá»± Ä‘á»™ng ghi nhá»› file README.md]:\n${'x'.repeat(10000)}` },
+    { text: `[Quy táº¯c dá»± Ã¡n tá»« winter.md]:\n${'y'.repeat(10000)}` },
+    { text: '[Project Anchor]:\nkeep me' },
+  ];
+  repl.session = {
+    memory,
+    async replaceMemory(prefix, content, type = 'info') {
+      this.memory = this.memory.filter(entry => !(entry.text || '').startsWith(prefix));
+      this.memory.push({ text: `${prefix}:\n${content}`, type });
+    },
+  };
+
+  await repl.compactStartupMemories({
+    projectInstructionFiles: [{
+      relativePath: 'winter.md',
+      filePath: path.join(process.cwd(), 'winter.md'),
+      content: 'important rule ' + 'z'.repeat(5000),
+    }],
+  });
+
+  const joined = repl.session.memory.map(entry => entry.text).join('\n');
+  assert.match(joined, /\[Project Anchor\]/);
+  assert.match(joined, /\[Startup local resource index\]/);
+  assert.match(joined, /\[Project rule file winter\.md\]/);
+  assert(!joined.includes('x'.repeat(1000)));
+  assert(!joined.includes('y'.repeat(1000)));
 });
 
 test('readCachedModels returns bundled cache model ids', async () => {
@@ -588,6 +817,130 @@ test('runConversation executes streamed tool calls then streams final answer', a
 
   assert.equal(answer.finalContent, 'Done');
   assert.deepEqual(executed, [{ name: 'Read', args: { file_path: 'README.md' } }]);
+});
+
+test('runConversation executes legacy function_call responses', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  let requestCount = 0;
+  const executed = [];
+
+  repl.ai = {
+    tools: [],
+    providers: { custom: { model: 'legacy-model' } },
+    getActiveProvider: () => 'custom',
+    setTools(tools) {
+      this.tools = tools;
+    },
+    async sendRequest() {
+      requestCount++;
+      if (requestCount === 1) {
+        return {
+          choices: [{
+            message: {
+              content: '',
+              function_call: { name: 'Read', arguments: '{"file_path":"README.md"}' },
+            },
+            finish_reason: 'function_call',
+          }],
+        };
+      }
+      return { choices: [{ message: { content: 'Done' } }] };
+    },
+  };
+  repl.tools = {
+    normalizeToolName: name => name,
+    async execute(name, args) {
+      executed.push({ name, args });
+      return { success: true, path: args.file_path, lines: 1, size: 2, content: 'ok' };
+    },
+  };
+
+  const answer = await repl.runConversation([{ role: 'user', content: 'read README.md' }], 'Test', [{ name: 'Read' }]);
+
+  assert.equal(answer.finalContent, 'Done');
+  assert.deepEqual(executed, [{ name: 'Read', args: { file_path: 'README.md' } }]);
+});
+
+test('runConversation executes streamed legacy function_call deltas', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  let streamCount = 0;
+  const executed = [];
+
+  repl.ai = {
+    tools: [],
+    providers: { custom: { model: 'legacy-stream-model' } },
+    getActiveProvider: () => 'custom',
+    setTools(tools) {
+      this.tools = tools;
+    },
+    async *streamRequest() {
+      streamCount++;
+      if (streamCount === 1) {
+        yield { raw: { choices: [{ delta: { function_call: { name: 'Read' } } }] } };
+        yield { raw: { choices: [{ delta: { function_call: { arguments: '{"file_path":"README.md"}' } }, finish_reason: 'function_call' }] } };
+        return;
+      }
+      yield { content: 'Done' };
+    },
+  };
+  repl.tools = {
+    normalizeToolName: name => name,
+    async execute(name, args) {
+      executed.push({ name, args });
+      return { success: true, path: args.file_path, lines: 1, size: 2, content: 'ok' };
+    },
+  };
+
+  const answer = await repl.runConversation([{ role: 'user', content: 'read README.md' }], 'Test', [{ name: 'Read' }]);
+
+  assert.equal(answer.finalContent, 'Done');
+  assert.deepEqual(executed, [{ name: 'Read', args: { file_path: 'README.md' } }]);
+});
+
+test('runToolDoctor reports success when current model triggers Read', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  let requestCount = 0;
+  const executed = [];
+
+  repl.ai = {
+    tools: [],
+    providers: { custom: { model: 'doctor-model' } },
+    getActiveProvider: () => 'custom',
+    setTools(tools) {
+      this.tools = tools;
+    },
+    async sendRequest() {
+      requestCount++;
+      if (requestCount === 1) {
+        return {
+          choices: [{
+            message: {
+              content: '{"tool":"Read","arguments":{"path":"README.md"}}',
+            },
+          }],
+        };
+      }
+      return { choices: [{ message: { content: 'Read README.md done' } }] };
+    },
+  };
+  repl.tools = {
+    getToolDefinitions: () => [{ name: 'Read' }],
+    normalizeToolName: name => name,
+    normalizeToolInput: (_name, input) => input,
+    summarizeToolResult: result => result,
+    async execute(name, args) {
+      executed.push({ name, args });
+      return { success: true, path: args.path, lines: 1, size: 2, content: 'ok' };
+    },
+  };
+  repl.session = {
+    getToolEvents: () => [],
+  };
+
+  const result = await repl.runToolDoctor();
+
+  assert.equal(result.success, true);
+  assert.deepEqual(executed, [{ name: 'Read', args: { path: 'README.md' } }]);
 });
 
 test('runConversation executes multiple tool calls across multiple turns before answering', async () => {

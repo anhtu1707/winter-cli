@@ -17,6 +17,28 @@ const WIDE_CODE_POINT_RANGES = [
   [0x1fa70, 0x1faff],
 ];
 
+const UNICODE_BOX = {
+  topLeft: '╭',
+  topRight: '╮',
+  bottomLeft: '╰',
+  bottomRight: '╯',
+  horizontal: '─',
+  vertical: '│',
+  teeLeft: '├',
+  teeRight: '┤',
+};
+
+const ASCII_BOX = {
+  topLeft: '+',
+  topRight: '+',
+  bottomLeft: '+',
+  bottomRight: '+',
+  horizontal: '-',
+  vertical: '|',
+  teeLeft: '+',
+  teeRight: '+',
+};
+
 export function stripAnsi(text) {
   return String(text ?? '').replace(ANSI_PATTERN, '');
 }
@@ -44,6 +66,17 @@ export function charDisplayWidth(char) {
 export function terminalWidth(min = 72, max = 120, fallback = 88) {
   const columns = process.stdout.columns || fallback;
   return Math.max(min, Math.min(columns - 2, max));
+}
+
+export function supportsUnicodeUi(env = process.env, platform = process.platform) {
+  if (env.WINTER_ASCII_UI === '1' || env.WINTER_ASCII_UI === 'true') return false;
+  if (env.WINTER_UNICODE_UI === '1' || env.WINTER_UNICODE_UI === 'true') return true;
+  if (platform !== 'win32') return true;
+  return Boolean(env.WT_SESSION || env.TERM_PROGRAM || env.TERM || env.ConEmuANSI === 'ON');
+}
+
+export function getBoxChars() {
+  return supportsUnicodeUi() ? UNICODE_BOX : ASCII_BOX;
 }
 
 export function padVisible(text, width, fill = ' ') {
@@ -94,16 +127,34 @@ export function wrapText(text, width) {
 export function chunkText(text, width) {
   const chars = Array.from(stripAnsi(text));
   const chunks = [];
-  for (let i = 0; i < chars.length; i += width) {
-    chunks.push(chars.slice(i, i + width).join(''));
+  let current = '';
+  let currentWidth = 0;
+  for (const char of chars) {
+    const charWidth = charDisplayWidth(char);
+    if (current && currentWidth + charWidth > width) {
+      chunks.push(current);
+      current = '';
+      currentWidth = 0;
+    }
+    current += char;
+    currentWidth += charWidth;
   }
+  if (current) chunks.push(current);
   return chunks.length > 0 ? chunks : [''];
 }
 
-export function renderBox({ title = '', body = [], width, borderColor = '\x1b[35m', titleColor = '\x1b[36m', reset = '\x1b[0m' }) {
+export function renderBox({
+  title = '',
+  body = [],
+  width,
+  borderColor = '\x1b[35m',
+  titleColor = '\x1b[36m',
+  reset = '\x1b[0m',
+  boxChars = getBoxChars(),
+} = {}) {
   const innerWidth = Math.max(28, (width || terminalWidth()) - 4);
-  const top = `${borderColor}╭${'─'.repeat(innerWidth)}╮${reset}`;
-  const bottom = `${borderColor}╰${'─'.repeat(innerWidth)}╯${reset}`;
+  const top = `${borderColor}${boxChars.topLeft}${boxChars.horizontal.repeat(innerWidth)}${boxChars.topRight}${reset}`;
+  const bottom = `${borderColor}${boxChars.bottomLeft}${boxChars.horizontal.repeat(innerWidth)}${boxChars.bottomRight}${reset}`;
   const lines = [];
   const titleText = title ? ` ${title} ` : '';
 
@@ -115,9 +166,9 @@ export function renderBox({ title = '', body = [], width, borderColor = '\x1b[35
       const padding = Math.max(0, innerWidth - visible);
       const left = index === 0 ? Math.floor(padding / 2) : 0;
       const right = index === 0 ? padding - left : padding;
-      lines.push(`${borderColor}│${reset}${' '.repeat(left)}${titleColor}${plainSegment}${reset}${' '.repeat(right)}${borderColor}│${reset}`);
+      lines.push(`${borderColor}${boxChars.vertical}${reset}${' '.repeat(left)}${titleColor}${plainSegment}${reset}${' '.repeat(right)}${borderColor}${boxChars.vertical}${reset}`);
     });
-    lines.push(`${borderColor}├${'─'.repeat(innerWidth)}┤${reset}`);
+    lines.push(`${borderColor}${boxChars.teeLeft}${boxChars.horizontal.repeat(innerWidth)}${boxChars.teeRight}${reset}`);
   }
 
   for (const item of body) {
@@ -125,13 +176,13 @@ export function renderBox({ title = '', body = [], width, borderColor = '\x1b[35
     if (visibleWidth(rawText) <= innerWidth) {
       const visible = visibleWidth(rawText);
       const padding = Math.max(0, innerWidth - visible);
-      lines.push(`${borderColor}│${reset} ${rawText}${' '.repeat(Math.max(0, padding - 1))}${borderColor}│${reset}`);
+      lines.push(`${borderColor}${boxChars.vertical}${reset} ${rawText}${' '.repeat(Math.max(0, padding - 1))}${borderColor}${boxChars.vertical}${reset}`);
       continue;
     }
 
     const wrapped = wrapText(rawText, innerWidth);
     if (wrapped.length === 0) {
-      lines.push(`${borderColor}│${reset} ${' '.repeat(Math.max(0, innerWidth - 1))}${borderColor}│${reset}`);
+      lines.push(`${borderColor}${boxChars.vertical}${reset} ${' '.repeat(Math.max(0, innerWidth - 1))}${borderColor}${boxChars.vertical}${reset}`);
       continue;
     }
 
@@ -139,7 +190,7 @@ export function renderBox({ title = '', body = [], width, borderColor = '\x1b[35
       const text = stripAnsi(segment);
       const visible = visibleWidth(text);
       const padding = Math.max(0, innerWidth - visible);
-      lines.push(`${borderColor}│${reset} ${text}${' '.repeat(Math.max(0, padding - 1))}${borderColor}│${reset}`);
+      lines.push(`${borderColor}${boxChars.vertical}${reset} ${text}${' '.repeat(Math.max(0, padding - 1))}${borderColor}${boxChars.vertical}${reset}`);
     }
   }
 
@@ -148,11 +199,12 @@ export function renderBox({ title = '', body = [], width, borderColor = '\x1b[35
 
 export function renderKeyValueRows(rows, width, colors) {
   const innerWidth = Math.max(28, (width || terminalWidth()) - 4);
+  const boxChars = getBoxChars();
   return rows.map(([left, right]) => {
     const leftWidth = Math.floor(innerWidth * 0.5);
     const rightWidth = innerWidth - leftWidth - 1;
     const leftText = padVisible(left, leftWidth);
     const rightText = padVisible(right, rightWidth);
-    return `${colors.border}│${colors.reset} ${leftText}${colors.spacer}${rightText} ${colors.border}│${colors.reset}`;
+    return `${colors.border}${boxChars.vertical}${colors.reset} ${leftText}${colors.spacer}${rightText} ${colors.border}${boxChars.vertical}${colors.reset}`;
   });
 }

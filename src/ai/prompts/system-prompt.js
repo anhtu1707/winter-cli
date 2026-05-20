@@ -9,10 +9,13 @@ import { formatRuntimeEnvironmentSummary, getRuntimeEnvironment } from '../../cl
 
 const BASE_PRINCIPLES = [
   'Execute, don\'t describe - Do the work, don\'t write plans about doing the work',
-  'Think Before Coding - State assumptions, ask when unclear',
+  'Agent Loop - Inspect real state, hypothesize, act with tools, verify, then answer',
+  'Think Before Coding - State assumptions only when they affect the next action',
   'Simplicity First - Minimum code that solves the problem',
   'Surgical Changes - Touch only what you must',
   'Goal-Driven Execution - Define success criteria, verify results',
+  'Debug Excellence - Reproduce/inspect the failing path, patch root cause, verify with the closest command',
+  'Design Excellence - Inspect existing UI/resources, then build polished responsive interfaces',
 ];
 
 const TOOL_CATEGORIES = {
@@ -78,9 +81,11 @@ function buildCompactSmallModelPrompt(options = {}) {
     '',
     '## Operating Rules',
     '1. Understand the user request first. If project state matters, inspect files before answering.',
-    '2. Keep context tight. Use only relevant tools and avoid long explanations.',
-    '3. For coding: Read/Grep/Glob -> Edit/Write -> Bash/test. Do not guess file paths.',
-    '4. Final answer in Vietnamese. Mention changed files and verification only.',
+    '2. Operate as an agent: inspect -> hypothesize -> act -> verify -> final.',
+    '3. Keep context tight. Use only relevant tools and avoid long explanations.',
+    '4. For coding/debug: Read/Grep/Glob/logs -> Edit/Write -> Bash/test/browser smoke. Do not guess file paths.',
+    '5. For UI/design: inspect existing components/styles/resources before changing visuals.',
+    '6. Final answer in Vietnamese. Mention changed files and verification only.',
     '',
   ];
 
@@ -91,6 +96,7 @@ function buildCompactSmallModelPrompt(options = {}) {
   parts.push(
     '## Response Shape',
     '- If action is needed, use tools instead of describing the action.',
+    '- If an image is provided, analyze the image directly and tie findings to project files when relevant.',
     '- Keep final output short and concrete.',
   );
 
@@ -108,6 +114,9 @@ function buildStandardSystemPrompt(options = {}) {
     '## Tool Usage',
     'Use tools when they materially improve correctness. Inspect before editing. Verify after changes.',
     'Never invent file paths, APIs, command output, or test results.',
+    'For debug work, locate the first hard failure, patch the root cause, and verify with the closest test/build/browser smoke.',
+    'For design/UI work, inspect the existing interface and design resources first; avoid generic placeholder layouts.',
+    'If the user attaches or pastes an image, analyze it as primary evidence.',
     '',
   ];
 
@@ -160,6 +169,7 @@ export function buildAgentSystemPrompt(role, { tools = [], modelTier } = {}) {
     plan: 'You analyze codebases and plan multi-step implementations. Output clear steps.',
     review: 'You review code for bugs, style issues, and improvements. Be critical but constructive.',
     debug: 'You are a debug specialist. Use systematic elimination to find root causes.',
+    design: 'You are a design implementation specialist. Inspect the current UI, reuse the design system, and ship polished responsive interfaces.',
     research: 'You search codebases and documentation to answer questions comprehensively.',
     browser: 'You interact with web pages via browser automation. Report findings clearly.',
     coding: 'You solve coding tasks directly. Inspect files, edit surgically, and verify.',

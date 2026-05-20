@@ -136,6 +136,66 @@ test('switchProvider reloads config before rejecting a provider', async () => {
   assert.equal(ai.providers.custom.model, 'custom-model');
 });
 
+test('custom named providers from config are listed and switchable', async () => {
+  const ai = new AIProviderManager({
+    async load() {
+      return {
+        defaultProvider: 'ollama',
+        custom2: {
+          baseURL: 'https://api.zora.io.vn/v1',
+          apiKey: 'not-required',
+          model: 'gpt-5.4-medium',
+        },
+        ollama: {
+          baseURL: 'http://ollama.test/v1',
+          model: 'llama3',
+        },
+        project: {
+          current: 'E:\\dev\\tool-scv\\tool-scv',
+        },
+        permissions: {
+          allowlist: { tools: ['Bash'] },
+        },
+      };
+    },
+  });
+  ai.loadAuthToken = async () => null;
+
+  await ai.init();
+
+  const providers = ai.listProviders().map(provider => provider.name);
+  assert.ok(providers.includes('custom2'));
+  assert.ok(!providers.includes('project'));
+  assert.ok(!providers.includes('permissions'));
+
+  const switched = await ai.switchProvider(' CUSTOM2 ');
+
+  assert.equal(switched, 'custom2');
+  assert.equal(ai.getActiveProvider(), 'custom2');
+  assert.equal(ai.providers.custom2.baseURL, 'https://api.zora.io.vn/v1');
+  assert.equal(ai.providers.custom2.model, 'gpt-5.4-medium');
+});
+
+test('custom named provider can be the default provider', async () => {
+  const ai = new AIProviderManager({
+    async load() {
+      return {
+        defaultProvider: 'custom2',
+        custom2: {
+          baseURL: 'https://api.zora.io.vn/v1',
+          model: 'gpt-5.5-low',
+        },
+      };
+    },
+  });
+  ai.loadAuthToken = async () => null;
+
+  await ai.init();
+
+  assert.equal(ai.getActiveProvider(), 'custom2');
+  assert.equal(ai.providers.custom2.apiKey, 'not-required');
+});
+
 test('anthropic config is accepted as claude-compatible provider config', async () => {
   const ai = new AIProviderManager({
     async load() {

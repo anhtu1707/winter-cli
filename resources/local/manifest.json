@@ -33,6 +33,18 @@
       "bytes": 6068
     },
     {
+      "name": "page-agent",
+      "path": "resources/local/page-agent",
+      "files": 238,
+      "bytes": 1365746
+    },
+    {
+      "name": "ecc",
+      "path": "resources/local/ecc",
+      "files": 320,
+      "bytes": 12488896
+    },
+    {
       "name": "manifest.json",
       "path": "resources/local/manifest.json",
       "files": 1,

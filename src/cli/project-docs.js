@@ -161,6 +161,8 @@ ${instructionFiles.length ? instructionFiles.map(file => `- [${file}](./${file})
 - Karpathy tools: \`${karpathyPath}\`
 - Agents guide: \`${agentsPath}\`
 - Design corpus: \`${path.relative(projectPath, resourcePaths.designs)}\`
+- Page Agent (GUI Agent): \`${path.relative(projectPath, resourcePaths.pageAgent)}\`
+  Apply: for browser automation, form filling, SaaS AI copilot, accessibility, and multi-page agent tasks. In-page JavaScript, no browser extension needed.
 
 ## Resource Inventory
 ${resources.length ? resources.map(resource => `- **${resource.name}**: ${resource.files} files, ${formatBytes(resource.bytes)}`).join('\n') : '- Không đọc được manifest resource.'}

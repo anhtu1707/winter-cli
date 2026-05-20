@@ -278,6 +278,28 @@ test('mcp and permissions commands update config state', async () => {
   assert(logs.some(line => line.includes('Allowed tool')));
 });
 
+test('ecc and page-agent slash commands browse bundled resources', async () => {
+  const parser = createParser();
+  const logs = [];
+  const originalLog = console.log;
+
+  console.log = (...args) => logs.push(args.join(' '));
+  try {
+    await parser.parse(['/ecc']);
+    await parser.parse(['/ecc', 'search', 'hook']);
+    await parser.parse(['/page-agent']);
+    await parser.parse(['/page-agent', 'search', 'dom']);
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert(logs.some(line => line.includes('ECC:')));
+  assert(logs.some(line => line.includes('ECC search "hook"')));
+  assert(logs.some(line => line.includes('page-agent:')));
+  assert(logs.some(line => line.includes('Page Agent search "dom"')));
+  assert(!logs.some(line => line.includes('Unknown slash command')));
+});
+
 test('plugin manager loads local plugin files via file URLs', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'winter-plugin-load-'));
   const pluginsDir = path.join(root, '.winter', 'plugins');

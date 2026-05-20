@@ -13,6 +13,10 @@ import { MCPClient } from '../mcp/client.js';
 import { BenchmarkRunner } from '../ai/benchmark.js';
 import { redactSecrets } from './secret-env.js';
 import { formatRuntimeEnvironmentSummary, getRuntimeEnvironment } from './runtime-env.js';
+import { ContextLoader } from './context-loader.js';
+import { ECCManager } from './ecc.js';
+import { promises as fs } from 'fs';
+import path from 'path';
 
 export { redactSecrets } from './secret-env.js';
 
@@ -43,6 +47,9 @@ export class CommandParser {
     this.design = new DesignCommands(this.session, this.config);
     this.skills = new SkillManager(this.session);
     this.plugins = new PluginManager(this.session);
+    this.projectPath = process.cwd();
+    this.contextLoader = new ContextLoader({ projectPath: this.projectPath, session: this.session });
+    this.ecc = new ECCManager({ projectPath: this.projectPath, config: this.config });
 
     this.commands = {
       chat: this.handleChat.bind(this),
@@ -54,6 +61,11 @@ export class CommandParser {
       plugin: this.handlePlugin.bind(this),
       mcp: this.handleMcp.bind(this),
       permissions: this.handlePermissions.bind(this),
+      ecc: this.handleEcc.bind(this),
+      'page-agent': this.handlePageAgent.bind(this),
+      pageagent: this.handlePageAgent.bind(this),
+      resources: this.handleResources.bind(this),
+      'memory-vault': this.handleMemoryVault.bind(this),
       provider: this.handleProvider.bind(this),
       providers: this.showProviders.bind(this),
       model: this.handleModel.bind(this),
@@ -99,6 +111,7 @@ export class CommandParser {
       '/remember': (args) => this.session.addToMemory(args.join(' ')),
       '/forget': (args) => this.session.clearMemory(args.length > 0 ? args.join(' ') : null),
       '/memories': () => this.showMemories(),
+      '/memory-vault': () => this.handleMemoryVault(args),
       '/plans': () => this.showPlans(),
       '/cache': () => this.handleCache(args),
       '/provider': () => this.handleProvider(args),
@@ -107,6 +120,10 @@ export class CommandParser {
       '/models': () => this.showModels(),
       '/mcp': () => this.handleMcp(args),
       '/permissions': () => this.handlePermissions(args),
+      '/ecc': () => this.handleEcc(args),
+      '/page-agent': () => this.handlePageAgent(args),
+      '/pageagent': () => this.handlePageAgent(args),
+      '/resources': () => this.handleResources(args),
       '/debug': () => this.handleDebug(args),
       '/auto': () => this.handleDebug(args),
       '/exit': () => process.exit(0),
@@ -118,6 +135,211 @@ export class CommandParser {
     } else {
       console.log(`${colors.yellow}Unknown slash command: ${cmd}${colors.reset}`);
     }
+  }
+
+  getResourcePaths() {
+    return this.contextLoader.getResourcePaths();
+  }
+
+  async listPathEntries(target, limit = 80) {
+    try {
+      const entries = await fs.readdir(target, { withFileTypes: true });
+      return entries
+        .filter(entry => entry.isDirectory() || entry.isFile())
+        .map(entry => ({ name: entry.name, isDirectory: entry.isDirectory() }))
+        .sort((a, b) => {
+          if (a.isDirectory && !b.isDirectory) return -1;
+          if (!a.isDirectory && b.isDirectory) return 1;
+          return a.name.localeCompare(b.name);
+        })
+        .slice(0, limit);
+    } catch {
+      return [];
+    }
+  }
+
+  async printPathPreview(target, label, limit = 40) {
+    try {
+      const stat = await fs.stat(target);
+      console.log(`${colors.cyan}${label}:${colors.reset} ${target}`);
+      if (stat.isDirectory()) {
+        const entries = await this.listPathEntries(target, limit);
+        if (entries.length === 0) {
+          console.log(`  ${colors.dim}(empty)${colors.reset}`);
+          return;
+        }
+        entries.forEach(entry => {
+          console.log(`  ${entry.isDirectory ? '[dir] ' : '[file]'} ${entry.name}`);
+        });
+        return;
+      }
+
+      const content = await fs.readFile(target, 'utf8');
+      console.log(content.slice(0, 4000));
+      if (content.length > 4000) {
+        console.log(`${colors.dim}... (${content.length - 4000} more chars)${colors.reset}`);
+      }
+    } catch (error) {
+      console.log(`${colors.red}${label} not available: ${error.message}${colors.reset}`);
+    }
+  }
+
+  async handleMemoryVault(args = []) {
+    const root = path.join(this.projectPath, '.winter', 'memory');
+    const command = (args[0] || 'info').toLowerCase();
+    if (command === 'list') {
+      await this.printPathPreview(root, 'Winter memory vault', 80);
+      return;
+    }
+
+    const indexPath = path.join(root, 'index.md');
+    try {
+      const stat = await fs.stat(root);
+      const index = await fs.readFile(indexPath, 'utf8').catch(() => '');
+      const noteCount = (index.match(/^\- \[\[/gm) || []).length;
+      console.log(`${colors.cyan}Winter memory vault:${colors.reset} ${root}`);
+      console.log(`  ${colors.dim}Created:${colors.reset} ${stat.birthtime.toLocaleString()}`);
+      console.log(`  ${colors.dim}Index notes:${colors.reset} ${noteCount}`);
+      if (index.trim()) {
+        console.log(`\n${colors.dim}${index.split(/\r?\n/).slice(0, 20).join('\n')}${colors.reset}`);
+      }
+    } catch {
+      console.log(`${colors.yellow}No TokenJuice memory vault yet. It will be created at ${root} after a large tool result is compressed.${colors.reset}`);
+    }
+  }
+
+  async searchResourceFiles(root, query, limit = 30) {
+    const matches = [];
+    const needle = String(query || '').toLowerCase();
+    if (!needle) return matches;
+
+    const walk = async (dir) => {
+      if (matches.length >= limit) return;
+      const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        if (matches.length >= limit) break;
+        const fullPath = path.join(dir, entry.name);
+        const relativePath = path.relative(root, fullPath).replace(/\\/g, '/');
+        if (entry.isDirectory()) {
+          if (['node_modules', '.git', 'dist', 'build', '.next'].includes(entry.name)) continue;
+          if (entry.name.toLowerCase().includes(needle)) matches.push({ relativePath, isDirectory: true });
+          await walk(fullPath);
+        } else if (entry.isFile() && entry.name.toLowerCase().includes(needle)) {
+          matches.push({ relativePath, isDirectory: false });
+        }
+      }
+    };
+
+    await walk(root);
+    return matches;
+  }
+
+  async handleResources() {
+    const manifestPath = this.getResourcePaths().manifest;
+    try {
+      const raw = await fs.readFile(manifestPath, 'utf8');
+      const manifest = JSON.parse(raw.replace(/^\uFEFF/, ''));
+      console.log(`${colors.cyan}Local resources:${colors.reset} ${manifest.root || this.getResourcePaths().localRoot}`);
+      for (const item of manifest.localResources || []) {
+        const sizeMb = item.bytes ? `${(item.bytes / 1024 / 1024).toFixed(2)} MB` : 'n/a';
+        console.log(`  ${item.name}: ${item.files} file(s), ${sizeMb}`);
+      }
+    } catch (error) {
+      console.log(`${colors.red}Resources manifest not available: ${error.message}${colors.reset}`);
+    }
+  }
+
+  async handlePageAgent(args = []) {
+    const root = this.getResourcePaths().pageAgent;
+    const [action = 'info', ...rest] = args;
+
+    if (action === 'search') {
+      const query = rest.join(' ');
+      if (!query) {
+        console.log(`${colors.yellow}Usage: winter page-agent search <query>${colors.reset}`);
+        return;
+      }
+      const matches = await this.searchResourceFiles(root, query);
+      console.log(`${colors.cyan}Page Agent search "${query}":${colors.reset}`);
+      if (matches.length === 0) {
+        console.log(`  ${colors.dim}No results${colors.reset}`);
+        return;
+      }
+      matches.forEach(match => console.log(`  ${match.isDirectory ? '[dir] ' : '[file]'} ${match.relativePath}`));
+      return;
+    }
+
+    if (action === 'read') {
+      const requestedPath = rest.join(' ') || 'README.md';
+      const target = path.resolve(root, requestedPath);
+      if (!target.startsWith(path.resolve(root))) {
+        console.log(`${colors.red}Path must stay inside page-agent resources.${colors.reset}`);
+        return;
+      }
+      await this.printPathPreview(target, `page-agent/${requestedPath}`, 80);
+      return;
+    }
+
+    if (action === 'docs') {
+      await this.printPathPreview(path.join(root, 'docs'), 'page-agent/docs', 80);
+      return;
+    }
+
+    await this.printPathPreview(root, 'page-agent', 80);
+    console.log(`${colors.dim}Commands: page-agent search <query>, page-agent read <path>, page-agent docs${colors.reset}`);
+  }
+
+  async handleEcc(args = []) {
+    const [action = 'info', ...rest] = args;
+
+    if (action === 'info') {
+      const info = await this.ecc.getInfo();
+      if (!info.installed) {
+        console.log(`${colors.yellow}${info.error}${colors.reset}`);
+        return;
+      }
+      console.log(`${colors.cyan}ECC:${colors.reset} ${this.ecc.getEccPath()}`);
+      console.log(`  ${colors.dim}Commit:${colors.reset} ${info.gitSha || 'N/A'}`);
+      console.log(`  ${colors.dim}Files:${colors.reset} ${info.fileCount} files, ${info.totalMB} MB`);
+      console.log(`  ${colors.dim}Sync:${colors.reset} ${info.lastSyncStr}`);
+      console.log(`${colors.dim}Commands: ecc browse <section>, ecc search <query>, ecc sync${colors.reset}`);
+      return;
+    }
+
+    if (action === 'browse') {
+      const sectionName = rest.join(' ') || 'skills';
+      const result = await this.ecc.browseSection(sectionName);
+      if (result.error) {
+        console.log(`${colors.red}${result.error}${colors.reset}`);
+        return;
+      }
+      console.log(`${colors.cyan}ECC ${result.section}:${colors.reset} ${result.description}`);
+      result.entries?.forEach(entry => console.log(`  ${entry.isDirectory ? '[dir] ' : '[file]'} ${entry.name}`));
+      return;
+    }
+
+    if (action === 'search') {
+      const query = rest.join(' ');
+      if (!query) {
+        console.log(`${colors.yellow}Usage: winter ecc search <query>${colors.reset}`);
+        return;
+      }
+      const result = await this.ecc.search(query);
+      console.log(`${colors.cyan}ECC search "${query}":${colors.reset}`);
+      if (result.matches.length === 0) {
+        console.log(`  ${colors.dim}No results${colors.reset}`);
+        return;
+      }
+      result.matches.forEach(match => console.log(`  [${match.section}] ${match.isDirectory ? '[dir] ' : '[file]'} ${match.name}`));
+      return;
+    }
+
+    if (action === 'sync') {
+      await this.ecc.sync();
+      return;
+    }
+
+    console.log(`${colors.yellow}ECC subcommands: info, browse <section>, search <query>, sync${colors.reset}`);
   }
 
   async handleDebug(args) {
@@ -699,6 +921,7 @@ ${colors.white}Session Management:${colors.reset}
 
   /remember <text>           Add to memory
   /memories                  Show memories
+  /memory-vault [list]       Show TokenJuice markdown vault
   /plans                     Show active plans
 
 ${colors.white}Project Management:${colors.reset}
@@ -719,6 +942,14 @@ ${colors.white}Design Commands:${colors.reset}
   winter design add <brand> Add design file
   winter design list        List brands
   winter design preview <b> Preview brand
+
+${colors.white}Local Resources:${colors.reset}
+  winter resources            Show bundled resource manifest
+  winter ecc [info]           Show ECC resource status
+  winter ecc browse <section> Browse ECC sections
+  winter ecc search <query>   Search ECC resources
+  winter page-agent           Browse Page Agent resources
+  winter page-agent search <q> Search Page Agent resources
 
 ${colors.white}AI Providers:${colors.reset}
   Anthropic (Claude), OpenAI (GPT-4), Ollama, Groq

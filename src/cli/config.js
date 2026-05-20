@@ -20,7 +20,7 @@ export class ConfigLoader {
       await fs.mkdir(this.winterDir, { recursive: true });
       await loadEnvFile(this.envFile);
       const data = await fs.readFile(this.configFile, 'utf8');
-      const config = JSON.parse(data);
+      const config = JSON.parse(data.replace(/^\uFEFF/, ''));
       return this.applyEnv(config);
     } catch {
       // Return defaults
@@ -81,6 +81,9 @@ export class ConfigLoader {
       analytics: {
         enabled: true,
         toolUsage: true,
+      },
+      ui: {
+        theme: 'dark',
       },
       anthropic: {
         apiKeyEnv: 'ANTHROPIC_API_KEY',
@@ -258,5 +261,13 @@ export class ConfigLoader {
       ...reliability,
     };
     await this.save(config);
+  }
+
+  async setUiTheme(theme = 'dark') {
+    const config = await this.load();
+    config.ui = config.ui || {};
+    config.ui.theme = String(theme || 'dark').toLowerCase() === 'light' ? 'light' : 'dark';
+    await this.save(config);
+    return config.ui.theme;
   }
 }

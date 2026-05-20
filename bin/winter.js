@@ -12,6 +12,7 @@ import { ConfigLoader } from '../src/cli/config.js';
 import { SessionManager } from '../src/session/manager.js';
 import { AIProviderManager } from '../src/ai/providers.js';
 import { CommandParser } from '../src/cli/commands.js';
+import { supportsUnicodeUi } from '../src/cli/terminal-ui.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const version = pkg.version;
@@ -19,7 +20,8 @@ const version = pkg.version;
 const COMMANDS = new Set([
   'chat', 'call', 'benchmark', 'session', 'skill', 'plugin', 'design', 'config', 'init',
   'help', 'project', 'code', 'review', 'debug', 'auto', 'mcp', 'permissions',
-  'provider', 'providers', 'model', 'models',
+  'provider', 'providers', 'model', 'models', 'ecc', 'page-agent', 'pageagent',
+  'resources', 'memory-vault', 'doctor', 'context', 'scorecard',
 ]);
 
 function isInteractiveRequest(args) {
@@ -59,6 +61,11 @@ Commands:
   winter plugin <action>      Plugin management
   winter mcp <action>         MCP server management
   winter permissions <action> Permission allowlist
+  winter ecc [action]         Browse bundled ECC resources
+  winter page-agent [action]  Browse bundled Page Agent resources
+  winter context [task]       Inspect model context for this project
+  winter scorecard            Score Winter capability gates
+  winter doctor [full|tools]  Diagnose context, provider, and tools
   winter provider [name]      Show/switch provider
   winter providers            List providers
   winter model [model]        Show/set active provider model
@@ -90,7 +97,7 @@ async function main() {
   }
 
   if (args.includes('--version') || args.includes('-v')) {
-    console.log(`❄️ Winter CLI v${version}\n`);
+    console.log(`${supportsUnicodeUi() ? '❄️ ' : ''}Winter CLI v${version}\n`);
     return;
   }
 
@@ -115,10 +122,33 @@ async function main() {
     return;
   }
 
-  const config = new ConfigLoader();
   const projectPath = process.cwd();
-  const { parser } = await createRuntime(projectPath);
   const [command] = args;
+  if (['doctor', 'context', 'scorecard'].includes(command)) {
+    const repl = new WinterREPL({ projectPath, version });
+    await repl.session.init({ project: projectPath });
+    await repl.ai.init();
+    if (command === 'scorecard') {
+      await repl.showCapabilityScorecard();
+      return;
+    }
+    if (command === 'context') {
+      await repl.showContextDiagnostics(args.slice(1).join(' '));
+      return;
+    }
+    const mode = (args[1] || 'tools').toLowerCase();
+    if (mode === 'full') {
+      await repl.runFullDoctor();
+    } else if (mode === 'context') {
+      await repl.showContextDiagnostics(args.slice(2).join(' '));
+    } else if (mode === 'scorecard') {
+      await repl.showCapabilityScorecard();
+    } else {
+      await repl.runToolDoctor();
+    }
+    return;
+  }
+  const { parser } = await createRuntime(projectPath);
 
   if (!command || (!command.startsWith('/') && !COMMANDS.has(command))) {
     await parser.parse(['chat', ...args]);

@@ -75,6 +75,9 @@ export class ContextLoader {
         settings: path.join(localRoot, 'claude', 'settings.json'),
       },
       karpathy: path.join(localRoot, 'karpathy-tools'),
+      pageAgent: path.join(localRoot, 'page-agent'),
+      ecc: path.join(localRoot, 'ecc'),
+      eccReadme: path.join(localRoot, 'ecc', 'README.md'),
       designs: path.join(localRoot, 'awesome-design-md', 'design-md'),
       agents: path.join(localRoot, 'agents.md'),
       manifest: path.join(localRoot, 'manifest.json'),
@@ -165,7 +168,7 @@ export class ContextLoader {
       }
 
       lines.push('- Use Read/Grep/Glob to inspect any local resource when it matters for the task.');
-      lines.push('- Local resource families: agents.md, awesome-design-md, claude, codex, karpathy-tools.');
+      lines.push('- Local resource families: agents.md, awesome-design-md, claude, codex, karpathy-tools, page-agent, ecc.');
       lines.push(`- User resource roots: ${userPaths.codexRoot}, ${userPaths.claudeRoot}`);
 
       if (claudeSkills.length > 0) {
@@ -210,15 +213,20 @@ export class ContextLoader {
     const karpathyPath = path.join(paths.karpathy, 'CLAUDE.md');
     const agentsPath = path.join(paths.agents, 'AGENTS.md');
     const designReadmePath = path.join(paths.localRoot, 'awesome-design-md', 'README.md');
+    const pageAgentReadmePath = path.join(paths.pageAgent, 'README.md');
+    const pageAgentAgentsPath = path.join(paths.pageAgent, 'AGENTS.md');
+    const pageAgentWinterPath = path.join(paths.pageAgent, 'WINTER.md');
 
-    const [karpathy, agents, designReadme, designBrands] = await Promise.all([
+    const [karpathy, agents, designReadme, designBrands, pageAgentWinter, pageAgentAgents] = await Promise.all([
       this.readTextIfExists(karpathyPath, 2200),
       this.readTextIfExists(agentsPath, 1800),
       this.readTextIfExists(designReadmePath, 1600),
       this.listPathEntries(paths.designs, 40),
+      this.readTextIfExists(pageAgentWinterPath, 1600),
+      this.readTextIfExists(pageAgentAgentsPath, 2200),
     ]);
 
-    const hasRequired = Boolean(karpathy || agents || designReadme || designBrands.length > 0);
+    const hasRequired = Boolean(karpathy || agents || designReadme || designBrands.length > 0 || pageAgentWinter);
     if (!hasRequired) return '';
 
     const lines = [];
@@ -228,6 +236,9 @@ export class ContextLoader {
     lines.push('  Apply: think before coding, state assumptions when needed, keep solutions simple, make surgical changes, and verify against concrete success criteria.');
     lines.push(`- Agent rules: ${path.relative(this.projectPath, agentsPath)}`);
     lines.push('  Apply: inspect source before edits, keep dependency and lockfile changes synced, prefer TypeScript for new TS/Next utilities, and use the appropriate dev/test command for the task.');
+    lines.push(`- Page Agent (Alibaba GUI Agent): ${path.relative(this.projectPath, pageAgentReadmePath)}`);
+    lines.push('  Apply: for browser automation, smart form filling, SaaS AI copilot, accessibility, and multi-page agent tasks. PageAgent is an in-page JavaScript library that uses text-based DOM manipulation to control web interfaces with natural language. No browser extension or headless browser required.');
+    lines.push(`  Internal architecture at: ${path.relative(this.projectPath, pageAgentAgentsPath)}`);
     lines.push(`- Design system corpus: ${path.relative(this.projectPath, designReadmePath)} and ${path.relative(this.projectPath, paths.designs)}`);
     lines.push('  Apply: for UI/brand/design tasks, search the design-md corpus first and follow the closest existing brand/design guidance instead of inventing style from scratch.');
     lines.push('- Use Read/Grep/Glob to inspect the full resource files whenever task details require more than this startup summary.');
@@ -249,6 +260,12 @@ export class ContextLoader {
     }
     if (/design|brand|guideline/i.test(designReadme)) {
       evidence.push('awesome-design-md provides brand/design guidance to consult on UI work.');
+    }
+    if (/Page Agent|GUI agent|browser automation|web agent/i.test(pageAgentWinter)) {
+      evidence.push('page-agent provides in-page GUI automation via text-based DOM manipulation. Winter also has built-in WebFetch (HTTP fetch) and BrowserDebug (Chrome DevTools) tools for browsing URLs.');
+    }
+    if (/Monorepo|PageAgentCore|PageController|DOM Pipeline|FlatDomTree/i.test(pageAgentAgents)) {
+      evidence.push('page-agent AGENTS.md confirms monorepo structure, DOM pipeline, and tool architecture.');
     }
     if (evidence.length > 0) {
       lines.push(`- Startup evidence: ${evidence.join(' ')}`);

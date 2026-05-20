@@ -53,6 +53,27 @@ test('ConfigLoader migrateSecrets moves existing keys into secrets env file', as
   assert.match(envText, /WINTER_CUSTOM_API_KEY=existing-secret/);
 });
 
+test('ConfigLoader load accepts UTF-8 BOM winter.json files', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-config-'));
+  const config = new ConfigLoader();
+  config.winterDir = root;
+  config.configFile = path.join(root, 'winter.json');
+  config.envFile = path.join(root, 'secrets.env');
+
+  await writeFile(config.configFile, `\uFEFF${JSON.stringify({
+    defaultProvider: 'custom2',
+    custom2: {
+      baseURL: 'https://api.example.test/v1',
+      model: 'example-model',
+    },
+  }, null, 2)}`);
+
+  const loaded = await config.load();
+
+  assert.equal(loaded.defaultProvider, 'custom2');
+  assert.equal(loaded.custom2.baseURL, 'https://api.example.test/v1');
+});
+
 test('applyEnv falls back to raw apiKeyEnv value when no matching env variable exists', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'winter-config-'));
   const config = new ConfigLoader();

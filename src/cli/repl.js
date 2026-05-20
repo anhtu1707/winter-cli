@@ -6,8 +6,9 @@
 import readline from 'readline';
 import { promises as fs, watch as fsWatch } from 'fs';
 import { homedir } from 'os';
-import { welcomeBanner, colors } from './snowflake-logo.js';
-import { renderBox, terminalWidth, stripAnsi, visibleWidth, wrapText, padVisible } from './terminal-ui.js';
+import { welcomeBanner, colors, applyColorTheme } from './snowflake-logo.js';
+import { renderBox, supportsUnicodeUi, terminalWidth, stripAnsi, wrapText, padVisible } from './terminal-ui.js';
+import { WinterInputController } from './input-controller.js';
 import { ToolExecutor } from '../tools/executor.js';
 import { SessionManager } from '../session/manager.js';
 import { AIProviderManager } from '../ai/providers.js';
@@ -16,12 +17,19 @@ import { PermissionManager } from '../tools/permission.js';
 import { compressConversation } from '../context/compress.js';
 import { getToolUsageSummary } from '../tools/analytics.js';
 import { SweAgent } from '../agent/swe-agent.js';
+import { AgentDefinitionRegistry } from '../agent/agent-definitions.js';
+import { AgentRuntime } from '../agent/runtime.js';
 import { SLASH_COMMANDS } from './slash-commands.js';
 import { formatMarkdown } from './markdown-format.js';
 import { Spinner } from './spinner.js';
 import { ContextLoader } from './context-loader.js';
 import { PromptBuilder } from './prompt-builder.js';
 import { buildProjectDocs, isWinterGeneratedProjectDoc } from './project-docs.js';
+import {
+  buildPromptToolResult as buildPromptToolResultForModel,
+  buildPromptToolResultWithTokenJuice,
+} from './tool-runtime.js';
+import { TokenJuice } from '../context/token-juice.js';
 import { classifyModelTier, isSmallModel } from '../ai/model-capabilities.js';
 import {
   addUsage as mergeUsage,
@@ -39,7 +47,22 @@ import {
   parseToolArguments as parseArguments,
   summarizePromptList as summarizePrompts,
 } from './conversation-format.js';
+import { CodebaseSearch } from '../codebase-index/search.js';
+import { CodebaseWatcher } from '../codebase-index/watcher.js';
+import { AtContextResolver } from './at-context.js';
+import { DiffView } from './diff-view.js';
+import { Composer } from './composer.js';
+import { InlineComplete } from '../mcp/inline-complete.js';
+import { Orchestrator } from '../ai/orchestrator.js';
+import { ECCManager } from './ecc.js';
 import { handleSlashCommand } from './repl-commands.js';
+import {
+  getCapabilityScorecard as getCapabilityScorecardReport,
+  runFullDoctor as runFullDoctorDiagnostics,
+  runToolDoctor as runToolDoctorDiagnostics,
+  showCapabilityScorecard as showCapabilityScorecardDiagnostics,
+  showContextDiagnostics as showContextDiagnosticsReport,
+} from './diagnostics.js';
 import path from 'path';
 
 
@@ -74,7 +97,305 @@ export class WinterREPL {
       compactText: (text, maxChars, label) => this.compactText(text, maxChars, label),
       summarizePrompts: (items, opts) => this.summarizePromptList(items, opts),
     });
+    this.codebaseSearcher = null;
+    this.codebaseWatcher = null;
+    this.atContext = null;
+    this.diffView = null;
+    this.composer = null;
+    this.inlineComplete = null;
+    this.eccManager = null;
+    this.orchestrator = null;
+    this.tokenJuice = new TokenJuice({ projectPath: this.projectPath });
+    this.agentRegistry = new AgentDefinitionRegistry({ projectPath: this.projectPath });
+    this.agentRuntime = new AgentRuntime(this);
+    this.useUnicodeUi = supportsUnicodeUi();
+    this.inputController = new WinterInputController(this);
     this.watchers = [];
+  }
+
+  async initCodebaseSearch() {
+    if (this.codebaseSearcher) return;
+    this.codebaseSearcher = new CodebaseSearch({ projectPath: this.projectPath });
+    await this.codebaseSearcher.init();
+    this.atContext = new AtContextResolver({
+      projectPath: this.projectPath,
+      codebaseSearch: this.codebaseSearcher,
+      tools: this.tools,
+    });
+    this.diffView = new DiffView({ projectPath: this.projectPath });
+    this.composer = new Composer({
+      repl: this,
+      projectPath: this.projectPath,
+      diffView: this.diffView,
+    });
+    this.inlineComplete = new InlineComplete({
+      repl: this,
+      projectPath: this.projectPath,
+    });
+    this.orchestrator = new Orchestrator({
+      ai: this.ai,
+      tools: this.tools,
+      projectPath: this.projectPath,
+    });
+    this.eccManager = new ECCManager({
+      projectPath: this.projectPath,
+      tools: this.tools,
+      config: this.config,
+    });
+  }
+
+  async startCodebaseWatcher() {
+    if (this.codebaseWatcher) return;
+    await this.initCodebaseSearch();
+    this.codebaseWatcher = new CodebaseWatcher({
+      projectPath: this.projectPath,
+      indexer: this.codebaseSearcher.indexer,
+    });
+    this.codebaseWatcher.onChange(({ filePath }) => {
+      // Re-index on change (handled by watcher internally)
+    });
+    this.codebaseWatcher.start({ debounce: true });
+  }
+
+  async codebaseIndex(full = false) {
+    await this.initCodebaseSearch();
+    if (full) {
+      await this.codebaseSearcher.clear();
+    }
+    const stats = await this.codebaseSearcher.reindex();
+    console.log(`${colors.green}✓ Codebase indexed:${colors.reset}`);
+    console.log(`  ${colors.dim}Files: ${stats.totalFiles}, Chunks: ${stats.totalChunks}, Indexed: ${stats.indexedFiles}, Skipped: ${stats.skipped}${colors.reset}`);
+  }
+
+  async codebaseSearch(query) {
+    await this.initCodebaseSearch();
+    this.spinner = new Spinner('Searching codebase...');
+    this.spinner.start();
+    try {
+      const results = await this.codebaseSearcher.query(query, { limit: 15 });
+      if (this.spinner) this.spinner.stop();
+
+      if (results.totalResults === 0) {
+        console.log(`${colors.yellow}No results found for "${query}"${colors.reset}`);
+        return;
+      }
+
+      console.log(`${colors.cyan}Codebase Search: "${query}" ${colors.dim}(${results.totalResults} matches in ${results.totalFiles} files)${colors.reset}\n`);
+      for (const file of results.byFile.slice(0, 10)) {
+        console.log(`  ${colors.green}${file.filePath}${colors.reset} ${colors.dim}(score: ${file.score.toFixed(0)})${colors.reset}`);
+        for (const chunk of file.chunks.slice(0, 3)) {
+          const snippet = chunk.content.split('\n').slice(0, 3).join('\n  ');
+          console.log(`    ${colors.dim}lines ${chunk.startLine}-${chunk.endLine}:${colors.reset}`);
+          console.log(`    ${colors.dim}  ${snippet}${colors.reset}`);
+        }
+        if (file.chunks.length > 3) {
+          console.log(`    ${colors.dim}... and ${file.chunks.length - 3} more chunks${colors.reset}`);
+        }
+        console.log('');
+      }
+      if (results.byFile.length > 10) {
+        console.log(`${colors.dim}... and ${results.byFile.length - 10} more files${colors.reset}`);
+      }
+    } catch (e) {
+      if (this.spinner) this.spinner.stop();
+      console.log(`${colors.red}Search error: ${e.message}${colors.reset}`);
+    }
+  }
+
+  async codebaseFindDef(name) {
+    await this.initCodebaseSearch();
+    const matches = await this.codebaseSearcher.findSymbol(name, { limit: 10 });
+
+    if (matches.length === 0) {
+      console.log(`${colors.yellow}No definition found for "${name}"${colors.reset}`);
+      return;
+    }
+
+    console.log(`${colors.cyan}Definitions for "${name}"${colors.reset}\n`);
+    for (const m of matches) {
+      console.log(`  ${colors.green}${m.filePath}:${m.line}${colors.reset} ${colors.dim}${m.type}:${m.name}${colors.reset}`);
+      if (m.content) {
+        console.log(`    ${colors.dim}${m.content}${colors.reset}`);
+      }
+    }
+  }
+
+  async ensureCodebaseIndex({ verbose = false } = {}) {
+    await this.initCodebaseSearch();
+    const before = this.codebaseSearcher.indexer.getStats();
+    if (before.totalChunks > 0) return before;
+
+    if (verbose) {
+      console.log(`${colors.dim}ℹ Indexing codebase for semantic search...${colors.reset}`);
+    }
+    const indexedStats = await this.codebaseSearcher.reindex();
+    if (verbose) {
+      console.log(`${colors.green}✓ Codebase indexed: ${indexedStats.totalFiles} files, ${indexedStats.totalChunks} chunks${colors.reset}`);
+    }
+    return this.codebaseSearcher.indexer.getStats();
+  }
+
+  async buildCodebaseContext(task = '') {
+    try {
+      const stats = await this.ensureCodebaseIndex({ verbose: false });
+      if (!stats.totalChunks) return '';
+
+      const summary = this.codebaseSearcher.getSummary();
+      const lines = [
+        '[Codebase Index]',
+        `Project: ${this.projectPath}`,
+        `Indexed files: ${summary.totalFiles}, chunks: ${summary.totalChunks}`,
+      ];
+
+      if (summary.languages?.length) {
+        lines.push(`Languages: ${summary.languages.map(([lang, count]) => `${lang}:${count}`).join(', ')}`);
+      }
+
+      if (summary.topSymbols?.length) {
+        lines.push('Top symbol files:');
+        for (const file of summary.topSymbols.slice(0, 8)) {
+          lines.push(`- ${file.filePath}: ${file.symbols.join(', ')}`);
+        }
+      }
+
+      const query = String(task || '').trim();
+      if (query.length >= 3) {
+        const results = await this.codebaseSearcher.query(query, { limit: 8 });
+        if (results.byFile.length > 0) {
+          lines.push('');
+          lines.push('[Relevant Codebase Matches]');
+          for (const file of results.byFile.slice(0, 5)) {
+            const snippets = file.chunks.slice(0, 2).map(chunk => {
+              const snippet = chunk.content.split(/\r?\n/).slice(0, 4).join(' ').replace(/\s+/g, ' ');
+              return `lines ${chunk.startLine}-${chunk.endLine}: ${this.compactText(snippet, 240, 'codebase match')}`;
+            });
+            lines.push(`- ${file.filePath} (score ${file.score.toFixed(0)})`);
+            for (const snippet of snippets) lines.push(`  ${snippet}`);
+          }
+        }
+      }
+
+      return this.compactText(lines.join('\n'), this.shouldUseCompactPrompt() ? 1800 : 3200, 'codebase context');
+    } catch (error) {
+      return `[Codebase Index]\nUnavailable: ${error.message}`;
+    }
+  }
+
+  async undoLastChange(filePath = '') {
+    await this.initCodebaseSearch();
+    const backups = await this.diffView.getUndoHistory(filePath);
+
+    if (backups.length === 0) {
+      console.log(`${colors.yellow}No backups found${filePath ? ` for ${filePath}` : ''}${colors.reset}`);
+      return;
+    }
+
+    console.log(`${colors.cyan}Recent backups:${colors.reset}\n`);
+    for (const b of backups.slice(0, 10)) {
+      const time = new Date(b.time).toLocaleString();
+      console.log(`  ${colors.dim}${b.backup}${colors.reset}`);
+      console.log(`    ${colors.dim}Original: ${b.original}, ${time}${colors.reset}`);
+    }
+
+    // Offer to undo the most recent one
+    const latest = backups[0];
+    console.log(`\n${colors.yellow}Restore ${latest.original} from backup? ${colors.reset}`);
+    console.log(`  ${colors.dim}Backup: ${latest.backup}${colors.reset}`);
+
+    const { default: rl } = await import('readline');
+    const rli = rl.createInterface({ input: process.stdin, output: process.stdout });
+    rli.question(`${colors.cyan}[y/N]: ${colors.reset}`, async (ans) => {
+      rli.close();
+      if (ans.trim().toLowerCase() === 'y') {
+        const ok = await this.diffView.restoreFromBackup(latest.backup, latest.original);
+        if (ok) {
+          console.log(`${colors.green}✓ Restored ${latest.original} from backup${colors.reset}`);
+        } else {
+          console.log(`${colors.red}Failed to restore${colors.reset}`);
+        }
+      }
+      if (!this.readlineClosed) this.showInputPrompt();
+    });
+  }
+
+  buildPromptToolResult(toolName, result) {
+    return buildPromptToolResultForModel({
+      toolName,
+      result,
+      compact: this.shouldUseCompactPrompt(),
+      compactText: (text, maxChars, label) => this.compactText(text, maxChars, label),
+      summarizeToolResult: value => this.tools?.summarizeToolResult?.(value) || { ...value },
+    });
+  }
+
+  async buildPromptToolResultForModel(toolName, result) {
+    return buildPromptToolResultWithTokenJuice({
+      toolName,
+      result,
+      projectPath: this.projectPath,
+      tokenJuice: this.tokenJuice,
+      compact: this.shouldUseCompactPrompt(),
+      compactText: (text, maxChars, label) => this.compactText(text, maxChars, label),
+      summarizeToolResult: value => this.tools?.summarizeToolResult?.(value) || { ...value },
+    });
+  }
+
+  async compactStartupMemories({ projectInstructionFiles = [], autoCreateDocs = [] } = {}) {
+    const memory = Array.isArray(this.session?.memory) ? this.session.memory : [];
+    const shouldDrop = (entry) => {
+      const text = typeof entry === 'string' ? entry : entry?.text || '';
+      return text.startsWith('[Required local resources]')
+        || text.startsWith('[Auto-applied skills]')
+        || text.startsWith('[Project rule file')
+        || text.startsWith('[Startup local resource index]')
+        || (text.startsWith('[T') && text.includes('ghi nh'))
+        || text.startsWith('[Quy');
+    };
+
+    this.session.memory = memory.filter(entry => !shouldDrop(entry));
+
+    const resourcePaths = this.getResourcePaths();
+    const resourceIndex = [
+      `agents.md: ${resourcePaths.agents}`,
+      `awesome-design-md: ${resourcePaths.designs}`,
+      `karpathy-tools: ${resourcePaths.karpathy}`,
+      `page-agent: ${resourcePaths.pageAgent}`,
+      `ecc: ${resourcePaths.ecc}`,
+    ];
+    await this.session.replaceMemory(
+      '[Startup local resource index]',
+      [
+        'Resources are indexed by path only to save tokens.',
+        ...resourceIndex.map(item => `- ${item}`),
+        'Use Read/Grep/Glob to inspect exact resource files when a task needs detail.',
+      ].join('\n'),
+      'resource'
+    );
+
+    const docs = [
+      ...projectInstructionFiles.map(file => ({
+        filename: file.relativePath,
+        filePath: file.filePath,
+        content: file.content,
+      })),
+      ...autoCreateDocs.map(doc => ({
+        filename: doc.filename,
+        filePath: path.join(this.projectPath, doc.filename),
+        content: doc.content,
+      })),
+    ];
+
+    const seen = new Set();
+    for (const doc of docs) {
+      if (!doc?.filename || seen.has(doc.filename)) continue;
+      seen.add(doc.filename);
+      const summary = this.compactText(String(doc.content || '').replace(/\s+/g, ' ').trim(), 700, doc.filename);
+      await this.session.replaceMemory(
+        `[Project rule file ${doc.filename}]`,
+        `Path: ${doc.filePath}\nSummary: ${summary}`,
+        'rule'
+      );
+    }
   }
 
   getSessionToolPermissionStore() {
@@ -115,8 +436,14 @@ export class WinterREPL {
     return this.contextLoader.readProjectInstructionFiles();
   }
 
+  applyUiTheme(theme = 'dark') {
+    return applyColorTheme(theme);
+  }
+
   async start() {
     await this.session.init({ project: this.projectPath, sessionId: this.sessionId });
+    const startupConfig = await this.config.load();
+    this.applyUiTheme(startupConfig.ui?.theme || 'dark');
     await this.ai.init();
 
     await this.session.updateContext('projectAnchor', {
@@ -129,7 +456,7 @@ export class WinterREPL {
     // Tự động đọc và ghi nhớ một số tài nguyên cục bộ (an toàn): chỉ nạp file hoặc README trong thư mục
     const fsPromises = await import('fs/promises');
     const resourcePaths = this.getResourcePaths();
-    const autoLoadTargets = [resourcePaths.agents, resourcePaths.designs, resourcePaths.karpathy];
+    const autoLoadTargets = [resourcePaths.agents, resourcePaths.designs, resourcePaths.karpathy, resourcePaths.pageAgent];
 
     for (const targetPath of autoLoadTargets) {
       try {
@@ -263,6 +590,14 @@ export class WinterREPL {
     }
 
     await this.bootstrapProjectCapabilities();
+    await this.compactStartupMemories({ projectInstructionFiles, autoCreateDocs });
+
+    // Codebase Index: warm in background, then inject summaries into model context on demand.
+    this.codebaseWarmup = this.ensureCodebaseIndex({ verbose: true })
+      .then(() => this.startCodebaseWatcher())
+      .catch((error) => {
+        console.log(`${colors.yellow}Codebase index disabled: ${error.message}${colors.reset}`);
+      });
 
     const activeProvider = this.ai.getActiveProvider();
     const info = {
@@ -281,22 +616,23 @@ export class WinterREPL {
       this.showStatus();
     }
 
-    // Hiển thị lịch sử chat nếu đang load lại session cũ
-    const sessionHistory = this.session.getHistory(10); // Lấy tối đa 10 câu gần nhất cho đỡ rác màn hình
+    // Hiển thị lịch sử chat nếu đang load lại session cũ, nhưng chỉ replay bản tóm tắt.
+    const sessionHistory = this.session.getHistory(4);
     if (sessionHistory.length > 0) {
       const columns = process.stdout.columns || 80;
       const W = Math.max(60, Math.min(Math.floor(columns * 0.95), 100));
       const titleStr = ' Lịch sử phiên làm việc ';
-      const sideLine = '─'.repeat(Math.max(0, Math.floor((W - titleStr.length) / 2)));
-      const bottomLine = '─'.repeat(W);
+      const ruleChar = this.useUnicodeUi ? '─' : '-';
+      const sideLine = ruleChar.repeat(Math.max(0, Math.floor((W - titleStr.length) / 2)));
+      const bottomLine = ruleChar.repeat(W);
 
       console.log(`\n${colors.dim}${sideLine}${titleStr}${sideLine}${colors.reset}`);
       for (const msg of sessionHistory) {
+        const text = this.formatStartupHistoryEntry(msg.content);
         if (msg.role === 'user') {
-          console.log(`\n${colors.cyan}Bạn:${colors.reset} ${msg.content}`);
+          console.log(`\n${colors.cyan}Bạn:${colors.reset} ${text}`);
         } else if (msg.role === 'assistant') {
-          const formatted = formatMarkdown(msg.content);
-          console.log(`\n${colors.bright}${colors.magenta}Winter:${colors.reset}${formatted}`);
+          console.log(`\n${colors.bright}${colors.magenta}Winter:${colors.reset} ${text}`);
         }
       }
       console.log(`\n${colors.dim}${bottomLine}${colors.reset}\n`);
@@ -306,10 +642,10 @@ export class WinterREPL {
     this.rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
-      prompt: `${colors.bright}${colors.cyan}winter❄️:  ${colors.reset}`,
+      prompt: `${colors.bright}${colors.cyan}${this.useUnicodeUi ? 'winter❄️:' : 'winter>'}  ${colors.reset}`,
       completer: this.completer.bind(this),
     });
-    this.installSlashSuggestions();
+    this.inputController.installSlashSuggestions();
 
     // Bắt sự kiện Ctrl+C để in ra lệnh tiếp tục session
     this.rl.on('SIGINT', () => {
@@ -348,26 +684,32 @@ export class WinterREPL {
     });
   }
 
+  formatStartupHistoryEntry(content, maxChars = 420) {
+    let text = stripAnsi(String(content ?? ''))
+      .replace(/\r?\n/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!this.useUnicodeUi) {
+      text = text
+        .replace(/\p{Extended_Pictographic}/gu, '')
+        .replace(/[─│╭╮╰╯├┤]/g, '-')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+    if (text.length <= maxChars) return text;
+    return `${text.slice(0, maxChars - 32).trimEnd()} ... (${text.length - maxChars + 32} chars hidden)`;
+  }
+
   showInputPrompt() {
-    if (!this.running || this.readlineClosed) return;
-    const w = Math.max(20, terminalWidth() - 2);
-    process.stdout.write(`
-${colors.magenta}╭${'─'.repeat(w)}╮${colors.reset}
-`);
-    process.stdout.write(`${colors.magenta}│${colors.reset} `);
-    this.rl.setPrompt(`${colors.bright}${colors.cyan}winter❄️: ${colors.reset}`);
-    this.rl.prompt();
+    return this.inputController.showInputPrompt();
   }
 
   closeInputBox() {
-    const w = Math.max(20, terminalWidth() - 2);
-    readline.moveCursor(process.stdout, 0, -1);
-    readline.cursorTo(process.stdout, terminalWidth() - 1);
-    process.stdout.write(`${colors.magenta}│${colors.reset}`);
-    process.stdout.write(`
-`);
-    process.stdout.write(`${colors.magenta}╰${'─'.repeat(w)}╯${colors.reset}
-`);
+    return this.inputController.closeInputBox();
+  }
+
+  buildInputPanel() {
+    return this.inputController.buildInputPanel();
   }
 
   showStatus() {
@@ -416,6 +758,46 @@ ${colors.magenta}╭${'─'.repeat(w)}╮${colors.reset}
 
   async showKarpathyResources() {
     await this.printPathPreview(this.getResourcePaths().karpathy, 'karpathy-tools');
+  }
+
+  async showPageAgentResources(args = []) {
+    const root = this.getResourcePaths().pageAgent;
+    const [action = 'info', ...rest] = args;
+
+    if (action === 'search') {
+      const query = rest.join(' ');
+      if (!query) {
+        console.log(`${colors.yellow}Usage: /page-agent search <query>${colors.reset}`);
+        return;
+      }
+      const matches = await this.searchResourceFiles(root, query, 30);
+      console.log(`${colors.cyan}Page Agent search "${query}":${colors.reset}`);
+      if (matches.length === 0) {
+        console.log(`  ${colors.dim}No results${colors.reset}`);
+        return;
+      }
+      matches.forEach(match => console.log(`  ${match.isDirectory ? '[dir] ' : '[file]'} ${match.relativePath}`));
+      return;
+    }
+
+    if (action === 'read') {
+      const requestedPath = rest.join(' ') || 'README.md';
+      const target = path.resolve(root, requestedPath);
+      if (!target.startsWith(path.resolve(root))) {
+        console.log(`${colors.red}Path must stay inside page-agent resources.${colors.reset}`);
+        return;
+      }
+      await this.printPathPreview(target, `page-agent/${requestedPath}`);
+      return;
+    }
+
+    if (action === 'docs') {
+      await this.printPathPreview(path.join(root, 'docs'), 'page-agent/docs');
+      return;
+    }
+
+    await this.printPathPreview(root, 'page-agent');
+    console.log(`${colors.dim}Commands: /page-agent search <query>, /page-agent read <path>, /page-agent docs${colors.reset}`);
   }
 
   async showAgentsFile() {
@@ -503,6 +885,32 @@ ${colors.magenta}╭${'─'.repeat(w)}╮${colors.reset}
     return this.contextLoader.listPathEntries(target, limit);
   }
 
+  async searchResourceFiles(root, query, limit = 30) {
+    const matches = [];
+    const needle = String(query || '').toLowerCase();
+    if (!needle) return matches;
+
+    const walk = async (dir) => {
+      if (matches.length >= limit) return;
+      const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        if (matches.length >= limit) break;
+        const fullPath = path.join(dir, entry.name);
+        const relativePath = path.relative(root, fullPath).replace(/\\/g, '/');
+        if (entry.isDirectory()) {
+          if (['node_modules', '.git', 'dist', 'build', '.next'].includes(entry.name)) continue;
+          if (entry.name.toLowerCase().includes(needle)) matches.push({ relativePath, isDirectory: true });
+          await walk(fullPath);
+        } else if (entry.isFile() && entry.name.toLowerCase().includes(needle)) {
+          matches.push({ relativePath, isDirectory: false });
+        }
+      }
+    };
+
+    await walk(root);
+    return matches;
+  }
+
   async handleInput(input) {
     if (this.isProcessing) {
       const pos = this.taskQueue.length + 1;
@@ -522,8 +930,50 @@ ${colors.magenta}╭${'─'.repeat(w)}╮${colors.reset}
         this.history = this.history.slice(-this.maxHistory);
       }
 
+      if (input.startsWith('!')) {
+        const command = input.slice(1).trim();
+        if (!command) {
+          console.log(`${colors.yellow}Usage: !<command>${colors.reset}`);
+          return;
+        }
+        await this.handleSlashCommand(`/bash ${command}`);
+        return;
+      }
+
+      const agentMention = await this.parseAgentMention(input);
+      if (agentMention) {
+        const result = await this.runAgent(agentMention.agentId, agentMention.task);
+        console.log(result);
+        return;
+      }
+
+      // Parse @-symbols for non-command input
+      if (!input.startsWith('/')) {
+        await this.initCodebaseSearch();
+        if (this.atContext && this.atContext.hasAtReferences(input)) {
+          try {
+            const parsed = await this.atContext.parse(input);
+            if (parsed.hasAtReferences) {
+              const atContextPrompt = this.atContext.formatContextPrompt(parsed.contexts);
+              if (atContextPrompt) {
+                this._pendingAtContext = atContextPrompt;
+              }
+              input = parsed.input; // Remove @-symbols from input
+            }
+          } catch {
+            // Silently continue if @ parsing fails
+          }
+        }
+      }
+
       if (input.startsWith('/')) {
         await this.handleSlashCommand(input);
+        return;
+      }
+
+      const pastedDataImage = this.parseDataUrlImage(input);
+      if (pastedDataImage) {
+        await this.chat('Analyze this pasted image.', [pastedDataImage]);
         return;
       }
 
@@ -563,6 +1013,17 @@ ${colors.magenta}╭${'─'.repeat(w)}╮${colors.reset}
     }
   }
 
+  async parseAgentMention(input = '') {
+    const match = String(input || '').match(/^\s*@([A-Za-z][\w-]*)\s+([\s\S]+)$/);
+    if (!match) return null;
+    const agentId = match[1];
+    const task = match[2].trim();
+    if (!task) return null;
+    const agents = await this.listAgentDefinitions();
+    if (!agents.some(agent => agent.id.toLowerCase() === agentId.toLowerCase())) return null;
+    return { agentId, task };
+  }
+
   async loadImageAsBase64(filePath) {
     try {
       const fs = await import('fs/promises');
@@ -581,6 +1042,13 @@ ${colors.magenta}╭${'─'.repeat(w)}╮${colors.reset}
     } catch {
       return null;
     }
+  }
+
+  parseDataUrlImage(value = '') {
+    const match = String(value || '').match(/data:(image\/(?:png|jpeg|jpg|gif|webp|bmp|svg\+xml));base64,([a-z0-9+/=]+)/i);
+    if (!match) return null;
+    const mime = match[1].toLowerCase() === 'image/jpg' ? 'image/jpeg' : match[1].toLowerCase();
+    return { mime, base64: match[2] };
   }
 
   async showInteractiveChecklist(title, items) {
@@ -709,14 +1177,16 @@ ${colors.magenta}╭${'─'.repeat(w)}╮${colors.reset}
     const originalRequestAssistantTurn = this.requestAssistantTurn;
 
     // Chèn prompt đặc biệt ép AI phải verify
+    const verifyCommands = await this.inferVerificationCommands(task);
     const autoPrompt = `TASK: ${task}
-    
-    CRITICAL TDD RULES:
-    1. Write code to solve the task.
-    2. IMMEDIATELY use the Bash tool to run the code (e.g., 'node file.js', 'npm run build', or 'tsc').
-    3. If the Bash tool returns ANY errors, read the error, Edit the code to fix it, and RUN IT AGAIN.
-    4. DO NOT STOP AND DO NOT ASK FOR PERMISSION. KEEP FIXING AND RUNNING UNTIL THERE ARE NO ERRORS.
-    5. Only return your final answer when the bash execution shows SUCCESS.`;
+
+CRITICAL DEBUG/AGENT RULES:
+1. Inspect the project before changing anything. Read the failing file, related caller, config, and logs.
+2. Reproduce or locate the first hard failure. For frontend/runtime UI issues, use BrowserDebug when a URL/dev server is available.
+3. Patch the smallest root cause with Write/Edit.
+4. Run the closest verification command(s): ${verifyCommands.join(' && ')}.
+5. If verification fails, read the new error, patch again, and run verification again.
+6. Do not claim success until a tool result proves it.`;
 
     await this.chat(autoPrompt);
   }
@@ -813,7 +1283,8 @@ ${colors.magenta}╭${'─'.repeat(w)}╮${colors.reset}
     };
 
     const body = [
-      `${c.bright}${c.cyan}❄ WINTER COMMANDS${c.reset}`,
+      `${c.bright}${c.cyan}${this.useUnicodeUi ? '❄ ' : ''}WINTER COMMANDS${c.reset}`,
+      `${c.dim}@file context | @Agent task | !cmd bash | /theme:toggle${c.reset}`,
       '',
       `${c.bright}Dự án & Phiên làm việc${c.reset}`,
       row(`${c.yellow}/pwd${c.reset}     Thư mục hiện tại`, `${c.yellow}/session${c.reset}  Phiên làm việc`),
@@ -821,12 +1292,18 @@ ${colors.magenta}╭${'─'.repeat(w)}╮${colors.reset}
       row(`${c.yellow}/config${c.reset}  Xem cấu hình`, `${c.yellow}/exit${c.reset}     Thoát`),
       '',
       `${c.bright}AI & Công cụ${c.reset}`,
-      row(`${c.yellow}/auto${c.reset}    TDD t? s?a l?i`, `${c.yellow}/debug${c.reset}   Auto debug l?i`),
-      row(`${c.yellow}/agent${c.reset}   Ch?y sub-agent`, `${c.yellow}/swe${c.reset}     SWE workflow`),
+      row(`${c.yellow}/auto${c.reset}    TDD tự sửa lỗi`, `${c.yellow}/debug${c.reset}   Auto debug lỗi`),
+      row(`${c.yellow}/doctor${c.reset}  Kiểm tra tool-call`, `${c.yellow}/agent${c.reset}   Chạy sub-agent`),
+      row(`${c.yellow}/swe${c.reset}     SWE workflow`, `${c.yellow}/plan${c.reset}    Lập kế hoạch`),
       row(`${c.yellow}/read${c.reset}    Đọc file`, `${c.yellow}/write${c.reset}   Ghi file`),
       row(`${c.yellow}/bash${c.reset}    Chạy lệnh terminal`, `${c.yellow}/grep${c.reset}    Tìm trong file`),
-      row(`${c.yellow}/glob${c.reset}    Tìm file theo pattern`, `${c.yellow}/image${c.reset}   Phân tích UI`),
-      row(`${c.yellow}/paste${c.reset}   Dán từ clipboard`, `${c.yellow}/plan${c.reset}    Lập kế hoạch`),
+      row(`${c.yellow}/glob${c.reset}    Tìm file theo pattern`, `${c.yellow}/image${c.reset}   Ảnh/file/clipboard`),
+      row(`${c.yellow}/paste${c.reset}   Dán text/ảnh clipboard`, `${c.yellow}/composer${c.reset}  Multi-file edit`),
+      row(`${c.yellow}/complete${c.reset} Gợi ý code`, `${c.yellow}/search${c.reset}   Tìm kiếm code`),
+      row(`${c.yellow}/browse${c.reset}   Mở URL trong trình duyệt`, `${c.yellow}/page-agent${c.reset} GUI Agent resources`),
+      row(`${c.yellow}/ensemble${c.reset} Chạy nhiều AI`, `${c.yellow}/vote${c.reset}     Bình chọn hay nhất`),
+      row(`${c.yellow}/orchestrate${c.reset} Pipeline đa model`, `${c.yellow}/undo${c.reset}     Undo backup`),
+      row(`${c.yellow}/ecc${c.reset}      ECC resource browser`, `${c.yellow}/codex${c.reset}    Codex resources`),
       '',
       `${c.bright}Git Auto-Pilot${c.reset}`,
       row(`${c.yellow}/commit${c.reset}  AI tự viết commit`, `${c.yellow}/review${c.reset}  AI review code thay đổi`),
@@ -866,6 +1343,9 @@ ${colors.white}Session:${colors.reset}
   /session          Current session info
   /sessions         List all sessions
   /clear            Clear screen
+  /undo             Undo last change from backup
+  /composer <task>  Multi-file editing mode (like Cursor Composer)
+  /complete <file>  Trigger inline code completion
 
 ${colors.white}Memory:${colors.reset}
   /remember <text>  Store in memory
@@ -879,6 +1359,7 @@ ${colors.white}Plans & Tasks:${colors.reset}
   /agent [role] <task>  Run a subagent
   /auto [task]      Auto-heal with test/build loop
   /debug [error]    Auto-debug and verify a failure
+  /doctor tools     Test whether current provider/model can call tools
 
 ${colors.white}Tools:${colors.reset}
   /read <file>      Read file
@@ -904,6 +1385,7 @@ ${colors.white}Design & Skills:${colors.reset}
   /plugin          Plugin management
 
 ${colors.white}Local Sources:${colors.reset}
+  /ecc [sub]       Browse ECC resources (info, browse, search, sync)
   /codex [section]  Browse ~/.codex resources
   /claude [section] Browse ~/.claude resources
   /karpathy        Browse ~/karpathy-tools
@@ -1001,13 +1483,16 @@ ${colors.reset}
       case 'plan':
         return byName(['Read', 'Grep', 'Glob', 'TaskCreate', 'TaskUpdate', 'TaskList']);
       case 'review':
-        return byName(['Read', 'Grep', 'Glob']);
+        return byName(['Read', 'Grep', 'Glob', 'Bash', 'WebFetch']);
       case 'debug':
-        return byName(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob']);
+        return byName(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'BrowserDebug', 'WebFetch', 'Parallel']);
       case 'research':
-        return byName(['Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch']);
+        return byName(['Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch', 'Parallel']);
+      case 'design':
+      case 'ui':
+        return byName(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'BrowserDebug', 'WebFetch']);
       default:
-        return byName(['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep']);
+        return byName(['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'BrowserDebug', 'WebFetch', 'WebSearch', 'Parallel', 'Agent']);
     }
   }
 
@@ -1064,196 +1549,7 @@ ${colors.reset}
 
 
   async runConversation(messages, label = 'Thinking', tools = null) {
-    this.spinner = new Spinner(label + '...');
-    this.spinner.start();
-    this.hydrateSessionToolPermissions();
-
-    const startedAt = Date.now();
-    const previousTools = this.ai.tools;
-    if (tools) this.ai.setTools(tools);
-
-    let finalContent = '';
-    let reachedToolLimit = true;
-    let usedTools = false;
-    let verified = false;
-    const toolSummaries = [];
-    const totalUsage = {};
-    const toolSignatureHistory = [];
-    const executionProfile = this.selectExecutionProfile(messages, { enableTools: true });
-    const requireToolEvidence = this.actionRequiresTools(messages);
-    let noToolActionRetries = 0;
-    try {
-      for (let i = 0; i < 8; i++) {
-        if (this.isCancelled) throw new Error('AbortError');
-        const turn = await this.requestAssistantTurn(messages, {
-          provider: executionProfile.provider,
-          model: executionProfile.model,
-          enableTools: true,
-          requireToolEvidence: requireToolEvidence && !usedTools,
-        }, startedAt, totalUsage);
-
-        const assistantMsg = turn.assistantMsg || {};
-        const toolCalls = turn.toolCalls || [];
-
-        if (turn.finalContent && toolCalls.length === 0) {
-          finalContent = turn.finalContent;
-        }
-
-        if (toolCalls.length === 0) {
-          if (turn.finishReason === 'tool_evidence_required') {
-            noToolActionRetries++;
-            if (noToolActionRetries > 2) {
-              finalContent = 'Chưa thực hiện được: model trả lời mà không dùng tool nên Winter đã chặn để tránh báo xạo.';
-              console.log(`\n${colors.yellow}${finalContent}${colors.reset}\n`);
-              reachedToolLimit = false;
-              break;
-            }
-            messages.push({
-              role: 'assistant',
-              content: assistantMsg.content || '',
-            });
-            messages.push({
-              role: 'user',
-              content: this.buildToolEvidenceCorrection(messages),
-            });
-            finalContent = '';
-            continue;
-          }
-          if (turn.finishReason === 'length') {
-            console.log(`\n${colors.yellow}ℹ Phản hồi bị cắt cụt do hết token. Đang tự động tiếp tục...${colors.reset}`);
-            messages.push({
-              role: 'assistant',
-              content: turn.finalContent || '',
-            });
-            messages.push({
-              role: 'user',
-              content: 'Continue generating the rest of the response.',
-            });
-            continue;
-          }
-          reachedToolLimit = false;
-          break;
-        }
-
-        usedTools = true;
-        if (this.spinner) this.spinner.stop();
-
-        const currentToolSignature = this.buildToolCallSignature(toolCalls);
-        if (currentToolSignature) {
-          toolSignatureHistory.push(currentToolSignature);
-          if (toolSignatureHistory.length > 3) {
-            toolSignatureHistory.shift();
-          }
-          // Only break if 3+ consecutive identical signatures — 2 repeats is normal iteration
-          if (toolSignatureHistory.length === 3 &&
-              toolSignatureHistory[0] === currentToolSignature &&
-              toolSignatureHistory[1] === currentToolSignature) {
-            console.log(`
-${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). Breaking out.${colors.reset}`);
-            reachedToolLimit = false;
-            break;
-          }
-        }
-
-        const BOX_WIDTH = terminalWidth(76, 116, 92);
-        messages.push({
-          role: 'assistant',
-          content: assistantMsg.content || '',
-          tool_calls: this.formatToolCallsForMessage(toolCalls),
-        });
-
-        for (const tc of toolCalls) {
-          const { toolName, toolArgs } = tc;
-          const canonicalToolName = this.tools.normalizeToolName(toolName);
-          const argParseError = toolArgs?.__toolArgParseError;
-          const recoveredArgs = argParseError ? this.recoverToolArgs(canonicalToolName, toolArgs.__rawToolArgs) : null;
-          const canUseRecoveredArgs = recoveredArgs && Object.keys(recoveredArgs).length > 0;
-          const normalizedArgs = argParseError && !canUseRecoveredArgs
-            ? {}
-            : this.tools.normalizeToolInput?.(canonicalToolName, canUseRecoveredArgs ? recoveredArgs : toolArgs) ?? toolArgs;
-          const enrichedArgs = argParseError && !canUseRecoveredArgs ? {} : this.enrichToolArgs(canonicalToolName, normalizedArgs, messages);
-
-          const icon = canonicalToolName === 'Bash' ? '⚙' : canonicalToolName === 'Read' ? '📖' : canonicalToolName === 'Write' ? '✏️' : canonicalToolName === 'Edit' ? '🔧' : canonicalToolName === 'Grep' ? '🔍' : canonicalToolName === 'Glob' ? '📂' : '⚡';
-
-          let proceed = true;
-          if (await this.shouldPromptForToolPermission(canonicalToolName) && (!argParseError || canUseRecoveredArgs)) {
-            const cmd = enrichedArgs.command || enrichedArgs.cmd || 'unknown';
-            if (this.sessionPermissionGrants.has(canonicalToolName)) {
-              proceed = true;
-            } else {
-              proceed = await this.promptToolPermission(cmd);
-              if (proceed === 'session') {
-                await this.rememberSessionToolPermission(canonicalToolName);
-                proceed = true;
-              }
-
-              if (proceed === true) {
-                await this.permissionManager.allowTool(canonicalToolName);
-              }
-
-              if (!proceed) {
-                console.log(`${colors.magenta}│${colors.reset}   ${colors.dim}Đã hủy lệnh.${colors.reset}`);
-              }
-            }
-          }
-
-          let result;
-          if (argParseError && !canUseRecoveredArgs) {
-            result = {
-              success: false,
-              error: `Invalid ${canonicalToolName} tool arguments JSON: ${toolArgs.__toolArgParseError}`,
-              rawArgs: toolArgs.__rawToolArgs,
-              recovery: 'Use valid JSON object arguments, for example {"file_path":"README.md"} for Read or {"command":"npm test"} for Bash.',
-            };
-          } else if (!proceed) {
-            result = { success: false, error: 'User denied permission to execute this command.' };
-          } else {
-            result = toolName
-              ? await this.tools.execute(canonicalToolName, enrichedArgs, { cwd: this.projectPath })
-              : { success: false, error: 'Tool call is missing a tool name' };
-          }
-          messages.push({
-            role: 'tool',
-            tool_call_id: tc.id || `tool-${Date.now()}`,
-            content: JSON.stringify(result),
-          });
-
-          const summary = this.formatToolResultForConsole(canonicalToolName, result);
-          if (summary) {
-            toolSummaries.push(`${canonicalToolName}: ${summary}`);
-            const statusIcon = result.success === false ? `${colors.red}✖${colors.reset}` : `${colors.green}✓${colors.reset}`;
-            const toolLine = `${icon} ${colors.cyan}${colors.bright}${toolName}${colors.reset}`;
-            const summaryLines = summary.split('\n').flatMap(line => wrapText(line, BOX_WIDTH - 8));
-            console.log(renderBox({
-              title: 'AGENT TOOLS EXECUTION',
-              width: BOX_WIDTH,
-              borderColor: colors.magenta,
-              titleColor: colors.bright,
-              body: [
-                toolLine,
-                ...summaryLines.map((line, index) => index === 0 ? `${statusIcon} ${colors.dim}${line}${colors.reset}` : `${colors.dim}${line}${colors.reset}`),
-              ],
-            }));
-          }
-        }
-        console.log('');
-      }
-
-      if (usedTools && !finalContent) {
-        finalContent = await this.requestFinalAnswer(messages, toolSummaries, startedAt, totalUsage);
-      }
-    } finally {
-      if (tools) this.ai.setTools(previousTools);
-      if (this.spinner) this.spinner.stop();
-    }
-
-    if ((reachedToolLimit || usedTools) && !finalContent) {
-      if (this.spinner) this.spinner.stop();
-      finalContent = this.buildToolFallbackAnswer(toolSummaries);
-      console.log(`\n${colors.yellow}${finalContent}${colors.reset}\n`);
-    }
-
-    return { finalContent, usedTools };
+    return this.agentRuntime.runConversation(messages, label, tools);
   }
 
   getLatestUserText(messages = []) {
@@ -1282,6 +1578,16 @@ ${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). 
     return actionPattern.test(text) && targetPattern.test(text);
   }
 
+  shouldAutoVerifyAfterTools(originalMessage = '', usedMutatingTools = false) {
+    if (!usedMutatingTools) return false;
+    const text = String(originalMessage || '').toLowerCase();
+    if (!text.trim()) return false;
+    if (/\b(skip tests?|no verify|don't verify|khong test|khong verify)\b|(?:không test|đừng test|không verify|bỏ qua test)/i.test(text)) {
+      return false;
+    }
+    return /\b(fix|bug|error|test|build|lint|typecheck|compile|refactor|implement|edit|write|change|patch|debug)\b|(?:sửa|lỗi|test|build|kiểm tra|biên dịch|vá|debug|triển khai|làm|đổi|viết)/i.test(text);
+  }
+
   responseNeedsToolEvidence(content = '') {
     const text = String(content || '').toLowerCase();
     if (!text.trim()) return false;
@@ -1297,6 +1603,10 @@ ${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). 
       'Runtime correction: the user requested an action that requires tool evidence.',
       'Your previous response did not use any tool, so it was blocked to avoid falsely claiming completion.',
       'Now use the available tools to inspect/edit/run/check as needed. Do not say the task is done until a tool result proves it.',
+      'If native tool calls are not supported by this model/provider, output exactly one fallback tool call and no prose, for example:',
+      '<invoke name="Read"><parameter name="path">README.md</parameter></invoke>',
+      '{"tool":"Read","arguments":{"path":"README.md"}}',
+      'CALL_TOOL Read {"path":"README.md"}',
       `Original user request: ${request}`,
     ].join('\n');
   }
@@ -1315,8 +1625,12 @@ ${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). 
     this.addUsage(totalUsage, response.usage);
     const assistantMsg = response.choices?.[0]?.message || {};
     const inlineToolExtraction = this.extractInlineToolCalls(assistantMsg.content || '');
+    const legacyFunctionCall = assistantMsg.function_call
+      ? [{ id: 'function-call-0', source: 'legacy-function-call', type: 'function', function: assistantMsg.function_call }]
+      : [];
     const toolCalls = this.normalizeToolCalls([
-      ...(assistantMsg.tool_calls || []),
+      ...(assistantMsg.tool_calls || []).map(call => ({ source: 'native-tool-calls', ...call })),
+      ...legacyFunctionCall,
       ...inlineToolExtraction.toolCalls,
     ]);
     if (inlineToolExtraction.toolCalls.length > 0) {
@@ -1354,6 +1668,7 @@ ${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). 
         const index = deltaToolCall.index ?? toolCallParts.length;
         toolCallParts[index] = toolCallParts[index] || {
           id: '',
+          source: 'stream-native-tool-calls',
           type: 'function',
           function: { name: '', arguments: '' },
         };
@@ -1365,6 +1680,29 @@ ${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). 
         if (deltaToolCall.function?.arguments) {
           toolCallParts[index].function.arguments += deltaToolCall.function.arguments;
         }
+      }
+      if (choice.delta?.function_call || choice.message?.function_call) {
+        const functionCall = choice.delta?.function_call || choice.message?.function_call;
+        toolCallParts[0] = toolCallParts[0] || {
+          id: 'function-call-0',
+          source: 'stream-legacy-function-call',
+          type: 'function',
+          function: { name: '', arguments: '' },
+        };
+        if (functionCall.name) toolCallParts[0].function.name += functionCall.name;
+        if (functionCall.arguments) toolCallParts[0].function.arguments += functionCall.arguments;
+      }
+      for (const messageToolCall of choice.message?.tool_calls || []) {
+        const index = messageToolCall.index ?? toolCallParts.length;
+        toolCallParts[index] = {
+          id: messageToolCall.id || `message-call-${index}`,
+          source: 'message-tool-calls',
+          type: messageToolCall.type || 'function',
+          function: {
+            name: messageToolCall.function?.name || '',
+            arguments: messageToolCall.function?.arguments || '',
+          },
+        };
       }
 
       if (chunk.content) {
@@ -1448,6 +1786,10 @@ ${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). 
     readline.emitKeypressEvents(process.stdin, this.rl);
 
     process.stdin.on('keypress', (str, key = {}) => {
+      if (key.ctrl && key.name === 'v') {
+        void this.handleDirectClipboardPaste();
+        return;
+      }
       if (key.ctrl || key.meta) return;
 
       if (typeof str === 'string' && str.length > 1) {
@@ -1475,6 +1817,51 @@ ${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). 
         this.openSlashMenu(line);
       });
     });
+  }
+
+  async handleDirectClipboardPaste() {
+    if (this._handlingDirectClipboardPaste || this.readlineClosed || !this.running) return false;
+    this._handlingDirectClipboardPaste = true;
+    try {
+      const image = await this.getClipboardImage();
+      if (!image) return false;
+
+      const prompt = (this.rl?.line || '').trim() || 'Analyze this pasted clipboard image.';
+      this.closeSlashMenu();
+      if (this.rl?.write) {
+        this.rl.write(null, { ctrl: true, name: 'u' });
+      }
+
+      this.inputQueue = this.inputQueue
+        .then(async () => {
+          this.closeInputBox();
+          await this.processPastedImageTask(prompt, image);
+        })
+        .catch((error) => {
+          this.closeInputBox();
+          console.log(`\n${colors.red}✖ Paste image error: ${error.message}${colors.reset}\n`);
+          if (this.running && !this.readlineClosed) this.showInputPrompt();
+        });
+      return true;
+    } finally {
+      this._handlingDirectClipboardPaste = false;
+    }
+  }
+
+  async processPastedImageTask(prompt, image) {
+    this.isProcessing = true;
+    this.isCancelled = false;
+    try {
+      await this.chat(prompt, [image]);
+    } finally {
+      this.isProcessing = false;
+      if (this.taskQueue.length > 0) {
+        const nextTask = this.taskQueue.shift();
+        setTimeout(() => this.processInputTask(nextTask), 0);
+      } else if (!this.readlineClosed) {
+        this.showInputPrompt();
+      }
+    }
   }
 
   openSlashMenu(line) {
@@ -1589,20 +1976,44 @@ ${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). 
   getSlashSuggestions(line) {
     const query = String(line || '').trim();
     if (!query.startsWith('/')) return [];
+    const enrich = item => this.enrichSlashSuggestion(item);
     if (query === '/') {
       const preferred = [
-        '/help', '/exit', '/pwd', '/cd',
+        '/help', '/new', '/history', '/exit', '/pwd', '/cd',
           '/provider', '/model', '/models', '/providers',
-          '/auto', '/debug', '/swe',
+          '/theme:toggle',
+          '/auto', '/debug', '/doctor', '/context', '/scorecard', '/swe',
           '/read', '/write', '/glob', '/grep', '/bash',
         '/codex', '/claude', '/karpathy', '/agents',
         '/resources', '/designs', '/skills',
+        '/ecc',
+        '/composer', '/complete', '/ensemble', '/vote', '/orchestrate', '/search', '/undo',
       ];
       return preferred
         .map(cmd => SLASH_COMMANDS.find(item => item.cmd === cmd))
-        .filter(Boolean);
+        .filter(Boolean)
+        .map(enrich);
     }
-    return SLASH_COMMANDS.filter(item => item.cmd.startsWith(query)).slice(0, 12);
+    return SLASH_COMMANDS
+      .filter(item => item.cmd.startsWith(query))
+      .slice(0, 12)
+      .map(enrich);
+  }
+
+  enrichSlashSuggestion(item) {
+    if (!item) return item;
+    if (item.cmd !== '/provider') return item;
+
+    const providerNames = typeof this.ai?.listProviders === 'function'
+      ? this.ai.listProviders().map(provider => provider.name).filter(Boolean)
+      : Object.keys(this.ai?.providers || {});
+    const uniqueProviders = [...new Set(providerNames)];
+    if (uniqueProviders.length === 0) return item;
+
+    return {
+      ...item,
+      usage: `/provider <${uniqueProviders.join('|')}>`,
+    };
   }
 
   enrichToolArgs(toolName, toolArgs = {}, messages = []) {
@@ -1750,7 +2161,16 @@ ${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). 
 
   printAssistantAnswer(content, startedAt, usage = {}) {
     const formatted = formatMarkdown(content);
-    console.log(`\n${colors.white}${formatted}${colors.reset}`);
+    const footer = this.formatAnswerFooter(startedAt, usage);
+    const body = String(formatted || '').split(/\r?\n/);
+    console.log(`\n${renderBox({
+      title: 'Assistant',
+      width: terminalWidth(72, 120, 92),
+      borderColor: colors.blue,
+      titleColor: colors.cyan,
+      body: [...body, '', `${colors.dim}${footer}${colors.reset}`],
+    })}\n`);
+    return;
     console.log(`${colors.dim}${'─'.repeat(50)}${colors.reset}`);
     console.log(`${colors.dim}${this.formatAnswerFooter(startedAt, usage)}${colors.reset}\n`);
   }
@@ -1800,14 +2220,16 @@ ${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). 
   }
 
   async promptToolPermission(commandText) {
-    process.stdout.write(`${colors.magenta}│${colors.reset}   ${colors.yellow}⚠  AI muốn chạy: ${colors.bright}${commandText}${colors.reset}\n`);
-    process.stdout.write(`${colors.magenta}│${colors.reset}   ${colors.cyan}1.${colors.reset} Cho phép\n`);
-    process.stdout.write(`${colors.magenta}│${colors.reset}   ${colors.cyan}2.${colors.reset} Cho phép trong phiên\n`);
-    process.stdout.write(`${colors.magenta}│${colors.reset}   ${colors.cyan}3.${colors.reset} Không cho phép\n`);
+    const side = this.useUnicodeUi ? '│' : '|';
+    const warn = this.useUnicodeUi ? '⚠' : '!';
+    process.stdout.write(`${colors.magenta}${side}${colors.reset}   ${colors.yellow}${warn}  AI muốn chạy: ${colors.bright}${commandText}${colors.reset}\n`);
+    process.stdout.write(`${colors.magenta}${side}${colors.reset}   ${colors.cyan}1.${colors.reset} Cho phép\n`);
+    process.stdout.write(`${colors.magenta}${side}${colors.reset}   ${colors.cyan}2.${colors.reset} Cho phép trong phiên\n`);
+    process.stdout.write(`${colors.magenta}${side}${colors.reset}   ${colors.cyan}3.${colors.reset} Không cho phép\n`);
 
     while (true) {
       const answer = await new Promise(resolve => {
-        this.rl.question(`${colors.magenta}│${colors.reset}   ${colors.yellow}Chọn [1/2/3]: ${colors.reset}`, resolve);
+        this.rl.question(`${colors.magenta}${side}${colors.reset}   ${colors.yellow}Chọn [1/2/3]: ${colors.reset}`, resolve);
       });
 
       const choice = String(answer || '').trim().toLowerCase();
@@ -1821,7 +2243,7 @@ ${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). 
         return false;
       }
 
-      process.stdout.write(`${colors.magenta}│${colors.reset}   ${colors.dim}Vui lòng chọn 1, 2 hoặc 3.${colors.reset}\n`);
+      process.stdout.write(`${colors.magenta}${side}${colors.reset}   ${colors.dim}Vui lòng chọn 1, 2 hoặc 3.${colors.reset}\n`);
     }
   }
 
@@ -1887,6 +2309,16 @@ ${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). 
     console.log(`${colors.cyan}Tool Usage:${colors.reset}`);
     for (const item of summary) {
       console.log(`  ${item.tool}: ${item.calls} call(s), ${item.failures} failure(s), avg ${item.avgMs}ms`);
+    }
+    const context = this.session?.getContext?.() || {};
+    const adapterStats = context.toolCallAdapterStats?.value || context.toolCallAdapterStats;
+    if (adapterStats?.total) {
+      console.log(`${colors.cyan}Tool Call Adapter:${colors.reset}`);
+      console.log(`  total parsed: ${adapterStats.total}`);
+      const sources = Object.entries(adapterStats.bySource || {}).sort((a, b) => b[1] - a[1]);
+      if (sources.length > 0) {
+        console.log(`  sources: ${sources.map(([name, count]) => `${name}=${count}`).join(', ')}`);
+      }
     }
   }
 
@@ -1985,8 +2417,17 @@ ${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). 
     try {
       const needsTools = true;
       const context = await this.getProjectContext(message);
+      const systemPrompt = this.getSystemPrompt(context);
+
+      // Inject @-context if any
+      const atContextStr = this._pendingAtContext || '';
+      this._pendingAtContext = '';
+      const finalSystemPrompt = atContextStr
+        ? systemPrompt + '\n\n' + atContextStr
+        : systemPrompt;
+
       const messages = [
-        { role: 'system', content: this.getSystemPrompt(context) }
+        { role: 'system', content: finalSystemPrompt }
       ];
 
       await this.compressSessionContext(false);
@@ -2018,14 +2459,14 @@ ${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). 
       }
 
       const tools = this.getAgentTools('general');
-      const { finalContent, usedTools } = await this.runConversation(messages, 'Thinking', tools);
+      const { finalContent, usedMutatingTools } = await this.runConversation(messages, 'Thinking', tools);
 
       await this.session.addToHistory({ role: 'user', content: message });
       await this.session.addToHistory({ role: 'assistant', content: finalContent });
 
       // Tự động verify: nếu AI đã dùng tools (sửa code), chạy test/build
-      if (usedTools && finalContent) {
-        await this.verifyAndHeal(messages, tools, 5);
+      if (finalContent && this.shouldAutoVerifyAfterTools(message, usedMutatingTools)) {
+        await this.verifyAndHeal(messages, tools, 2);
       }
 
     } catch (error) {
@@ -2036,7 +2477,31 @@ ${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). 
   /**
    * Chạy verification commands (test, build) và trả về kết quả
    */
-  async runVerification(commands = ['npm test']) {
+  async inferVerificationCommands(task = '') {
+    const fs = await import('fs/promises');
+    const candidates = [];
+    const packagePath = path.join(this.projectPath, 'package.json');
+    try {
+      const pkg = JSON.parse(await fs.readFile(packagePath, 'utf8'));
+      const scripts = pkg.scripts || {};
+      if (scripts.test) candidates.push('npm test');
+      if (scripts.build && /\b(build|compile|type|typescript|tsc|frontend|ui|design|next|vite|react|debug|fix|bug|error|lỗi)\b/i.test(task)) {
+        candidates.push('npm run build');
+      }
+      if (scripts.lint && /\b(lint|style|eslint|quality|review)\b/i.test(task)) candidates.push('npm run lint');
+      if (scripts.typecheck) candidates.push('npm run typecheck');
+    } catch {
+      // Not a Node project.
+    }
+
+    if (candidates.length === 0) return ['npm test'];
+    return [...new Set(candidates)].slice(0, 3);
+  }
+
+  async runVerification(commands = null) {
+    commands = Array.isArray(commands) && commands.length > 0
+      ? commands
+      : await this.inferVerificationCommands();
     const { execSync } = await import('child_process');
     const results = [];
 
@@ -2068,7 +2533,7 @@ ${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). 
    * - Lặp đến khi pass hết hoặc hết số lần thử
    */
   async verifyAndHeal(messages, tools, maxAttempts = 5) {
-    const verifCommands = ['npm test'];
+    const verifCommands = await this.inferVerificationCommands(this.getLatestUserText(messages));
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       console.log(`\n${colors.cyan}=== Verification Attempt ${attempt}/${maxAttempts} ===${colors.reset}`);
@@ -2138,9 +2603,10 @@ Do NOT stop until all errors are resolved.`;
   }
 
   async runAgent(role, task) {
+    const agentDefinition = await this.agentRegistry.get(role || 'general');
     const context = await this.getProjectContext(task);
     const messages = [
-      { role: 'system', content: this.getAgentSystemPrompt(role, context) }
+      { role: 'system', content: this.getAgentDefinitionSystemPrompt(agentDefinition, context) }
     ];
 
     const promptHistory = this.getCompressedPromptHistory({
@@ -2157,15 +2623,172 @@ Do NOT stop until all errors are resolved.`;
 
     messages.push({ role: 'user', content: `Task: ${task}` });
 
-    const agentTools = this.getAgentTools(role);
-    const { finalContent, usedTools } = await this.runConversation(messages, `Subagent [${role}]`, agentTools);
+    const agentTools = this.getAgentToolsForDefinition(agentDefinition);
+    const { finalContent, usedMutatingTools } = await this.runConversation(messages, `Subagent [${agentDefinition.id}]`, agentTools);
 
-    await this.session.addToHistory({ role: 'user', content: `[subagent:${role}] ${task}` });
+    await this.session.addToHistory({ role: 'user', content: `[subagent:${agentDefinition.id}] ${task}` });
     await this.session.addToHistory({ role: 'assistant', content: finalContent });
 
-    if (usedTools && finalContent) {
-      await this.verifyAndHeal(messages, agentTools, 3);
+    if (finalContent && this.shouldAutoVerifyAfterTools(task, usedMutatingTools)) {
+      await this.verifyAndHeal(messages, agentTools, 2);
     }
+  }
+
+  async listAgentDefinitions() {
+    return this.agentRegistry.list();
+  }
+
+  getAgentToolsForDefinition(agentDefinition = {}) {
+    const base = this.tools.getToolDefinitions();
+    const allowed = Array.isArray(agentDefinition.tools) ? agentDefinition.tools : [];
+    if (allowed.length === 0) return this.getAgentTools(agentDefinition.id || 'general');
+    return base.filter(tool => allowed.includes(tool.name));
+  }
+
+  getAgentDefinitionSystemPrompt(agentDefinition = {}, context = '') {
+    const fallback = this.getAgentSystemPrompt(agentDefinition.id || 'general', context);
+    const instructions = String(agentDefinition.instructionsPrompt || '').trim();
+    const custom = instructions
+      ? [
+          `You are ${agentDefinition.displayName || agentDefinition.id}, a Winter custom agent.`,
+          instructions,
+          '',
+          'AGENT CONTRACT:',
+          '- Inspect real project state before editing.',
+          '- Use only the provided tools and cite tool evidence in the final answer.',
+          '- Patch the smallest root cause and verify when the task changes code.',
+          '- Do not claim success without tool evidence.',
+        ].join('\n')
+      : fallback;
+
+    const metadata = [
+      `Agent id: ${agentDefinition.id || 'general'}`,
+      `Agent source: ${agentDefinition.source || 'builtin'}`,
+      Array.isArray(agentDefinition.tools) && agentDefinition.tools.length
+        ? `Allowed tools: ${agentDefinition.tools.join(', ')}`
+        : '',
+    ].filter(Boolean).join('\n');
+
+    return [custom, metadata ? `\nAGENT METADATA:\n${metadata}` : '', context ? `\nPROJECT CONTEXT:\n${context}` : ''].join('\n');
+  }
+
+  async runToolDoctor() {
+    const provider = this.ai?.getActiveProvider?.() || 'unknown';
+    const model = this.ai?.providers?.[provider]?.model || 'unknown';
+    const tools = this.getAgentTools('plan').filter(tool => tool.name === 'Read');
+    const probePath = 'README.md';
+    const messages = [
+      {
+        role: 'system',
+        content: [
+          'You are Winter tool-call doctor.',
+          'You must diagnose whether this provider/model can trigger a real tool execution.',
+          'Call the Read tool for README.md now. Do not answer in prose before the tool call.',
+          'If native tool calls are unavailable, output exactly one fallback call:',
+          '<invoke name="Read"><parameter name="path">README.md</parameter></invoke>',
+          '{"tool":"Read","arguments":{"path":"README.md"}}',
+          'CALL_TOOL Read {"path":"README.md"}',
+        ].join('\n'),
+      },
+      {
+        role: 'user',
+        content: `TOOL DOCTOR: call Read on ${probePath}.`,
+      },
+    ];
+
+    console.log(`${colors.cyan}Tool doctor:${colors.reset} provider=${provider}, model=${model}`);
+    const beforeEvents = this.session?.getToolEvents?.(1)?.length || 0;
+    const result = await this.runConversation(messages, 'Tool doctor', tools);
+    const recentEvents = this.session?.getToolEvents?.(5) || [];
+    const readEvent = recentEvents.find(event => event.tool === 'Read' && event.success !== false);
+    const passed = result.usedTools && Boolean(readEvent || /readme\.md/i.test(result.finalContent || ''));
+
+    if (passed) {
+      console.log(`${colors.green}✓ Tool calling works for ${provider}/${model}.${colors.reset}`);
+      if (readEvent) {
+        console.log(`${colors.dim}  Last Read result: ${readEvent.result?.path || probePath}${colors.reset}`);
+      }
+      return { success: true, provider, model, usedTools: result.usedTools, beforeEvents };
+    }
+
+    console.log(`${colors.red}✖ Tool calling did not execute for ${provider}/${model}.${colors.reset}`);
+    console.log(`${colors.yellow}  Try a stronger model or use a provider that supports OpenAI-compatible tools/fallback text output.${colors.reset}`);
+    return { success: false, provider, model, usedTools: result.usedTools, beforeEvents };
+  }
+
+  async getCapabilityScorecard() {
+    return assessWinterCapabilities(this);
+  }
+
+  async showCapabilityScorecard() {
+    const report = await this.getCapabilityScorecard();
+    console.log(formatCapabilityScorecard(report, { colors }));
+    return report;
+  }
+
+  async showContextDiagnostics(task = '') {
+    const provider = this.ai?.getActiveProvider?.() || 'unknown';
+    const model = this.ai?.providers?.[provider]?.model || 'unknown';
+    const context = await this.getProjectContext(task);
+    let codebaseStats = null;
+    try {
+      codebaseStats = await this.ensureCodebaseIndex({ verbose: false });
+    } catch {
+      codebaseStats = null;
+    }
+
+    const sectionNames = Array.from(context.matchAll(/^\[([^\]]+)\]/gm)).map(match => match[1]);
+    const lines = [
+      `${colors.cyan}${colors.bright}Winter context diagnostics${colors.reset}`,
+      `Project: ${this.projectPath}`,
+      `Provider/model: ${provider}/${model}`,
+      `Context chars: ${context.length}`,
+      `Sections: ${sectionNames.length ? sectionNames.join(', ') : 'none'}`,
+    ];
+
+    if (codebaseStats) {
+      lines.push(`Codebase index: ${codebaseStats.totalFiles || 0} files, ${codebaseStats.totalChunks || 0} chunks`);
+    } else {
+      lines.push('Codebase index: unavailable');
+    }
+
+    lines.push('');
+    lines.push(colors.dim + this.compactText(context, 3200, 'context diagnostics') + colors.reset);
+    console.log(lines.join('\n'));
+    return { provider, model, contextLength: context.length, sections: sectionNames, codebaseStats };
+  }
+
+  async runFullDoctor() {
+    const report = await this.showCapabilityScorecard();
+    console.log('');
+    await this.showContextDiagnostics('doctor full codebase provider tool debug workflow');
+    console.log('');
+    const toolResult = await this.runToolDoctor();
+    return {
+      success: report.overall >= report.target && toolResult.success,
+      scorecard: report,
+      toolResult,
+    };
+  }
+
+  async runToolDoctor() {
+    return runToolDoctorDiagnostics(this);
+  }
+
+  async getCapabilityScorecard() {
+    return getCapabilityScorecardReport(this);
+  }
+
+  async showCapabilityScorecard() {
+    return showCapabilityScorecardDiagnostics(this);
+  }
+
+  async showContextDiagnostics(task = '') {
+    return showContextDiagnosticsReport(this, task);
+  }
+
+  async runFullDoctor() {
+    return runFullDoctorDiagnostics(this);
   }
 
   async getProjectContext(task = '') {
@@ -2197,6 +2820,11 @@ Do NOT stop until all errors are resolved.`;
     const localResources = shouldIncludeResources ? await this.getLocalResourceContext() : '';
     if (localResources) {
       context.push(localResources);
+    }
+
+    const codebaseContext = await this.buildCodebaseContext(task);
+    if (codebaseContext) {
+      context.push(codebaseContext);
     }
 
     // Git Context
@@ -2483,5 +3111,42 @@ Do NOT stop until all errors are resolved.`;
     } catch (e) {
       return null;
     }
+  }
+
+  async getClipboardImage() {
+    if (process.platform !== 'win32') return null;
+    try {
+      const { execSync } = await import('child_process');
+      const script = [
+        'Add-Type -AssemblyName System.Windows.Forms',
+        'Add-Type -AssemblyName System.Drawing',
+        '$img = [System.Windows.Forms.Clipboard]::GetImage()',
+        'if ($null -ne $img) {',
+        '  $ms = New-Object System.IO.MemoryStream',
+        '  $img.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)',
+        '  [Convert]::ToBase64String($ms.ToArray())',
+        '}',
+      ].join('; ');
+      const base64 = execSync('powershell.exe -NoProfile -NonInteractive -Command -', {
+        input: script,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'ignore'],
+        timeout: 10000,
+      }).trim();
+      return base64 ? { mime: 'image/png', base64 } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async getClipboardPayload() {
+    const image = await this.getClipboardImage();
+    if (image) return { type: 'image', image };
+
+    const text = await this.getClipboardContent();
+    if (!text) return null;
+    const dataImage = this.parseDataUrlImage(text);
+    if (dataImage) return { type: 'image', image: dataImage };
+    return { type: 'text', text };
   }
 }

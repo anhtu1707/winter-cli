@@ -1,0 +1,215 @@
+import { Spinner } from '../cli/spinner.js';
+import { colors } from '../cli/snowflake-logo.js';
+import { renderBox, terminalWidth, wrapText } from '../cli/terminal-ui.js';
+import { getMutatingToolNames, recordToolCallAdapterStats } from '../cli/tool-runtime.js';
+
+export class AgentRuntime {
+  constructor(repl) {
+    this.repl = repl;
+  }
+
+  async runConversation(messages, label = 'Thinking', tools = null) {
+    const repl = this.repl;
+    repl.spinner = new Spinner(label + '...');
+    repl.spinner.start();
+    repl.hydrateSessionToolPermissions();
+
+    const startedAt = Date.now();
+    const previousTools = repl.ai.tools;
+    if (tools) repl.ai.setTools(tools);
+
+    let finalContent = '';
+    let reachedToolLimit = true;
+    let usedTools = false;
+    let usedMutatingTools = false;
+    const toolSummaries = [];
+    const totalUsage = {};
+    const toolSignatureHistory = [];
+    const executionProfile = repl.selectExecutionProfile(messages, { enableTools: true });
+    const requireToolEvidence = repl.actionRequiresTools(messages);
+    let noToolActionRetries = 0;
+
+    try {
+      for (let i = 0; i < 8; i++) {
+        if (repl.isCancelled) throw new Error('AbortError');
+        const turn = await repl.requestAssistantTurn(messages, {
+          provider: executionProfile.provider,
+          model: executionProfile.model,
+          enableTools: true,
+          requireToolEvidence: requireToolEvidence && !usedTools,
+        }, startedAt, totalUsage);
+
+        const assistantMsg = turn.assistantMsg || {};
+        const toolCalls = turn.toolCalls || [];
+
+        if (turn.finalContent && toolCalls.length === 0) {
+          finalContent = turn.finalContent;
+        }
+
+        if (toolCalls.length === 0) {
+          if (turn.finishReason === 'tool_evidence_required') {
+            noToolActionRetries++;
+            if (noToolActionRetries > 2) {
+              finalContent = 'Chưa thực hiện được: model trả lời mà không dùng tool nên Winter đã chặn để tránh báo xạo.';
+              console.log(`\n${colors.yellow}${finalContent}${colors.reset}\n`);
+              reachedToolLimit = false;
+              break;
+            }
+            messages.push({
+              role: 'assistant',
+              content: assistantMsg.content || '',
+            });
+            messages.push({
+              role: 'user',
+              content: repl.buildToolEvidenceCorrection(messages),
+            });
+            finalContent = '';
+            continue;
+          }
+          if (turn.finishReason === 'length') {
+            console.log(`\n${colors.yellow}ℹ Phản hồi bị cắt cụt do hết token. Đang tự động tiếp tục...${colors.reset}`);
+            messages.push({
+              role: 'assistant',
+              content: turn.finalContent || '',
+            });
+            messages.push({
+              role: 'user',
+              content: 'Continue generating the rest of the response.',
+            });
+            continue;
+          }
+          reachedToolLimit = false;
+          break;
+        }
+
+        usedTools = true;
+        await recordToolCallAdapterStats(repl.session, toolCalls);
+        if (repl.spinner) repl.spinner.stop();
+
+        const currentToolSignature = repl.buildToolCallSignature(toolCalls);
+        if (currentToolSignature) {
+          toolSignatureHistory.push(currentToolSignature);
+          if (toolSignatureHistory.length > 3) {
+            toolSignatureHistory.shift();
+          }
+          if (
+            toolSignatureHistory.length === 3 &&
+            toolSignatureHistory[0] === currentToolSignature &&
+            toolSignatureHistory[1] === currentToolSignature
+          ) {
+            console.log(`\n${colors.yellow}ℹ AI tool loop detected (3 consecutive identical tool calls). Breaking out.${colors.reset}`);
+            reachedToolLimit = false;
+            break;
+          }
+        }
+
+        const BOX_WIDTH = terminalWidth(76, 116, 92);
+        messages.push({
+          role: 'assistant',
+          content: assistantMsg.content || '',
+          tool_calls: repl.formatToolCallsForMessage(toolCalls),
+        });
+
+        for (const tc of toolCalls) {
+          const { toolName, toolArgs } = tc;
+          const canonicalToolName = repl.tools.normalizeToolName(toolName);
+          if (getMutatingToolNames().has(canonicalToolName)) {
+            usedMutatingTools = true;
+          }
+          const argParseError = toolArgs?.__toolArgParseError;
+          const recoveredArgs = argParseError ? repl.recoverToolArgs(canonicalToolName, toolArgs.__rawToolArgs) : null;
+          const canUseRecoveredArgs = recoveredArgs && Object.keys(recoveredArgs).length > 0;
+          const normalizedArgs = argParseError && !canUseRecoveredArgs
+            ? {}
+            : repl.tools.normalizeToolInput?.(canonicalToolName, canUseRecoveredArgs ? recoveredArgs : toolArgs) ?? toolArgs;
+          const enrichedArgs = argParseError && !canUseRecoveredArgs ? {} : repl.enrichToolArgs(canonicalToolName, normalizedArgs, messages);
+
+          const icon = repl.useUnicodeUi
+            ? (canonicalToolName === 'Bash' ? '⚙' : canonicalToolName === 'Read' ? '📖' : canonicalToolName === 'Write' ? '✏️' : canonicalToolName === 'Edit' ? '🔧' : canonicalToolName === 'Grep' ? '🔍' : canonicalToolName === 'Glob' ? '📂' : '⚡')
+            : `[${canonicalToolName}]`;
+
+          let proceed = true;
+          if (await repl.shouldPromptForToolPermission(canonicalToolName) && (!argParseError || canUseRecoveredArgs)) {
+            const cmd = enrichedArgs.command || enrichedArgs.cmd || 'unknown';
+            if (repl.sessionPermissionGrants.has(canonicalToolName)) {
+              proceed = true;
+            } else {
+              proceed = await repl.promptToolPermission(cmd);
+              if (proceed === 'session') {
+                await repl.rememberSessionToolPermission(canonicalToolName);
+                proceed = true;
+              }
+
+              if (proceed === true) {
+                await repl.permissionManager.allowTool(canonicalToolName);
+              }
+
+              if (!proceed) {
+                const side = repl.useUnicodeUi ? '│' : '|';
+                console.log(`${colors.magenta}${side}${colors.reset}   ${colors.dim}Đã hủy lệnh.${colors.reset}`);
+              }
+            }
+          }
+
+          let result;
+          if (argParseError && !canUseRecoveredArgs) {
+            result = {
+              success: false,
+              error: `Invalid ${canonicalToolName} tool arguments JSON: ${toolArgs.__toolArgParseError}`,
+              rawArgs: toolArgs.__rawToolArgs,
+              recovery: 'Use valid JSON object arguments, for example {"file_path":"README.md"} for Read or {"command":"npm test"} for Bash.',
+            };
+          } else if (!proceed) {
+            result = { success: false, error: 'User denied permission to execute this command.' };
+          } else {
+            result = toolName
+              ? await repl.tools.execute(canonicalToolName, enrichedArgs, { cwd: repl.projectPath })
+              : { success: false, error: 'Tool call is missing a tool name' };
+          }
+          const promptToolResult = await repl.buildPromptToolResultForModel(canonicalToolName, result);
+          messages.push({
+            role: 'tool',
+            tool_call_id: tc.id || `tool-${Date.now()}`,
+            content: JSON.stringify(promptToolResult),
+          });
+
+          const summary = repl.formatToolResultForConsole(canonicalToolName, result);
+          if (summary) {
+            toolSummaries.push(`${canonicalToolName}: ${summary}`);
+            const statusIcon = result.success === false
+              ? `${colors.red}${repl.useUnicodeUi ? '✖' : 'x'}${colors.reset}`
+              : `${colors.green}${repl.useUnicodeUi ? '✓' : 'ok'}${colors.reset}`;
+            const toolLine = `${icon} ${colors.cyan}${colors.bright}${toolName}${colors.reset}`;
+            const summaryLines = summary.split('\n').flatMap(line => wrapText(line, BOX_WIDTH - 8));
+            console.log(renderBox({
+              title: 'AGENT TOOLS EXECUTION',
+              width: BOX_WIDTH,
+              borderColor: colors.magenta,
+              titleColor: colors.bright,
+              body: [
+                toolLine,
+                ...summaryLines.map((line, index) => index === 0 ? `${statusIcon} ${colors.dim}${line}${colors.reset}` : `${colors.dim}${line}${colors.reset}`),
+              ],
+            }));
+          }
+        }
+        console.log('');
+      }
+
+      if (usedTools && !finalContent) {
+        finalContent = await repl.requestFinalAnswer(messages, toolSummaries, startedAt, totalUsage);
+      }
+    } finally {
+      if (tools) repl.ai.setTools(previousTools);
+      if (repl.spinner) repl.spinner.stop();
+    }
+
+    if ((reachedToolLimit || usedTools) && !finalContent) {
+      if (repl.spinner) repl.spinner.stop();
+      finalContent = repl.buildToolFallbackAnswer(toolSummaries);
+      console.log(`\n${colors.yellow}${finalContent}${colors.reset}\n`);
+    }
+
+    return { finalContent, usedTools, usedMutatingTools };
+  }
+}

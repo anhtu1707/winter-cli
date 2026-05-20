@@ -1,0 +1,112 @@
+{
+  "name": "winter-cli-vscode",
+  "displayName": "Winter CLI",
+  "description": "❄️ Winter AI CLI integration for VS Code — code with AI inline in your editor",
+  "version": "0.1.0",
+  "publisher": "winter-cli",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/user/winter"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Machine Learning",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "coding",
+    "winter",
+    "cli",
+    "assistant"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "winter.startChat",
+        "title": "Winter: Start AI Chat"
+      },
+      {
+        "command": "winter.inlineCompletion",
+        "title": "Winter: Trigger Inline Completion"
+      },
+      {
+        "command": "winter.explainCode",
+        "title": "Winter: Explain Selected Code"
+      },
+      {
+        "command": "winter.refactorCode",
+        "title": "Winter: Refactor Selected Code"
+      },
+      {
+        "command": "winter.fixCode",
+        "title": "Winter: Fix Selected Code"
+      },
+      {
+        "command": "winter.generateTests",
+        "title": "Winter: Generate Tests for File"
+      },
+      {
+        "command": "winter.openTerminal",
+        "title": "Winter: Open CLI Terminal"
+      },
+      {
+        "command": "winter.codeReview",
+        "title": "Winter: Review Current File"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "winter.inlineCompletion",
+        "key": "ctrl+shift+space",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "winter.startChat",
+        "key": "ctrl+shift+i",
+        "when": "editorTextFocus"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "winter.explainCode",
+          "group": "winter@1",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "winter.refactorCode",
+          "group": "winter@2",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "winter.fixCode",
+          "group": "winter@3",
+          "when": "editorHasSelection"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "winter.generateTests",
+          "group": "winter@1"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "echo 'No build step required'",
+    "lint": "echo 'No linter configured'"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0"
+  }
+}

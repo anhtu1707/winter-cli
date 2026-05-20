@@ -22,12 +22,14 @@ test('buildProjectDocs generates useful design, skill, and rule guidance', async
   const localRoot = path.join(root, 'resources', 'local');
   const designs = path.join(localRoot, 'awesome-design-md', 'design-md');
   const karpathy = path.join(localRoot, 'karpathy-tools');
+  const pageAgent = path.join(localRoot, 'page-agent');
   const agents = path.join(localRoot, 'agents.md');
   const codexRules = path.join(localRoot, 'codex', 'rules');
 
   await mkdir(path.join(designs, 'apple'), { recursive: true });
   await mkdir(path.join(designs, 'linear.app'), { recursive: true });
   await mkdir(karpathy, { recursive: true });
+  await mkdir(pageAgent, { recursive: true });
   await mkdir(agents, { recursive: true });
   await mkdir(codexRules, { recursive: true });
   await writeFile(path.join(codexRules, 'repo.md'), '# repo rule');
@@ -45,6 +47,7 @@ test('buildProjectDocs generates useful design, skill, and rule guidance', async
       localRoot,
       designs,
       karpathy,
+      pageAgent,
       agents,
       manifest: path.join(localRoot, 'manifest.json'),
       codex: { rules: codexRules },

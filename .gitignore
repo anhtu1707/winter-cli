@@ -1,4 +1,6 @@
 node_modules/
+VSCode-win32-x64/
+vscode-main/
 
 # Runtime state
 .winter/
@@ -29,6 +31,14 @@ coverage/
 .cache/
 .parcel-cache/
 .turbo/
+
+# vscode-main build outputs
+vscode-main/out/
+vscode-main/out-build/
+vscode-main/out-vscode/
+vscode-main/out-vscode-min/
+vscode-main/VSCode-*/
+vscode-main/.build/
 
 # OS/editor noise
 .DS_Store
