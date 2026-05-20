@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -249,6 +249,45 @@ test('debug and auto commands route to chat with auto-debug prompt', async () =>
   assert.match(calls[1], /AUTO DEBUG: fix lint/);
 });
 
+test('autopilot command routes to chat with verification contract', async () => {
+  const parser = createParser();
+  const calls = [];
+  parser.ai.chat = async message => {
+    calls.push(message);
+    return { content: 'ok' };
+  };
+
+  await parser.parse(['autopilot', 'fix', 'failing', 'tests']);
+  await parser.parse(['/autopilot', 'stabilize', 'build']);
+
+  assert.match(calls[0], /AUTOPILOT TASK: fix failing tests/);
+  assert.match(calls[0], /Run verification commands after changes/);
+  assert.match(calls[1], /AUTOPILOT TASK: stabilize build/);
+});
+
+test('autopilot supports max-loops and custom verify commands', async () => {
+  const parser = createParser();
+  const calls = [];
+  parser.ai.chat = async message => {
+    calls.push(message);
+    return { content: 'ok' };
+  };
+
+  await parser.parse([
+    'autopilot',
+    'tighten',
+    'ci',
+    '--max-loops',
+    '5',
+    '--verify',
+    'npm run lint;npm test',
+  ]);
+
+  assert.match(calls[0], /AUTOPILOT TASK: tighten ci/);
+  assert.match(calls[0], /iterate up to 5 loops/);
+  assert.match(calls[0], /npm run lint && npm test/);
+});
+
 test('mcp and permissions commands update config state', async () => {
   const saved = [];
   const config = {
@@ -280,6 +319,9 @@ test('mcp and permissions commands update config state', async () => {
 
 test('ecc and page-agent slash commands browse bundled resources', async () => {
   const parser = createParser();
+  parser.htmlfx = {
+    info: async () => ({ repoPath: 'x', binaryReady: false }),
+  };
   const logs = [];
   const originalLog = console.log;
 
@@ -289,6 +331,7 @@ test('ecc and page-agent slash commands browse bundled resources', async () => {
     await parser.parse(['/ecc', 'search', 'hook']);
     await parser.parse(['/page-agent']);
     await parser.parse(['/page-agent', 'search', 'dom']);
+    await parser.parse(['/htmlfx']);
   } finally {
     console.log = originalLog;
   }
@@ -297,6 +340,7 @@ test('ecc and page-agent slash commands browse bundled resources', async () => {
   assert(logs.some(line => line.includes('ECC search "hook"')));
   assert(logs.some(line => line.includes('page-agent:')));
   assert(logs.some(line => line.includes('Page Agent search "dom"')));
+  assert(logs.some(line => line.includes('html-effectiveness:')));
   assert(!logs.some(line => line.includes('Unknown slash command')));
 });
 
@@ -320,4 +364,71 @@ test('plugin manager loads local plugin files via file URLs', async () => {
   assert(loaded);
   assert.equal(loaded.version, '2.0.0');
   assert.equal(loaded.icon, '✨');
+});
+
+test('plan option builder returns preset and custom choices', () => {
+  const parser = createParser();
+  const options = parser.buildPlanOptions(
+    'build webapp',
+    {
+      recommendedSkills: ['coding', 'test'],
+      verificationStrategy: ['unit tests', 'build check'],
+    },
+    {
+      scaffold: ['init app', 'install deps'],
+      architecture: ['design modules', 'implement slices'],
+    }
+  );
+
+  assert.equal(options.length, 4);
+  assert.equal(options[0].id, 'mvp');
+  assert.equal(options[3].id, 'custom');
+  assert(options[1].steps.some(step => step.includes('Apply skills')));
+});
+
+test('plan export and apply create markdown/json and skeleton files', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-plan-export-'));
+  const parser = createParser();
+  parser.projectPath = root;
+
+  const task = 'build mobile app auth';
+  const workflow = { profile: 'mobile-build', depth: 'balanced' };
+  const selected = {
+    id: 'balanced',
+    title: 'Balanced chuẩn',
+    description: 'Cân bằng tốc độ và chất lượng',
+    steps: ['Init app', 'Add auth module', 'Run tests'],
+  };
+
+  const mdPath = await parser.exportPlanArtifact({
+    task,
+    workflow,
+    selected,
+    format: 'md',
+  });
+  const jsonPath = await parser.exportPlanArtifact({
+    task,
+    workflow,
+    selected,
+    format: 'json',
+  });
+  const skeletonPath = await parser.applyPlanSkeleton({
+    task,
+    selected,
+    workflow,
+    exportPath: mdPath,
+  });
+
+  const [mdText, jsonText, skeletonText] = await Promise.all([
+    readFile(mdPath, 'utf8'),
+    readFile(jsonPath, 'utf8'),
+    readFile(skeletonPath, 'utf8'),
+  ]);
+
+  assert(mdText.includes('# Winter Plan'));
+  assert(mdText.includes('## Steps'));
+  assert(jsonText.includes('"profile": "mobile-build"'));
+  assert(jsonText.includes('"steps"'));
+  assert(skeletonText.includes('# Plan Task List'));
+  assert(skeletonText.includes('- [ ] Add auth module'));
 });

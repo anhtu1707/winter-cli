@@ -24,6 +24,7 @@ test('usage helpers aggregate OpenAI and Anthropic style token usage', () => {
 
 test('tool argument parser recovers embedded JSON and reports malformed args', () => {
   assert.deepEqual(parseToolArguments('prefix {"command":"npm test"} suffix'), { command: 'npm test' });
+  assert.deepEqual(parseToolArguments('prefix [{"command":"npm test"}] suffix'), [{ command: 'npm test' }]);
   assert.deepEqual(parseToolArguments("{command:'npm test',}"), { command: 'npm test' });
   assert.deepEqual(parseToolArguments("{file_path:'README.md'}"), { file_path: 'README.md' });
   assert.deepEqual(parseToolArguments('{command:npm test, timeout:1000}'), { command: 'npm test', timeout: 1000 });
@@ -105,6 +106,19 @@ test('inline tool extraction accepts arrays of JSON tool calls', () => {
   assert.equal(normalized.length, 2);
   assert.equal(normalized[0].toolName, 'Read');
   assert.deepEqual(normalized[1].toolArgs, { command: 'npm test' });
+});
+
+test('normalizeToolCalls supports anthropic, gemini, and responses-api payload styles', () => {
+  const normalized = normalizeToolCalls([
+    { type: 'tool_use', name: 'Read', input: { file_path: 'README.md' } },
+    { functionCall: { name: 'Bash', args: { command: 'npm test' } } },
+    { type: 'function', name: 'Grep', arguments: '{"pattern":"Winter","path":"README.md"}' },
+  ]);
+
+  assert.deepEqual(normalized.map(call => call.toolName), ['Read', 'Bash', 'Grep']);
+  assert.deepEqual(normalized[0].toolArgs, { file_path: 'README.md' });
+  assert.deepEqual(normalized[1].toolArgs, { command: 'npm test' });
+  assert.deepEqual(normalized[2].toolArgs, { pattern: 'Winter', path: 'README.md' });
 });
 
 test('tool result and signature helpers stay compact', () => {

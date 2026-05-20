@@ -31,6 +31,9 @@ export class PromptBuilder {
       `- Active model: ${activeModel}`,
       `- Tool allowlist: ${toolAllowlist.length > 0 ? toolAllowlist.join(', ') : 'none'}`,
       `- Active skills: ${Array.isArray(activeSkills) && activeSkills.length > 0 ? activeSkills.join(', ') : 'none'}`,
+      sessionContext.workflowProfile
+        ? `- Workflow profile: ${sessionContext.workflowProfile}`
+        : '',
     ].join('\n');
   }
 
@@ -61,6 +64,12 @@ export class PromptBuilder {
     const skillsStr = Array.isArray(sessionContext.activeSkills) && sessionContext.activeSkills.length > 0
       ? `\n## Auto-applied Skills\n${sessionContext.activeSkills.slice(0, 12).map(skill => `- ${skill}`).join('\n')}${sessionContext.activeSkills.length > 12 ? '\n- ...' : ''}`
       : '';
+    const workflowStr = sessionContext.workflowHints
+      ? `\n## Workflow Auto-Selection\n${this._compactText(sessionContext.workflowHints, 900, 'workflow hints')}`
+      : '';
+    const blueprintStr = sessionContext.workflowBlueprint
+      ? `\n## Profile Blueprint\n${this._compactText(sessionContext.workflowBlueprint, 700, 'workflow blueprint')}`
+      : '';
     const startupPlanStr = sessionContext.bootstrapPlan?.title
       ? `\n## Startup Plan\n- ${sessionContext.bootstrapPlan.title}: ${sessionContext.bootstrapPlan.description}`
       : '';
@@ -76,7 +85,7 @@ export class PromptBuilder {
         `Images: if the user attaches or pastes an image, analyze it directly and connect findings to project files when relevant.`,
         `Tool fallback when native calls are unavailable: <invoke name="Read"><parameter name="path">README.md</parameter></invoke> OR {"tool":"Read","arguments":{"path":"README.md"}} OR CALL_TOOL Read {"path":"README.md"}.`,
         `Session: cwd=${this.projectPath}; id=${this.session?.getSessionId?.()?.substring(0, 8) || 'unknown'}`,
-        `${requiredResourcesStr}${memoryStr}${plansStr}${skillsStr}${startupPlanStr}${sessionSignalsStr}`,
+        `${requiredResourcesStr}${memoryStr}${plansStr}${skillsStr}${workflowStr}${blueprintStr}${startupPlanStr}${sessionSignalsStr}`,
         context ? `\n## Project Context\n${this._compactText(context, projectContextBudget, 'project context')}` : '',
       ].filter(Boolean).join('\n');
     }
@@ -115,7 +124,7 @@ export class PromptBuilder {
       `## Session`,
       `Working directory: ${this.projectPath}`,
       `Current session: ${this.session?.getSessionId?.()?.substring(0, 8) || 'unknown'}`,
-      `${requiredResourcesStr}${memoryStr}${plansStr}${skillsStr}${startupPlanStr}${sessionSignalsStr}`,
+      `${requiredResourcesStr}${memoryStr}${plansStr}${skillsStr}${workflowStr}${blueprintStr}${startupPlanStr}${sessionSignalsStr}`,
       context ? `\n## Project Context\n${this._compactText(context, projectContextBudget, 'project context')}` : '',
       ``,
       `Be helpful, be precise, and get things done. Always respond in Vietnamese.`,

@@ -15,8 +15,13 @@ import { redactSecrets } from './secret-env.js';
 import { formatRuntimeEnvironmentSummary, getRuntimeEnvironment } from './runtime-env.js';
 import { ContextLoader } from './context-loader.js';
 import { ECCManager } from './ecc.js';
+import { HtmlFxManager } from '../integrations/htmlfx-manager.js';
+import { selectWorkflow } from '../ai/workflow-selector.js';
+import { getProfileBlueprint } from '../ai/profile-blueprints.js';
 import { promises as fs } from 'fs';
 import path from 'path';
+import readline from 'node:readline/promises';
+import { stdin as input, stdout as output } from 'node:process';
 
 export { redactSecrets } from './secret-env.js';
 
@@ -50,6 +55,7 @@ export class CommandParser {
     this.projectPath = process.cwd();
     this.contextLoader = new ContextLoader({ projectPath: this.projectPath, session: this.session });
     this.ecc = new ECCManager({ projectPath: this.projectPath, config: this.config });
+    this.htmlfx = new HtmlFxManager({ projectPath: this.projectPath });
 
     this.commands = {
       chat: this.handleChat.bind(this),
@@ -65,6 +71,7 @@ export class CommandParser {
       'page-agent': this.handlePageAgent.bind(this),
       pageagent: this.handlePageAgent.bind(this),
       resources: this.handleResources.bind(this),
+      htmlfx: this.handleHtmlFx.bind(this),
       'memory-vault': this.handleMemoryVault.bind(this),
       provider: this.handleProvider.bind(this),
       providers: this.showProviders.bind(this),
@@ -73,8 +80,10 @@ export class CommandParser {
       design: this.handleDesign.bind(this),
       code: this.handleCode.bind(this),
       review: this.handleReview.bind(this),
+      plan: this.handlePlan.bind(this),
       debug: this.handleDebug.bind(this),
       auto: this.handleDebug.bind(this),
+      autopilot: this.handleAutopilot.bind(this),
       config: this.handleConfig.bind(this),
       init: this.handleInit.bind(this),
       help: this.handleHelp.bind(this),
@@ -113,6 +122,7 @@ export class CommandParser {
       '/memories': () => this.showMemories(),
       '/memory-vault': () => this.handleMemoryVault(args),
       '/plans': () => this.showPlans(),
+      '/plan': () => this.handlePlan(args),
       '/cache': () => this.handleCache(args),
       '/provider': () => this.handleProvider(args),
       '/providers': () => this.showProviders(),
@@ -124,8 +134,10 @@ export class CommandParser {
       '/page-agent': () => this.handlePageAgent(args),
       '/pageagent': () => this.handlePageAgent(args),
       '/resources': () => this.handleResources(args),
+      '/htmlfx': () => this.handleHtmlFx(args),
       '/debug': () => this.handleDebug(args),
       '/auto': () => this.handleDebug(args),
+      '/autopilot': () => this.handleAutopilot(args),
       '/exit': () => process.exit(0),
     };
 
@@ -342,9 +354,149 @@ export class CommandParser {
     console.log(`${colors.yellow}ECC subcommands: info, browse <section>, search <query>, sync${colors.reset}`);
   }
 
+  async handleHtmlFx(args = []) {
+    const [action = 'info', ...rest] = args;
+
+    if (action === 'info') {
+      const info = await this.htmlfx.info();
+      console.log(`${colors.cyan}html-effectiveness:${colors.reset}`);
+      console.log(`  ${colors.dim}Repo:${colors.reset} ${info.repoPath}`);
+      console.log(`  ${colors.dim}Binary:${colors.reset} ${info.binaryReady ? 'ready' : 'missing'}`);
+      console.log(`${colors.dim}Commands: htmlfx install, htmlfx update, htmlfx list, htmlfx compile -i <input.md> -o <output.html>${colors.reset}`);
+      return;
+    }
+
+    if (action === 'install' || action === 'update') {
+      console.log(`${colors.dim}Preparing html-effectiveness compiler...${colors.reset}`);
+      const result = await this.htmlfx.ensureInstalled({ update: action === 'update' });
+      console.log(`${colors.green}✓ html-effectiveness ready${colors.reset}`);
+      console.log(`  ${colors.dim}Repo:${colors.reset} ${result.repoPath}`);
+      console.log(`  ${colors.dim}Binary:${colors.reset} ${result.binaryPath}`);
+      return;
+    }
+
+    if (action === 'list') {
+      const result = await this.htmlfx.listOutputGoal();
+      if (!result.success) {
+        console.log(`${colors.yellow}${result.error}${colors.reset}`);
+        return;
+      }
+      console.log(`${colors.cyan}output_goal demos:${colors.reset} ${result.outputDir}`);
+      result.files.forEach(file => console.log(`  [file] ${file}`));
+      return;
+    }
+
+    if (action === 'compile') {
+      const raw = rest.join(' ');
+      const inputMatch = raw.match(/(?:^|\s)-i\s+("[^"]+"|'[^']+'|\S+)/);
+      const outputMatch = raw.match(/(?:^|\s)-o\s+("[^"]+"|'[^']+'|\S+)/);
+      const inputPath = inputMatch ? inputMatch[1].replace(/^['"]|['"]$/g, '') : null;
+      const outputPath = outputMatch ? outputMatch[1].replace(/^['"]|['"]$/g, '') : null;
+
+      if (!inputPath || !outputPath) {
+        console.log(`${colors.yellow}Usage: winter htmlfx compile -i <input.md> -o <output.html>${colors.reset}`);
+        return;
+      }
+
+      const result = await this.htmlfx.compile({ inputPath, outputPath });
+      if (!result.success) {
+        console.log(`${colors.red}${result.error}${colors.reset}`);
+        return;
+      }
+      console.log(`${colors.green}✓ Compiled HTML:${colors.reset} ${result.outputPath}`);
+      if (result.stdout?.trim()) {
+        console.log(result.stdout.trim());
+      }
+      if (result.stderr?.trim()) {
+        console.log(`${colors.dim}${result.stderr.trim()}${colors.reset}`);
+      }
+      return;
+    }
+
+    console.log(`${colors.yellow}htmlfx subcommands: info, install, update, list, compile -i <input.md> -o <output.html>${colors.reset}`);
+  }
+
   async handleDebug(args) {
     const task = args.join(' ') || 'Find the root cause, patch it, and verify with the closest test or build command';
     return this.handleChat([`AUTO DEBUG: ${task}`]);
+  }
+
+  async inferVerificationCommands(task = '') {
+    const candidates = [];
+    const packagePath = path.join(this.projectPath, 'package.json');
+    try {
+      const pkg = JSON.parse(await fs.readFile(packagePath, 'utf8'));
+      const scripts = pkg.scripts || {};
+      if (scripts.test) candidates.push('npm test');
+      if (scripts.build && /\b(build|compile|type|typescript|tsc|frontend|ui|debug|fix|bug|error)\b/i.test(task)) {
+        candidates.push('npm run build');
+      }
+      if (scripts.lint && /\b(lint|style|eslint|quality|review)\b/i.test(task)) {
+        candidates.push('npm run lint');
+      }
+      if (scripts.typecheck) {
+        candidates.push('npm run typecheck');
+      }
+    } catch {
+      // Not a Node.js project or missing package.json
+    }
+    if (candidates.length === 0) return ['npm test'];
+    return [...new Set(candidates)].slice(0, 3);
+  }
+
+  parseAutopilotArgs(args = []) {
+    const taskParts = [];
+    const verifyParts = [];
+    let maxLoops = 3;
+    let hasCustomVerify = false;
+
+    for (let i = 0; i < args.length; i++) {
+      const token = String(args[i] || '');
+      if (token === '--max-loops' && args[i + 1]) {
+        const parsed = parseInt(args[i + 1], 10);
+        if (!Number.isNaN(parsed)) {
+          maxLoops = Math.min(10, Math.max(1, parsed));
+        }
+        i += 1;
+        continue;
+      }
+      if (token === '--verify' && args[i + 1]) {
+        const raw = String(args[i + 1]).trim();
+        if (raw) {
+          hasCustomVerify = true;
+          verifyParts.push(...raw.split(';').map(part => part.trim()).filter(Boolean));
+        }
+        i += 1;
+        continue;
+      }
+      taskParts.push(token);
+    }
+
+    return {
+      task: taskParts.join(' ').trim() || 'Diagnose the issue, patch safely, and verify with tests/build',
+      verifyParts,
+      maxLoops,
+      hasCustomVerify,
+    };
+  }
+
+  async handleAutopilot(args) {
+    const parsed = this.parseAutopilotArgs(args);
+    const verifyCommands = parsed.hasCustomVerify
+      ? parsed.verifyParts
+      : await this.inferVerificationCommands(parsed.task);
+    const prompt = `AUTOPILOT TASK: ${parsed.task}
+
+EXECUTION CONTRACT:
+1. Inspect relevant files and establish the smallest root cause.
+2. Apply focused edits only where needed.
+3. Run verification commands after changes: ${verifyCommands.join(' && ')}.
+4. If verification fails, iterate up to ${parsed.maxLoops} loops: inspect new failure -> patch -> rerun verification.
+5. Do not claim success without concrete verification output.
+6. End with: what changed, what was verified, and remaining risks.`;
+
+    console.log(`${colors.dim}Autopilot mode engaged...${colors.reset}`);
+    return this.handleChat([prompt]);
   }
 
   async handleChat(args) {
@@ -705,6 +857,280 @@ export class CommandParser {
     console.log(`${colors.dim}Code review mode...${colors.reset}`);
   }
 
+  buildPlanOptions(task, workflow, blueprint) {
+    const verify = workflow.verificationStrategy?.length
+      ? workflow.verificationStrategy
+      : ['unit tests', 'build check'];
+    const arch = blueprint?.architecture || ['Define scope and modules', 'Implement feature slices'];
+    const scaffold = blueprint?.scaffold || ['Initialize project structure', 'Install required dependencies'];
+
+    return [
+      {
+        id: 'mvp',
+        title: 'MVP nhanh',
+        description: 'Tập trung làm bản chạy được sớm nhất, ít rủi ro.',
+        steps: [
+          ...scaffold.slice(0, 2),
+          ...arch.slice(0, 2),
+          `Verify: ${verify.slice(0, 2).join(', ')}`,
+        ],
+      },
+      {
+        id: 'balanced',
+        title: 'Balanced chuẩn',
+        description: 'Cân bằng tốc độ và chất lượng, phù hợp đa số task production.',
+        steps: [
+          ...scaffold.slice(0, 3),
+          ...arch,
+          `Apply skills: ${(workflow.recommendedSkills || []).join(', ') || 'coding, test'}`,
+          `Verify: ${verify.join(', ')}`,
+        ],
+      },
+      {
+        id: 'hardening',
+        title: 'Production hardening',
+        description: 'Ưu tiên độ chắc: kiến trúc, kiểm thử, bảo mật, hiệu năng.',
+        steps: [
+          ...scaffold,
+          ...arch,
+          'Add observability, error handling, and rollback-safe changes.',
+          'Add edge-case and regression tests before release.',
+          `Verify: ${verify.join(', ')}`,
+        ],
+      },
+      {
+        id: 'custom',
+        title: 'Custom',
+        description: 'Tự nhập plan theo ý bạn.',
+        steps: [],
+      },
+    ];
+  }
+
+  parsePlanFetchArgs(args = []) {
+    const flags = {
+      exportFormat: null,
+      outputPath: null,
+      apply: false,
+    };
+    const taskTokens = [];
+
+    for (let i = 0; i < args.length; i++) {
+      const token = String(args[i] || '').trim();
+      if (token === '--apply') {
+        flags.apply = true;
+        continue;
+      }
+      if (token === '--export') {
+        const raw = String(args[i + 1] || '').trim().toLowerCase();
+        if (raw === 'md' || raw === 'markdown') flags.exportFormat = 'md';
+        if (raw === 'json') flags.exportFormat = 'json';
+        i += 1;
+        continue;
+      }
+      if (token === '--output' || token === '-o') {
+        flags.outputPath = String(args[i + 1] || '').trim() || null;
+        i += 1;
+        continue;
+      }
+      taskTokens.push(token);
+    }
+
+    return { task: taskTokens.join(' ').trim(), ...flags };
+  }
+
+  buildPlanArtifactFileName(task, format = 'md') {
+    const stem = String(task || 'plan')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 64) || 'plan';
+    return `${stem}.${format}`;
+  }
+
+  resolvePlanOutputPath(task, format, outputPath = null) {
+    if (outputPath) {
+      return path.isAbsolute(outputPath)
+        ? outputPath
+        : path.join(this.projectPath, outputPath);
+    }
+    return path.join(
+      this.projectPath,
+      '.winter',
+      'plans',
+      this.buildPlanArtifactFileName(task, format)
+    );
+  }
+
+  async exportPlanArtifact({ task, workflow, selected, outputPath, format = 'md' }) {
+    const normalizedFormat = format === 'json' ? 'json' : 'md';
+    const finalPath = this.resolvePlanOutputPath(task, normalizedFormat, outputPath);
+    await fs.mkdir(path.dirname(finalPath), { recursive: true });
+
+    if (normalizedFormat === 'json') {
+      const jsonPayload = {
+        generatedAt: new Date().toISOString(),
+        task,
+        profile: workflow.profile,
+        depth: workflow.depth,
+        plan: {
+          id: selected.id,
+          title: selected.title,
+          description: selected.description,
+          steps: selected.steps,
+        },
+      };
+      await fs.writeFile(finalPath, `${JSON.stringify(jsonPayload, null, 2)}\n`, 'utf8');
+      return finalPath;
+    }
+
+    const markdown = [
+      '# Winter Plan',
+      '',
+      `- Task: ${task}`,
+      `- Profile: ${workflow.profile}`,
+      `- Depth: ${workflow.depth}`,
+      '',
+      `## ${selected.title}`,
+      '',
+      selected.description,
+      '',
+      '## Steps',
+      ...selected.steps.map((step, index) => `${index + 1}. ${step}`),
+      '',
+    ].join('\n');
+    await fs.writeFile(finalPath, markdown, 'utf8');
+    return finalPath;
+  }
+
+  async applyPlanSkeleton({ task, selected, workflow, exportPath = null }) {
+    const targetPath = path.join(this.projectPath, '.winter', 'plan-task-list.md');
+    const skeleton = [
+      '# Plan Task List',
+      '',
+      `- Task: ${task}`,
+      `- Profile: ${workflow.profile}`,
+      `- Plan: ${selected.title}`,
+      ...(exportPath ? [`- Plan File: ${path.relative(this.projectPath, exportPath) || exportPath}`] : []),
+      '',
+      '## TODO',
+      ...selected.steps.map(step => `- [ ] ${step}`),
+      '',
+    ].join('\n');
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, skeleton, 'utf8');
+    return targetPath;
+  }
+
+  async promptPlanSelection(options) {
+    if (!process.stdin.isTTY) return 'balanced';
+
+    console.log(`\n${colors.cyan}Chọn plan:${colors.reset}`);
+    options.forEach((opt, index) => {
+      console.log(`  ${index + 1}. ${opt.title} - ${opt.description}`);
+    });
+    console.log(`  c. Custom`);
+
+    const rl = readline.createInterface({ input, output });
+    try {
+      const answer = (await rl.question(`${colors.yellow}Nhập lựa chọn (1-${options.length} hoặc c): ${colors.reset}`)).trim().toLowerCase();
+      if (answer === 'c') return 'custom';
+      const idx = Number.parseInt(answer, 10);
+      if (!Number.isNaN(idx) && idx >= 1 && idx <= options.length) {
+        return options[idx - 1].id;
+      }
+      return 'balanced';
+    } finally {
+      rl.close();
+    }
+  }
+
+  async handlePlan(args = []) {
+    const [action = 'fetch', ...rest] = args;
+    if (action !== 'fetch') {
+      console.log(`${colors.yellow}Usage: winter plan fetch <task> [--export md|json] [--output <path>] [--apply]${colors.reset}`);
+      return;
+    }
+
+    const parsed = this.parsePlanFetchArgs(rest);
+    const task = parsed.task;
+    if (!task) {
+      console.log(`${colors.yellow}Usage: winter plan fetch <task> [--export md|json] [--output <path>] [--apply]${colors.reset}`);
+      return;
+    }
+
+    const [signals, catalog] = await Promise.all([
+      this.contextLoader.getProjectSignals(),
+      this.contextLoader.getStartupSkillCatalog(),
+    ]);
+    const workflow = selectWorkflow({
+      taskText: task,
+      projectSignals: signals,
+      skillCatalog: Array.isArray(catalog) ? catalog : [...catalog],
+    });
+    const blueprint = getProfileBlueprint(workflow.profile);
+    const options = this.buildPlanOptions(task, workflow, blueprint);
+    const choice = await this.promptPlanSelection(options);
+
+    let selected = options.find(opt => opt.id === choice) || options.find(opt => opt.id === 'balanced');
+    let customSteps = null;
+
+    if (choice === 'custom' && process.stdin.isTTY) {
+      const rl = readline.createInterface({ input, output });
+      try {
+        const title = (await rl.question(`${colors.yellow}Tên plan custom: ${colors.reset}`)).trim() || 'Custom Plan';
+        const rawSteps = (await rl.question(`${colors.yellow}Nhập steps (ngăn bởi dấu ;): ${colors.reset}`)).trim();
+        customSteps = rawSteps.split(';').map(step => step.trim()).filter(Boolean);
+        selected = {
+          id: 'custom',
+          title,
+          description: 'Plan tùy chỉnh bởi user',
+          steps: customSteps,
+        };
+      } finally {
+        rl.close();
+      }
+    }
+
+    console.log(`\n${colors.cyan}Plan selected:${colors.reset} ${selected.title}`);
+    console.log(`${colors.dim}Profile: ${workflow.profile} | Depth: ${workflow.depth}${colors.reset}`);
+    selected.steps.forEach((step, index) => console.log(`  ${index + 1}. ${step}`));
+
+    if (typeof this.session.createPlan === 'function') {
+      const plan = await this.session.createPlan(selected.title, `${selected.description}\nTask: ${task}`);
+      if (plan && typeof this.session.addPlanStep === 'function') {
+        for (const step of selected.steps) {
+          await this.session.addPlanStep(plan.id, { description: step });
+        }
+      }
+      console.log(`${colors.green}✓ Plan saved to session${colors.reset}`);
+    } else {
+      console.log(`${colors.dim}Session does not support persistent plans in this mode.${colors.reset}`);
+    }
+
+    let exportedPath = null;
+    if (parsed.exportFormat) {
+      exportedPath = await this.exportPlanArtifact({
+        task,
+        workflow,
+        selected,
+        outputPath: parsed.outputPath,
+        format: parsed.exportFormat,
+      });
+      console.log(`${colors.green}✓ Plan exported: ${exportedPath}${colors.reset}`);
+    }
+
+    if (parsed.apply) {
+      const appliedPath = await this.applyPlanSkeleton({
+        task,
+        selected,
+        workflow,
+        exportPath: exportedPath,
+      });
+      console.log(`${colors.green}✓ Skeleton task list applied: ${appliedPath}${colors.reset}`);
+    }
+  }
+
   async handleConfig(args) {
     const [action, ...rest] = args;
 
@@ -911,6 +1337,9 @@ ${colors.cyan}❄ WINTER CLI - Help${colors.reset}
 ${colors.white}Chat Commands:${colors.reset}
   winter chat <message>      Chat with AI
   winter call <prompt>       Call all providers
+  winter autopilot <task>    Autonomous fix + verify loop prompt
+  winter autopilot <task> --max-loops <n> --verify "cmd1;cmd2"
+  winter plan fetch <task> [--export md|json] [--output <path>] [--apply]
 
 ${colors.white}Session Management:${colors.reset}
   winter session             Show current session
@@ -948,6 +1377,9 @@ ${colors.white}Local Resources:${colors.reset}
   winter ecc [info]           Show ECC resource status
   winter ecc browse <section> Browse ECC sections
   winter ecc search <query>   Search ECC resources
+  winter htmlfx [info]        html-effectiveness integration
+  winter htmlfx install       Clone + build html-effectiveness-scripts
+  winter htmlfx compile -i <md> -o <html>  Compile hybrid markdown to HTML
   winter page-agent           Browse Page Agent resources
   winter page-agent search <q> Search Page Agent resources
 

@@ -10,9 +10,9 @@
 
 | Feature | Description |
 |---|---|
-| **25 AI Tools** | Read, Write, Edit, Bash, Glob, Grep, Notebook, Todo, Scheduler, Agent, MCP & more |
+| **26 AI Tools** | Read, Write, Edit, Bash, Glob, Grep, Notebook, Todo, Scheduler, Agent, MCP & more |
 | **Multi-Provider** | Anthropic, OpenAI, Ollama, Groq -- with **smart context routing** |
-| **25 Tools** | Full parity with Claude Code + extra tools (WebArchive, Notebook, Todo, Scheduler, InsertText, StrReplaceAll) |
+| **26 Tools** | Full parity with Claude Code + extra tools (WebArchive, HtmlEffectiveness, Notebook, Todo, Scheduler, InsertText, StrReplaceAll) |
 | **Context Router** | Auto-selects best provider per task (Claude for code, OpenAI for docs, Groq for speed, Ollama for privacy) |
 | **Session Management** | Isolated sessions with persistent memory, plans, and context |
 | **MCP Support** | Model Context Protocol -- connect VS Code, GitHub, databases & more |
@@ -37,7 +37,7 @@
 |---|---|
 | **Total Lines of Code** | ~13,500 |
 | **Source Files** | 40+ |
-| **Tools** | **25** |
+| **Tools** | **26** |
 | **Tests** | **213** (all passing) |
 | **Exported Symbols** | 78 |
 | **AI Providers** | 4 (Anthropic, OpenAI, Ollama, Groq) |
@@ -221,9 +221,9 @@ GROQ_API_KEY=gsk-...
 
 ---
 
-## 25 AI Tools
+## 26 AI Tools
 
-Winter provides **25 tools** -- fully compatible with Claude Code's tool interface + extras:
+Winter provides **26 tools** -- fully compatible with Claude Code's tool interface + extras:
 
 | # | Tool | Description |
 |---|---|---|
@@ -252,6 +252,7 @@ Winter provides **25 tools** -- fully compatible with Claude Code's tool interfa
 | 23 | **WebFetch** | Fetch web page content |
 | 24 | **WebSearch** | Search the web |
 | 25 | **WebArchive** | Archive & retrieve web pages (Wayback Machine + local cache) |
+| 26 | **HtmlEffectiveness** | Compile hybrid Markdown + YAML components into self-contained HTML |
 
 ### Advanced Grep Features
 
@@ -307,6 +308,8 @@ Grep tool supports:
 | `/replay [n]` | Replay tool events |
 | `/swe <task>` | Run SWE-agent workflow |
 | `/auto <task>` | Auto-healing mode (TDD loop) |
+| `/autopilot <task>` | Autonomous analyze/fix/verify workflow |
+| `/autopilot <task> --max-loops <n> --verify "cmd1;cmd2"` | Configure retry loops and explicit verification commands |
 
 ### Tool Shortcuts
 
@@ -330,6 +333,7 @@ Grep tool supports:
 | `/karpathy` | Browse karpathy-tools |
 | `/agents` | Read ~/agents.md |
 | `/resources` | Show bundled resources |
+| `/htmlfx` | Manage html-effectiveness integration (install/list/compile) |
 | `/design search <brand>` | Search design systems |
 | `/design add <brand>` | Add design system |
 | `/design list` | List design systems |

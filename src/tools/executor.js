@@ -21,6 +21,7 @@ import { InsertTextTool } from './insert-text.js';
 import { StrReplaceAllTool } from './str-replace-all.js';
 import { WebArchiveTool } from './web-archive.js';
 import { formatRuntimeEnvironmentSummary, getRuntimeEnvironment } from '../cli/runtime-env.js';
+import { HtmlFxManager } from '../integrations/htmlfx-manager.js';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -41,6 +42,7 @@ export class ToolExecutor {
     this.insertTextTool = new InsertTextTool();
     this.strReplaceAllTool = new StrReplaceAllTool();
     this.webArchiveTool = new WebArchiveTool(repl?.projectPath ? path.join(repl.projectPath, '.winter') : undefined);
+    this.htmlFxManager = new HtmlFxManager({ projectPath: this.projectPath });
     this.mcpToolCache = null; // Cache for dynamically discovered MCP tools
   }
 
@@ -418,6 +420,20 @@ export class ToolExecutor {
           },
           required: ['url']
         }
+      },
+      {
+        type: 'function',
+        name: 'HtmlEffectiveness',
+        description: 'Compile hybrid markdown into a self-contained HTML document via html-effectiveness-scripts.',
+        parameters: {
+          type: 'object',
+          properties: {
+            input_path: { type: 'string', description: 'Input markdown path' },
+            output_path: { type: 'string', description: 'Output html path' },
+            auto_install: { type: 'boolean', description: 'Auto install/build compiler when missing (default: true)' },
+          },
+          required: ['input_path', 'output_path']
+        }
       }
     ];
   }
@@ -454,6 +470,14 @@ export class ToolExecutor {
     input = this.normalizeToolInput(toolName, input);
     const cwd = context.cwd || this.projectPath;
     const resolvedPath = (p) => this.resolveInputPath(p, cwd);
+
+    const preflight = this.preflightValidateToolArgs(toolName, input, { cwd });
+    if (preflight?.success === false) {
+      return preflight;
+    }
+    if (preflight?.coerced && preflight.args) {
+      input = preflight.args;
+    }
 
     switch (toolName) {
       case 'Read':
@@ -527,6 +551,8 @@ export class ToolExecutor {
           cache: input.no_cache ? false : true,
           clearCache: input.clear_cache ?? input.clearCache,
         });
+      case 'HtmlEffectiveness':
+        return await this.htmlEffectivenessCompile(input, cwd);
       default:
         // Check if tool name starts with mcp__ for MCP-IDE integration
         const mcpMatch = toolName.match(/^mcp__([^_]+)__(.+)/);
@@ -536,10 +562,148 @@ export class ToolExecutor {
         return {
           success: false,
           error: `Unknown tool: ${toolName}`,
-          availableTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'TaskCreate', 'TaskUpdate', 'TaskList', 'MCP', 'Parallel', 'BrowserDebug', 'WebFetch', 'WebSearch', 'WebArchive', 'NotebookRead', 'NotebookEdit', 'TodoWrite', 'TodoList', 'ScheduleWakeup', 'AskUserQuestion', 'Agent', 'InsertText', 'StrReplaceAll'],
+          availableTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'TaskCreate', 'TaskUpdate', 'TaskList', 'MCP', 'Parallel', 'BrowserDebug', 'WebFetch', 'WebSearch', 'WebArchive', 'HtmlEffectiveness', 'NotebookRead', 'NotebookEdit', 'TodoWrite', 'TodoList', 'ScheduleWakeup', 'AskUserQuestion', 'Agent', 'InsertText', 'StrReplaceAll'],
           recovery: 'Call one of the available tools. For file writes use Write with { "file_path": "...", "content": "..." }. For shell commands use Bash with { "command": "..." }.',
         };
     }
+  }
+
+  preflightValidateToolArgs(toolName, input, { cwd } = {}) {
+    const args = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
+    const pick = (...keys) => {
+      for (const key of keys) {
+        const value = args[key];
+        if (typeof value === 'string' && value.trim() !== '') return value;
+      }
+      return undefined;
+    };
+
+    const requireOne = (keys, example) => {
+      for (const key of keys) {
+        const value = args[key];
+        if (typeof value === 'string' && value.trim() !== '') return null;
+      }
+      return {
+        success: false,
+        error: `Missing required argument. Provide one of: ${keys.join(', ')}.`,
+        recovery: example,
+      };
+    };
+
+    if (toolName === 'Read') {
+      const filePath = pick('file_path', 'filePath', 'filepath', 'path', 'file', 'filename', 'target_file', 'targetFile');
+      if (!filePath) {
+        return {
+          success: false,
+          error: 'Missing required argument. Provide one of: file_path, path, file.',
+          recovery: 'Example: Read {"file_path":"README.md"}',
+        };
+      }
+      return { success: true, coerced: true, args: { file_path: filePath } };
+    }
+
+    if (toolName === 'Write') {
+      const filePath = pick('file_path', 'filePath', 'filepath', 'path', 'file', 'filename', 'target_file', 'targetFile');
+      if (!filePath) {
+        return { success: false, error: 'content is required', recovery: 'Example: Write {"file_path":"src/app.js","content":"..."}' };
+      }
+      const content = pick('content', 'text', 'data', 'value', 'body');
+      if (typeof content !== 'string') {
+        return { success: false, error: 'content is required', recovery: 'Example: Write {"file_path":"src/app.js","content":"..."}' };
+      }
+      return { success: true, coerced: true, args: { file_path: filePath, content } };
+    }
+
+    if (toolName === 'Bash') {
+      const cmd = pick('command', 'cmd', 'script', 'code', 'input');
+      if (!cmd) {
+        return { success: false, error: 'command is required', recovery: 'Example: Bash {"command":"npm test"}' };
+      }
+      const next = { command: cmd };
+      if (typeof args.timeout !== 'undefined') next.timeout = args.timeout;
+      if (typeof args.shell !== 'undefined') next.shell = args.shell;
+      if (typeof args.cwd === 'string' && args.cwd.trim()) next.cwd = args.cwd;
+      return { success: true, coerced: true, args: next };
+    }
+
+    if (toolName === 'Grep') {
+      const pattern = pick('pattern', 'query', 'q');
+      if (!pattern) {
+        return { success: false, error: 'pattern is required', recovery: 'Example: Grep {"pattern":"TODO","path":"."}' };
+      }
+      // path is optional at preflight (defaults to cwd in executeInternal)
+      const next = { ...args, pattern };
+      if (!next.path && (typeof cwd === 'string' && cwd.trim())) next.path = next.cwd || cwd;
+      // Normalize common option names (keep others intact)
+      if (typeof next.output_mode === 'undefined' && typeof next.outputMode === 'string') next.output_mode = next.outputMode;
+      if (typeof next.case_insensitive === 'undefined' && typeof next.ignoreCase !== 'undefined') next.case_insensitive = next.ignoreCase;
+      if (typeof next.fixed_string === 'undefined' && typeof next.fixedString !== 'undefined') next.fixed_string = next.fixedString;
+      if (typeof next.invert_match === 'undefined' && typeof next.invert !== 'undefined') next.invert_match = next.invert;
+      if (typeof next.max_results === 'undefined' && typeof next.maxResults !== 'undefined') next.max_results = next.maxResults;
+      if (typeof next.line_numbers === 'undefined' && typeof next.lineNumbers !== 'undefined') next.line_numbers = next.lineNumbers;
+      return { success: true, coerced: true, args: next };
+    }
+
+    if (toolName === 'HtmlEffectiveness') {
+      const inputPath = pick('input_path', 'inputPath', 'input');
+      const outputPath = pick('output_path', 'outputPath', 'output');
+      if (!inputPath || !outputPath) {
+        return {
+          success: false,
+          error: 'input_path and output_path are required',
+          recovery: 'Example: HtmlEffectiveness {"input_path":"doc.md","output_path":"doc.html"}',
+        };
+      }
+      const next = { input_path: inputPath, output_path: outputPath };
+      if (typeof args.auto_install !== 'undefined') next.auto_install = args.auto_install;
+      if (typeof args.autoInstall !== 'undefined') next.auto_install = args.autoInstall;
+      return { success: true, coerced: true, args: next };
+    }
+
+    if (toolName === 'NotebookRead') {
+      const notebookPath = pick('notebook_path', 'path', 'file');
+      if (!notebookPath) {
+        return { success: false, error: 'notebook_path is required', recovery: 'Example: NotebookRead {"notebook_path":"analysis.ipynb"}' };
+      }
+      return { success: true, coerced: true, args: { notebook_path: notebookPath } };
+    }
+
+    if (toolName === 'NotebookEdit') {
+      const notebookPath = pick('notebook_path', 'path', 'file');
+      if (!notebookPath) {
+        return { success: false, error: 'notebook_path is required', recovery: 'Example: NotebookEdit {"notebook_path":"a.ipynb","cell_id":"cell-0","new_source":"print(1)"}' };
+      }
+      const cellId = pick('cell_id', 'cellId');
+      const newSource = pick('new_source', 'newSource', 'source');
+      if (!cellId || !newSource) {
+        return {
+          success: false,
+          error: 'cell_id and new_source are required',
+          recovery: 'Example: NotebookEdit {"notebook_path":"a.ipynb","cell_id":"cell-0","new_source":"print(1)"}',
+        };
+      }
+      return { success: true, coerced: true, args: { notebook_path: notebookPath, cell_id: cellId, new_source: newSource } };
+    }
+
+    if (toolName === 'WebFetch' || toolName === 'WebArchive' || toolName === 'BrowserDebug') {
+      const url = pick('url', 'uri', 'href');
+      if (!url) {
+        return { success: false, error: 'url is required', recovery: `Example: ${toolName} {"url":"https://example.com"}` };
+      }
+      const next = { ...args, url };
+      return { success: true, coerced: true, args: next };
+    }
+
+    if (toolName === 'WebSearch') {
+      const query = pick('query', 'q', 'search', 'search_query', 'searchQuery');
+      if (!query) {
+        return { success: false, error: 'query is required', recovery: 'Example: WebSearch {"query":"winter cli"}' };
+      }
+      return { success: true, coerced: true, args: { query } };
+    }
+
+    // Default: allow tool implementation to validate
+    return { success: true };
   }
 
   redactToolInput(input) {
@@ -730,6 +894,10 @@ export class ToolExecutor {
       webarchivetool: 'WebArchive',
       archive: 'WebArchive',
       wayback: 'WebArchive',
+      htmleffectiveness: 'HtmlEffectiveness',
+      htmlfx: 'HtmlEffectiveness',
+      markdown2html: 'HtmlEffectiveness',
+      compilehtml: 'HtmlEffectiveness',
       notebookread: 'NotebookRead',
       readnotebook: 'NotebookRead',
       notebookedit: 'NotebookEdit',
@@ -1725,5 +1893,24 @@ export class ToolExecutor {
     } catch (e) {
       return { success: false, error: e.message, url };
     }
+  }
+
+  async htmlEffectivenessCompile(input, cwd) {
+    const inputPath = this.resolveInputPath(input.input_path ?? input.inputPath ?? input.input, cwd);
+    const outputPath = this.resolveInputPath(input.output_path ?? input.outputPath ?? input.output, cwd);
+    if (!inputPath || !outputPath) {
+      return { success: false, error: 'input_path and output_path are required' };
+    }
+
+    const autoInstall = input.auto_install ?? input.autoInstall ?? true;
+    const info = await this.htmlFxManager.info();
+    if (!info.binaryReady) {
+      if (!autoInstall) {
+        return { success: false, error: 'html-effectiveness compiler is not installed. Run winter htmlfx install first.' };
+      }
+      await this.htmlFxManager.ensureInstalled({ update: false });
+    }
+
+    return await this.htmlFxManager.compile({ inputPath, outputPath });
   }
 }

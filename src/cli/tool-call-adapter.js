@@ -5,16 +5,21 @@ export function normalizeToolCalls(toolCalls, parseArguments = parseToolArgument
     const fn = tc.function || {};
     const rawArgs = fn.arguments ?? tc.arguments ?? tc.input ?? {};
     const parsedArgs = parseArguments(rawArgs);
-    const nestedName = parsedArgs?.name || parsedArgs?.tool || parsedArgs?.tool_name;
-    const nestedArgs = parsedArgs?.arguments ?? parsedArgs?.args ?? parsedArgs?.input;
+    const nested = extractToolPayload(parsedArgs, parseArguments);
+    const nestedName = nested.name;
+    const nestedArgs = nested.args;
+    const direct = extractToolPayload(tc, parseArguments);
+    const fnPayload = extractToolPayload(fn, parseArguments);
+    const toolName = fnPayload.name || direct.name || nestedName || tc.name || tc.tool_name || fn.name;
+    const toolArgs = fnPayload.args ?? direct.args ?? nestedArgs ?? parsedArgs;
 
     return {
       ...tc,
       id: tc.id || `call-${index}`,
-      toolName: fn.name || tc.name || tc.tool_name || nestedName || tc.type,
-      toolArgs: nestedName && nestedArgs !== undefined ? parseArguments(nestedArgs) : parsedArgs,
+      toolName,
+      toolArgs,
     };
-  });
+  }).filter(call => typeof call.toolName === 'string' && call.toolName.trim() !== '' && call.toolName !== 'function');
 }
 
 export function extractInlineToolCalls(content, idFactory = index => `inline-${Date.now()}-${index}`) {
@@ -33,9 +38,7 @@ export function extractInlineToolCalls(content, idFactory = index => `inline-${D
     });
   };
   const pushParsedToolObject = (parsed) => {
-    if (!parsed || typeof parsed !== 'object') return false;
-    const name = parsed.name || parsed.tool || parsed.tool_name || parsed.function?.name || parsed.action;
-    const args = parsed.arguments ?? parsed.args ?? parsed.input ?? parsed.parameters ?? parsed.params ?? parsed.function?.arguments ?? {};
+    const { name, args } = extractToolPayload(parsed, parseToolArguments);
     if (!name || typeof name !== 'string') return false;
     pushToolCall(name, args, 'object');
     return true;
@@ -155,7 +158,7 @@ export function parseToolArguments(rawArgs) {
   try {
     return JSON.parse(text);
   } catch (error) {
-    const extracted = extractFirstJsonObject(text);
+    const extracted = extractFirstJsonValue(text);
     if (extracted && extracted !== text) {
       try {
         return JSON.parse(extracted);
@@ -203,15 +206,31 @@ export function buildJsonRepairCandidates(text) {
 }
 
 export function extractFirstJsonObject(text) {
-  const start = text.indexOf('{');
-  if (start === -1) return null;
+  const extracted = extractFirstJsonValue(text);
+  if (!extracted || extracted[0] !== '{') return null;
+  return extracted;
+}
+
+export function extractFirstJsonValue(text) {
+  const source = String(text || '');
+  const objectStart = source.indexOf('{');
+  const arrayStart = source.indexOf('[');
+  if (objectStart === -1 && arrayStart === -1) return null;
+  const startIndex = objectStart === -1
+    ? arrayStart
+    : arrayStart === -1
+      ? objectStart
+      : Math.min(objectStart, arrayStart);
+
+  const openChar = source[startIndex];
+  const closeChar = openChar === '[' ? ']' : '}';
 
   let depth = 0;
   let inString = false;
   let escaped = false;
 
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i];
+  for (let i = startIndex; i < source.length; i++) {
+    const ch = source[i];
     if (escaped) {
       escaped = false;
       continue;
@@ -225,14 +244,64 @@ export function extractFirstJsonObject(text) {
       continue;
     }
     if (inString) continue;
-    if (ch === '{') depth++;
-    if (ch === '}') {
+    if (ch === openChar) depth++;
+    if (ch === closeChar) {
       depth--;
-      if (depth === 0) return text.slice(start, i + 1);
+      if (depth === 0) return source.slice(startIndex, i + 1);
     }
   }
 
   return null;
+}
+
+function extractToolPayload(payload, parseArguments) {
+  if (!payload || typeof payload !== 'object') {
+    return { name: null, args: undefined };
+  }
+
+  // Anthropic / Claude style content block: { type: "tool_use", name, input }
+  if (payload.type === 'tool_use' && typeof payload.name === 'string') {
+    return { name: payload.name, args: payload.input ?? payload.arguments ?? {} };
+  }
+
+  // OpenAI Responses style function-call object
+  if (payload.type === 'function' && typeof payload.name === 'string') {
+    return { name: payload.name, args: parseArguments(payload.arguments ?? payload.input ?? {}) };
+  }
+
+  // Gemini style object: { functionCall: { name, args } }
+  if (payload.functionCall && typeof payload.functionCall === 'object') {
+    return {
+      name: payload.functionCall.name || null,
+      args: payload.functionCall.args ?? payload.functionCall.arguments ?? {},
+    };
+  }
+
+  const nestedFunction = payload.function && typeof payload.function === 'object' ? payload.function : null;
+  const name = payload.name
+    || payload.tool
+    || payload.tool_name
+    || payload.action
+    || payload.function_name
+    || nestedFunction?.name
+    || null;
+
+  const args = payload.arguments
+    ?? payload.args
+    ?? payload.input
+    ?? payload.parameters
+    ?? payload.params
+    ?? payload.tool_input
+    ?? payload.function_arguments
+    ?? nestedFunction?.arguments
+    ?? nestedFunction?.input
+    ?? {};
+
+  const normalizedName = typeof name === 'string' ? name : null;
+  return {
+    name: normalizedName,
+    args: normalizedName ? parseArguments(args) : undefined,
+  };
 }
 
 export function formatToolCallsForMessage(toolCalls) {

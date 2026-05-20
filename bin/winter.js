@@ -20,8 +20,9 @@ const version = pkg.version;
 const COMMANDS = new Set([
   'chat', 'call', 'benchmark', 'session', 'skill', 'plugin', 'design', 'config', 'init',
   'help', 'project', 'code', 'review', 'debug', 'auto', 'mcp', 'permissions',
+  'autopilot', 'plan',
   'provider', 'providers', 'model', 'models', 'ecc', 'page-agent', 'pageagent',
-  'resources', 'memory-vault', 'doctor', 'context', 'scorecard',
+  'resources', 'htmlfx', 'memory-vault', 'doctor', 'context', 'scorecard',
 ]);
 
 function isInteractiveRequest(args) {
@@ -62,6 +63,7 @@ Commands:
   winter mcp <action>         MCP server management
   winter permissions <action> Permission allowlist
   winter ecc [action]         Browse bundled ECC resources
+  winter htmlfx [action]      Manage html-effectiveness compiler integration
   winter page-agent [action]  Browse bundled Page Agent resources
   winter context [task]       Inspect model context for this project
   winter scorecard            Score Winter capability gates
@@ -71,12 +73,15 @@ Commands:
   winter model [model]        Show/set active provider model
   winter models               List configured/cached models
   winter design <action>      Design commands
+  winter plan fetch <task> [--export md|json] [--output <path>] [--apply]
   winter project <action>     Project commands
   winter config               Show config
   winter init                 Initialize local state
   winter review               Code review mode
   winter debug <error/task>   Auto-debug with verification
   winter auto <task>          Auto-heal with test/build loop
+  winter autopilot <task>     Autonomous analyze/fix/verify workflow
+  winter autopilot <task> --max-loops <n> --verify "cmd1;cmd2"
   winter code                 Code analysis mode
 
 Flags:

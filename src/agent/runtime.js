@@ -2,6 +2,7 @@ import { Spinner } from '../cli/spinner.js';
 import { colors } from '../cli/snowflake-logo.js';
 import { renderBox, terminalWidth, wrapText } from '../cli/terminal-ui.js';
 import { getMutatingToolNames, recordToolCallAdapterStats } from '../cli/tool-runtime.js';
+import { buildSmallModelAmplification } from '../ai/small-model-amplifier.js';
 
 export class AgentRuntime {
   constructor(repl) {
@@ -28,9 +29,18 @@ export class AgentRuntime {
     const executionProfile = repl.selectExecutionProfile(messages, { enableTools: true });
     const requireToolEvidence = repl.actionRequiresTools(messages);
     let noToolActionRetries = 0;
+    const sessionContext = repl.session?.getContext?.() || {};
+    const profile = sessionContext.workflowProfile || 'general';
+    const depth = /deep/i.test(profile) ? 'deep' : 'standard';
+    const amplifier = buildSmallModelAmplification({
+      modelTier: repl.ai?._modelTier || 'medium',
+      workflowProfile: profile,
+      depth,
+    });
+    const maxToolTurns = amplifier.maxToolTurns || 8;
 
     try {
-      for (let i = 0; i < 8; i++) {
+      for (let i = 0; i < maxToolTurns; i++) {
         if (repl.isCancelled) throw new Error('AbortError');
         const turn = await repl.requestAssistantTurn(messages, {
           provider: executionProfile.provider,
@@ -198,6 +208,21 @@ export class AgentRuntime {
 
       if (usedTools && !finalContent) {
         finalContent = await repl.requestFinalAnswer(messages, toolSummaries, startedAt, totalUsage);
+      }
+
+      if (amplifier.enforceSelfCritique && finalContent) {
+        const maybeWeak = /không chắc|tôi nghĩ|maybe|perhaps|có thể|probably/i.test(finalContent) || finalContent.length < 80;
+        if (maybeWeak) {
+          messages.push({
+            role: 'user',
+            content: [
+              'Run a private self-critique and improve your previous answer.',
+              'Checklist: missing requirements, missing edge-cases, missing verification evidence, unsafe assumptions.',
+              'Return an improved final answer only.',
+            ].join('\n'),
+          });
+          finalContent = await repl.requestFinalAnswer(messages, toolSummaries, startedAt, totalUsage);
+        }
       }
     } finally {
       if (tools) repl.ai.setTools(previousTools);

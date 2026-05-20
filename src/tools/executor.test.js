@@ -14,6 +14,51 @@ test('Bash validates missing command instead of throwing', async () => {
   assert.equal(result.error, 'command is required');
 });
 
+test('Read validates missing file path before execution', async () => {
+  const tools = new ToolExecutor({ projectPath: process.cwd() });
+  const result = await tools.execute('Read', {});
+
+  assert.equal(result.success, false);
+  assert.match(result.error, /Missing required argument/);
+  assert.match(result.recovery, /Read/);
+});
+
+test('HtmlEffectiveness validates missing input/output paths', async () => {
+  const tools = new ToolExecutor({ projectPath: process.cwd() });
+  const result = await tools.execute('HtmlEffectiveness', { input_path: 'a.md' });
+
+  assert.equal(result.success, false);
+  assert.match(result.error, /input_path and output_path/);
+});
+
+test('strict preflight coerces common alias keys to canonical args', async () => {
+  const tools = new ToolExecutor({ projectPath: process.cwd() });
+
+  const seen = [];
+  tools.readFile = async (filePath) => {
+    seen.push({ tool: 'Read', filePath });
+    return { success: true, path: filePath, lines: 1, size: 1, content: 'ok' };
+  };
+  tools.bash = async (command) => {
+    seen.push({ tool: 'Bash', command });
+    return { success: true, stdout: 'ok', stderr: '', exitCode: 0 };
+  };
+  tools.grep = async (pattern, searchPath) => {
+    seen.push({ tool: 'Grep', pattern, searchPath });
+    return { success: true, pattern, path: searchPath, matches: [], count: 0, output_mode: 'content' };
+  };
+
+  await tools.execute('Read', { path: 'README.md' }, { cwd: process.cwd() });
+  await tools.execute('Bash', { cmd: 'npm test' });
+  await tools.execute('Grep', { query: 'Winter' }, { cwd: process.cwd() });
+
+  assert.equal(seen[0].tool, 'Read');
+  assert.match(seen[0].filePath, /README\.md$/);
+  assert.deepEqual(seen[1], { tool: 'Bash', command: 'npm test' });
+  assert.equal(seen[2].tool, 'Grep');
+  assert.equal(seen[2].pattern, 'Winter');
+});
+
 test('unknown tools return recovery guidance instead of a bare failure', async () => {
   const tools = new ToolExecutor({ projectPath: process.cwd() });
   const result = await tools.execute('bad_tool_name', {});
@@ -39,6 +84,7 @@ test('tool names accept common model aliases', () => {
   assert.equal(tools.normalizeToolName('grep_search'), 'Grep');
   assert.equal(tools.normalizeToolName('shell'), 'Bash');
   assert.equal(tools.normalizeToolName('web-search'), 'WebSearch');
+  assert.equal(tools.normalizeToolName('htmlfx'), 'HtmlEffectiveness');
 });
 
 test('tools coerce string inputs into valid arguments', async () => {
