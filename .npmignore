@@ -17,6 +17,7 @@ resources/local/claude/todos/
 src/**/*.test.js
 .git/
 .winter/
+.codegraph/
 .claude/
 sessions/
 logs/

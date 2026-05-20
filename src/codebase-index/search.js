@@ -7,20 +7,26 @@
  * - Combined search
  */
 import { CodebaseIndexer } from './indexer.js';
+import { CodeGraphAdapter } from './codegraph-adapter.js';
 import path from 'path';
 
 export class CodebaseSearch {
   constructor(options = {}) {
     this.indexer = options.indexer || new CodebaseIndexer(options);
     this.projectPath = options.projectPath || this.indexer.projectPath;
+    this.codeGraph = options.codeGraphAdapter || (
+      options.enableCodeGraph ? new CodeGraphAdapter({ projectPath: this.projectPath }) : null
+    );
   }
 
   async init() {
     await this.indexer.init();
+    await this.codeGraph?.init?.();
   }
 
   async ensureIndexed() {
     const stats = this.indexer.getStats();
+    await this.codeGraph?.ensureIndexed?.();
     if (stats.totalChunks === 0) {
       return await this.indexer.indexAll();
     }
@@ -34,6 +40,9 @@ export class CodebaseSearch {
   async query(query, options = {}) {
     await this.ensureIndexed();
     const results = this.indexer.search(query, options);
+    const graphResults = this.codeGraph
+      ? await this.codeGraph.search(query, { limit: Math.min(options.limit || 20, 12) })
+      : [];
 
     // Group by file for display
     const byFile = new Map();
@@ -46,9 +55,10 @@ export class CodebaseSearch {
 
     return {
       query,
-      totalResults: results.length,
+      totalResults: results.length + graphResults.length,
       totalFiles: byFile.size,
       results,
+      graphResults,
       byFile: [...byFile.entries()].map(([filePath, chunks]) => ({
         filePath,
         score: Math.max(...chunks.map(c => c.score)),
@@ -63,6 +73,9 @@ export class CodebaseSearch {
    */
   async findSymbol(name, options = {}) {
     await this.ensureIndexed();
+    const graphMatches = this.codeGraph
+      ? await this.codeGraph.findSymbol(name, options)
+      : [];
     const nameLower = name.toLowerCase();
     const matches = [];
 
@@ -79,7 +92,12 @@ export class CodebaseSearch {
       }
     }
 
-    return matches.slice(0, options.limit || 20);
+    return [...graphMatches, ...matches].slice(0, options.limit || 20);
+  }
+
+  async buildGraphContext(task, options = {}) {
+    if (!this.codeGraph) return '';
+    return await this.codeGraph.buildContext(task, options);
   }
 
   /**
@@ -148,6 +166,13 @@ export class CodebaseSearch {
 
     return {
       ...stats,
+      codeGraph: this.codeGraph
+        ? {
+          available: this.codeGraph.available,
+          stats: this.codeGraph.safeStats?.() || null,
+          error: this.codeGraph.lastError?.message || null,
+        }
+        : null,
       languages: [...languages.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10),
       topSymbols,
     };
@@ -159,6 +184,10 @@ export class CodebaseSearch {
 
   async clear() {
     return await this.indexer.clear();
+  }
+
+  close() {
+    this.codeGraph?.close?.();
   }
 
   // ── Private ────────────────────────────────────────

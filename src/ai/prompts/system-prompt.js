@@ -1,10 +1,9 @@
 /**
  * Dynamic System Prompt Builder
  * Builds context-aware system prompts based on task, role, and session state.
- * Small models get compact structural guidance so the task stays in focus.
+ * Winter always gives every model the strongest available agent instructions.
  */
 
-import { isSmallModel, getModelCapabilityLabel } from '../model-capabilities.js';
 import { formatRuntimeEnvironmentSummary, getRuntimeEnvironment } from '../../cli/runtime-env.js';
 
 const BASE_PRINCIPLES = [
@@ -74,35 +73,6 @@ function appendSharedContext(parts, { environment, session, design, resourceCont
   }
 }
 
-function buildCompactSmallModelPrompt(options = {}) {
-  const { tools = [], modelTier } = options;
-  const parts = [
-    'You are Winter, an AI coding assistant running on a ' + getModelCapabilityLabel(modelTier) + '.',
-    '',
-    '## Operating Rules',
-    '1. Understand the user request first. If project state matters, inspect files before answering.',
-    '2. Operate as an agent: inspect -> hypothesize -> act -> verify -> final.',
-    '3. Keep context tight. Use only relevant tools and avoid long explanations.',
-    '4. For coding/debug: Read/Grep/Glob/logs -> Edit/Write -> Bash/test/browser smoke. Do not guess file paths.',
-    '5. For UI/design: inspect existing components/styles/resources before changing visuals.',
-    '6. Final answer in Vietnamese. Mention changed files and verification only.',
-    '',
-  ];
-
-  const toolList = formatToolList(tools);
-  if (toolList) parts.push('## Tools', toolList, '');
-  appendSharedContext(parts, { ...options, includeResources: false });
-
-  parts.push(
-    '## Response Shape',
-    '- If action is needed, use tools instead of describing the action.',
-    '- If an image is provided, analyze the image directly and tie findings to project files when relevant.',
-    '- Keep final output short and concrete.',
-  );
-
-  return parts.filter(Boolean).join('\n');
-}
-
 function buildStandardSystemPrompt(options = {}) {
   const { role = 'coding', tools = [], resourceContext } = options;
   const parts = [
@@ -113,6 +83,7 @@ function buildStandardSystemPrompt(options = {}) {
     '',
     '## Tool Usage',
     'Use tools when they materially improve correctness. Inspect before editing. Verify after changes.',
+    'Use maximum reasoning discipline for every model tier, including tiny, local, free, and routed models.',
     'Never invent file paths, APIs, command output, or test results.',
     'For debug work, locate the first hard failure, patch the root cause, and verify with the closest test/build/browser smoke.',
     'For design/UI work, inspect the existing interface and design resources first; avoid generic placeholder layouts.',
@@ -139,9 +110,7 @@ export function buildSystemPrompt({
   modelTier,
 } = {}) {
   const options = { role, context, tools, session, environment, design, resourceContext, modelTier };
-  return isSmallModel(modelTier)
-    ? buildCompactSmallModelPrompt(options)
-    : buildStandardSystemPrompt(options);
+  return buildStandardSystemPrompt(options);
 }
 
 export function buildFastSystemPrompt({
@@ -149,18 +118,10 @@ export function buildFastSystemPrompt({
   tools = [],
   modelTier,
 } = {}) {
-  if (modelTier && isSmallModel(modelTier)) {
-    return [
-      'Winter (fast mode - small model). Be concise. Use tools when needed.',
-      tools.length > 0 ? `Tools: ${tools.join(', ')}` : '',
-      'Use a brief private plan, then answer in 1 sentence.',
-    ].filter(Boolean).join('\n');
-  }
-
   return [
-    'You are Winter (fast mode). Be concise. Use tools when needed.',
+    'You are Winter (fast mode with maximum correctness). Be concise, but inspect and use tools when needed.',
     tools.length > 0 ? `Tools: ${tools.join(', ')}` : '',
-    'Keep responses brief and focused on the immediate task.',
+    'Use a brief private plan, then execute or answer with concrete evidence.',
   ].filter(Boolean).join('\n');
 }
 
@@ -176,15 +137,13 @@ export function buildAgentSystemPrompt(role, { tools = [], modelTier } = {}) {
   };
 
   const base = roleConfigs[role] || roleConfigs.coding;
-  const smallNote = modelTier && isSmallModel(modelTier)
-    ? '\n\nYou are running on a small model. Keep context tight, use tools early, and keep final output short.'
-    : '';
+  const strengthNote = '\n\nWinter Strength Mode: use the full agent loop, inspect real code, reason carefully, verify results, and avoid unsupported claims regardless of base model size.';
 
   return [
     `You are Winter (${role} agent).`,
     base,
     tools.length > 0 ? `\nTools: ${tools.join(', ')}` : '',
-    smallNote,
+    strengthNote,
     '\nCRITICAL: Output only the requested format. No extra commentary.',
   ].filter(Boolean).join('\n');
 }

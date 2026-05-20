@@ -4,6 +4,7 @@ vscode-main/
 
 # Runtime state
 .winter/
+.codegraph/
 .claude/
 sessions/
 logs/

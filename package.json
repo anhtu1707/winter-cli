@@ -57,7 +57,7 @@
     "diff": "^9.0.0"
   },
   "optionalDependencies": {
+    "@colbymchenry/codegraph": "^0.7.12",
     "puppeteer": "^24.43.1"
-  },
-  "devDependencies": {}
+  }
 }

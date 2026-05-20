@@ -59,3 +59,48 @@ test('CodebaseSearch getFileContext matches files indexed by indexAll', async ()
   assert.equal(context.chunks.length, 1);
   assert.equal(definition[0].filePath, 'src/main.js');
 });
+
+test('CodebaseSearch can layer CodeGraph results and context over the fallback index', async () => {
+  const projectPath = await createProject();
+  const fakeGraph = {
+    available: true,
+    lastError: null,
+    initCalled: false,
+    indexed: false,
+    async init() {
+      this.initCalled = true;
+      return true;
+    },
+    async ensureIndexed() {
+      this.indexed = true;
+      return { nodeCount: 1, edgeCount: 0, fileCount: 1 };
+    },
+    async search() {
+      return [{ score: 0.95, node: { name: 'winterSearchTarget', kind: 'function', filePath: 'src/main.js', startLine: 1 } }];
+    },
+    async findSymbol() {
+      return [{ name: 'winterSearchTarget', type: 'function', filePath: 'src/main.js', line: 1, content: 'graph result' }];
+    },
+    async buildContext() {
+      return '# CodeGraph Context\n\nwinterSearchTarget graph context';
+    },
+    safeStats() {
+      return { nodeCount: 1, edgeCount: 0, fileCount: 1 };
+    },
+  };
+  const search = new CodebaseSearch({ projectPath, codeGraphAdapter: fakeGraph });
+
+  await search.init();
+  const result = await search.query('winterSearchTarget');
+  const definition = await search.findSymbol('winterSearchTarget');
+  const graphContext = await search.buildGraphContext('explain winterSearchTarget');
+  const summary = search.getSummary();
+
+  assert.equal(fakeGraph.initCalled, true);
+  assert.equal(fakeGraph.indexed, true);
+  assert.equal(result.graphResults.length, 1);
+  assert.equal(definition[0].content, 'graph result');
+  assert.match(graphContext, /CodeGraph Context/);
+  assert.equal(summary.codeGraph.available, true);
+  assert.equal(summary.codeGraph.stats.nodeCount, 1);
+});

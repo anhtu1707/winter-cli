@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { selectExecutionProfile } from './router.js';
+import { REASONING_LEVELS } from '../ai/reasoning.js';
 
 const providers = {
   claude: { model: 'claude-sonnet' },
@@ -41,4 +42,15 @@ test('router respects explicit valid provider override', () => {
 
   assert.equal(profile.provider, 'ollama');
   assert.equal(profile.model, 'custom-local');
+});
+
+test('router defaults every selected model to max reasoning', () => {
+  const profile = selectExecutionProfile({
+    messages: [{ role: 'user', content: 'quick summary' }],
+    activeProvider: 'ollama',
+    providers,
+  });
+
+  assert.equal(profile.provider, 'ollama');
+  assert.equal(profile.reasoningLevel, REASONING_LEVELS.MAX);
 });

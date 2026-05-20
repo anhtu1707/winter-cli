@@ -655,7 +655,7 @@ test('runConversation streams direct assistant answers', async () => {
     setTools(tools) {
       this.tools = tools;
     },
-    async *streamRequest() {
+    async *streamRequest(_messages, options = {}) {
       yield { content: 'Real ', raw: { choices: [{ delta: { content: 'Real ' } }] } };
       yield {
         content: 'time',
@@ -688,6 +688,7 @@ test('runConversation blocks action completion claims without tool evidence and 
   const repl = new WinterREPL({ projectPath: process.cwd() });
 
   let streamCount = 0;
+  const streamOptions = [];
   const executed = [];
   const writes = [];
   const originalWrite = process.stdout.write;
@@ -698,28 +699,15 @@ test('runConversation blocks action completion claims without tool evidence and 
     setTools(tools) {
       this.tools = tools;
     },
-    async *streamRequest() {
+    async *streamRequest(_messages, options = {}) {
+      streamOptions.push(options);
       streamCount++;
       if (streamCount === 1) {
         yield { content: 'Đã sửa xong rồi nhé.' };
         return;
       }
       if (streamCount === 2) {
-        yield {
-          raw: {
-            choices: [{
-              delta: {
-                tool_calls: [{
-                  index: 0,
-                  id: 'call-read',
-                  type: 'function',
-                  function: { name: 'Read', arguments: '{"file_path":"README.md"}' },
-                }],
-              },
-              finish_reason: 'tool_calls',
-            }],
-          },
-        };
+        yield { content: '<invoke name="Read"><parameter name="file_path">README.md</parameter></invoke>' };
         return;
       }
       yield { content: 'Đã kiểm tra README.md bằng tool.' };
@@ -747,6 +735,7 @@ test('runConversation blocks action completion claims without tool evidence and 
     );
 
     assert.equal(answer.finalContent, 'Đã kiểm tra README.md bằng tool.');
+    assert.equal(streamOptions[1]?.toolPromptOnly, true);
     assert.deepEqual(executed, [{ name: 'Read', args: { file_path: 'README.md' } }]);
     assert(!writes.join('').includes('Đã sửa xong rồi nhé.'));
   } finally {

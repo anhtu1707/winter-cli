@@ -962,6 +962,150 @@ EXECUTION CONTRACT:
     );
   }
 
+  buildPlanSlug(task) {
+    return String(task || 'plan')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 48) || 'plan';
+  }
+
+  getPlanScaffoldSpec(task, workflow = {}) {
+    const slug = this.buildPlanSlug(task);
+    const featureName = slug.replace(/-/g, ' ');
+    const profile = String(workflow.profile || 'general');
+    const family = profile.split('-')[0] || 'general';
+
+    const common = {
+      dirs: ['docs', 'tests'],
+      files: {
+        'docs/plan-notes.md': [
+          `# ${featureName}`,
+          '',
+          `- Profile: ${profile}`,
+          '- Status: scaffolded by Winter plan apply',
+          '',
+        ].join('\n'),
+        'tests/README.md': [
+          '# Test Plan',
+          '',
+          '- Add smoke tests for the generated plan.',
+          '- Keep verification commands close to the final implementation stack.',
+          '',
+        ].join('\n'),
+      },
+    };
+
+    const specs = {
+      webapp: {
+        dirs: ['src/app', `src/features/${slug}`, 'src/components', 'src/lib', 'tests/e2e'],
+        files: {
+          [`src/features/${slug}/README.md`]: `# ${featureName}\n\nFeature slice for the plan.\n`,
+          [`src/features/${slug}/tasks.md`]: '',
+          'tests/e2e/README.md': '# E2E Tests\n\nAdd Playwright or browser smoke tests here.\n',
+        },
+      },
+      mobile: {
+        dirs: ['src/navigation', `src/features/${slug}`, 'src/screens', 'src/services', 'src/components', 'src/state', 'tests'],
+        files: {
+          [`src/features/${slug}/README.md`]: `# ${featureName}\n\nMobile feature module for screens, hooks, API calls, and state.\n`,
+          [`src/features/${slug}/tasks.md`]: '',
+          'src/navigation/README.md': '# Navigation\n\nDefine app navigation graph and route ownership here.\n',
+          'src/services/README.md': '# Services\n\nPlace API clients, storage adapters, and platform services here.\n',
+        },
+      },
+      backend: {
+        dirs: [`src/modules/${slug}`, `src/modules/${slug}/dto`, `src/modules/${slug}/tests`, 'src/config', 'src/common'],
+        files: {
+          [`src/modules/${slug}/README.md`]: `# ${featureName}\n\nBackend module scaffold for routes/controllers/services/tests.\n`,
+          [`src/modules/${slug}/tasks.md`]: '',
+          'src/config/README.md': '# Config\n\nDocument environment variables and runtime config here.\n',
+        },
+      },
+      desktop: {
+        dirs: ['src/main', 'src/preload', 'src/renderer', `src/features/${slug}`, 'tests'],
+        files: {
+          [`src/features/${slug}/README.md`]: `# ${featureName}\n\nDesktop feature module scaffold.\n`,
+          [`src/features/${slug}/tasks.md`]: '',
+          'src/main/README.md': '# Main Process\n\nKeep privileged runtime code here.\n',
+          'src/preload/README.md': '# Preload\n\nExpose minimal validated IPC APIs here.\n',
+        },
+      },
+      ai: {
+        dirs: ['src/ingestion', 'src/retrieval', 'src/generation', 'src/evals', `src/features/${slug}`],
+        files: {
+          [`src/features/${slug}/README.md`]: `# ${featureName}\n\nAI feature scaffold for pipeline wiring and evals.\n`,
+          [`src/features/${slug}/tasks.md`]: '',
+          'src/evals/README.md': '# Evals\n\nTrack regression prompts, datasets, and quality thresholds here.\n',
+        },
+      },
+    };
+
+    const spec = specs[family] || {
+      dirs: [`src/features/${slug}`, 'src/lib', 'tests'],
+      files: {
+        [`src/features/${slug}/README.md`]: `# ${featureName}\n\nFeature scaffold generated from Winter plan apply.\n`,
+        [`src/features/${slug}/tasks.md`]: '',
+      },
+    };
+
+    return {
+      slug,
+      family,
+      dirs: [...common.dirs, ...spec.dirs],
+      files: { ...common.files, ...spec.files },
+    };
+  }
+
+  async writeFileIfMissing(filePath, content) {
+    try {
+      await fs.writeFile(filePath, content, { encoding: 'utf8', flag: 'wx' });
+      return true;
+    } catch (error) {
+      if (error?.code === 'EEXIST') return false;
+      throw error;
+    }
+  }
+
+  async applyPlanProfileScaffold({ task, selected, workflow }) {
+    const spec = this.getPlanScaffoldSpec(task, workflow);
+    const created = [];
+    const skipped = [];
+
+    for (const dir of spec.dirs) {
+      const dirPath = path.join(this.projectPath, dir);
+      await fs.mkdir(dirPath, { recursive: true });
+      created.push(dir);
+    }
+
+    const taskListContent = [
+      `# ${selected.title}`,
+      '',
+      `- Task: ${task}`,
+      `- Profile: ${workflow.profile}`,
+      '',
+      '## Steps',
+      ...selected.steps.map(step => `- [ ] ${step}`),
+      '',
+    ].join('\n');
+
+    const files = { ...spec.files };
+    for (const fileName of Object.keys(files)) {
+      if (fileName.endsWith('/tasks.md')) {
+        files[fileName] = taskListContent;
+      }
+    }
+
+    for (const [relativePath, content] of Object.entries(files)) {
+      const filePath = path.join(this.projectPath, relativePath);
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      const didCreate = await this.writeFileIfMissing(filePath, content);
+      (didCreate ? created : skipped).push(relativePath);
+    }
+
+    return { ...spec, created, skipped };
+  }
+
   async exportPlanArtifact({ task, workflow, selected, outputPath, format = 'md' }) {
     const normalizedFormat = format === 'json' ? 'json' : 'md';
     const finalPath = this.resolvePlanOutputPath(task, normalizedFormat, outputPath);
@@ -1004,6 +1148,7 @@ EXECUTION CONTRACT:
   }
 
   async applyPlanSkeleton({ task, selected, workflow, exportPath = null }) {
+    const scaffold = await this.applyPlanProfileScaffold({ task, selected, workflow });
     const targetPath = path.join(this.projectPath, '.winter', 'plan-task-list.md');
     const skeleton = [
       '# Plan Task List',
@@ -1012,9 +1157,14 @@ EXECUTION CONTRACT:
       `- Profile: ${workflow.profile}`,
       `- Plan: ${selected.title}`,
       ...(exportPath ? [`- Plan File: ${path.relative(this.projectPath, exportPath) || exportPath}`] : []),
+      `- Scaffold Profile: ${scaffold.family}`,
       '',
       '## TODO',
       ...selected.steps.map(step => `- [ ] ${step}`),
+      '',
+      '## Scaffold Created',
+      ...scaffold.created.map(item => `- ${item}`),
+      ...(scaffold.skipped.length ? ['', '## Existing Files Kept', ...scaffold.skipped.map(item => `- ${item}`)] : []),
       '',
     ].join('\n');
     await fs.mkdir(path.dirname(targetPath), { recursive: true });

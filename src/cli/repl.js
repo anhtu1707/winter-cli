@@ -1,5 +1,5 @@
 /**
- * ?? WINTER REPL ??
+ * WINTER REPL
  * Claude Code / Codex style interactive REPL
  */
 
@@ -30,7 +30,7 @@ import {
   buildPromptToolResultWithTokenJuice,
 } from './tool-runtime.js';
 import { TokenJuice } from '../context/token-juice.js';
-import { classifyModelTier, isSmallModel } from '../ai/model-capabilities.js';
+import { classifyModelTier } from '../ai/model-capabilities.js';
 import {
   addUsage as mergeUsage,
   buildToolCallSignature as buildToolCallSignatureText,
@@ -77,8 +77,8 @@ export class WinterREPL {
     this.ai = new AIProviderManager(this.config);
     this.tools = new ToolExecutor(this);
     this.projectPath = options.projectPath || process.cwd();
-    this.sessionId = options.sessionId || null; // Nh?n sessionId t? bin
-    this.version = options.version || '1.0.0'; // Nh?n version t? bin
+    this.sessionId = options.sessionId || null; // Nhận sessionId từ bin
+    this.version = options.version || '1.0.0'; // Nhận version từ bin
     this.running = true;
     this.history = [];
     this.maxHistory = 500;
@@ -118,7 +118,7 @@ export class WinterREPL {
 
   async initCodebaseSearch() {
     if (this.codebaseSearcher) return;
-    this.codebaseSearcher = new CodebaseSearch({ projectPath: this.projectPath });
+    this.codebaseSearcher = new CodebaseSearch({ projectPath: this.projectPath, enableCodeGraph: true });
     await this.codebaseSearcher.init();
     this.atContext = new AtContextResolver({
       projectPath: this.projectPath,
@@ -166,7 +166,7 @@ export class WinterREPL {
       await this.codebaseSearcher.clear();
     }
     const stats = await this.codebaseSearcher.reindex();
-    console.log(`${colors.green}? Codebase indexed:${colors.reset}`);
+    console.log(`${colors.green}✓ Codebase indexed:${colors.reset}`);
     console.log(`  ${colors.dim}Files: ${stats.totalFiles}, Chunks: ${stats.totalChunks}, Indexed: ${stats.indexedFiles}, Skipped: ${stats.skipped}${colors.reset}`);
   }
 
@@ -229,11 +229,11 @@ export class WinterREPL {
     if (before.totalChunks > 0) return before;
 
     if (verbose) {
-      console.log(`${colors.dim}? Indexing codebase for semantic search...${colors.reset}`);
+      console.log(`${colors.dim}Indexing codebase for semantic search...${colors.reset}`);
     }
     const indexedStats = await this.codebaseSearcher.reindex();
     if (verbose) {
-      console.log(`${colors.green}? Codebase indexed: ${indexedStats.totalFiles} files, ${indexedStats.totalChunks} chunks${colors.reset}`);
+      console.log(`${colors.green}✓ Codebase indexed: ${indexedStats.totalFiles} files, ${indexedStats.totalChunks} chunks${colors.reset}`);
     }
     return this.codebaseSearcher.indexer.getStats();
   }
@@ -278,7 +278,7 @@ export class WinterREPL {
         }
       }
 
-      return this.compactText(lines.join('\n'), this.shouldUseCompactPrompt() ? 1800 : 3200, 'codebase context');
+      return this.compactText(lines.join('\n'), 4200, 'codebase context');
     } catch (error) {
       return `[Codebase Index]\nUnavailable: ${error.message}`;
     }
@@ -312,7 +312,7 @@ export class WinterREPL {
       if (ans.trim().toLowerCase() === 'y') {
         const ok = await this.diffView.restoreFromBackup(latest.backup, latest.original);
         if (ok) {
-          console.log(`${colors.green}? Restored ${latest.original} from backup${colors.reset}`);
+          console.log(`${colors.green}✓ Restored ${latest.original} from backup${colors.reset}`);
         } else {
           console.log(`${colors.red}Failed to restore${colors.reset}`);
         }
@@ -456,7 +456,7 @@ export class WinterREPL {
     });
     await this.session.replaceMemory('[Project Anchor]', `Current project is ${this.projectPath}. Treat this path as the canonical working directory for the session.`, 'info');
 
-    // T? ??ng ??c v? ghi nh? m?t s? t?i nguy?n c?c b? (an to?n): ch? n?p file ho?c README trong th? m?c
+    // Tự động đọc và ghi nhớ một số tài nguyên cục bộ an toàn.
     const fsPromises = await import('fs/promises');
     const resourcePaths = this.getResourcePaths();
     const autoLoadTargets = [resourcePaths.agents, resourcePaths.designs, resourcePaths.karpathy, resourcePaths.pageAgent];
@@ -469,9 +469,9 @@ export class WinterREPL {
         if (stat.isFile()) {
           const content = await fsPromises.readFile(targetPath, 'utf8');
           const fileName = path.basename(targetPath);
-          const memoryKey = `[T? ??ng ghi nh? file ${fileName}]`;
+          const memoryKey = `[Tự động ghi nhớ file ${fileName}]`;
           await this.session.replaceMemory(memoryKey, content);
-          console.log(`${colors.dim}? ?? t? ??ng n?p v? ghi nh? file ${fileName}${colors.reset}`);
+          console.log(`${colors.dim}✓ Đã tự động nạp và ghi nhớ file ${fileName}${colors.reset}`);
           continue;
         }
 
@@ -485,9 +485,9 @@ export class WinterREPL {
               const cstat = await fsPromises.stat(p).catch(() => null);
               if (cstat && cstat.isFile()) {
                 const content = await fsPromises.readFile(p, 'utf8');
-                const memoryKey = `[T? ??ng ghi nh? file ${path.basename(targetPath)}/${c}]`;
+                const memoryKey = `[Tự động ghi nhớ file ${path.basename(targetPath)}/${c}]`;
                 await this.session.replaceMemory(memoryKey, content);
-                console.log(`${colors.dim}? ?? t? ??ng n?p v? ghi nh? ${path.basename(targetPath)}/${c}${colors.reset}`);
+                console.log(`${colors.dim}✓ Đã tự động nạp và ghi nhớ ${path.basename(targetPath)}/${c}${colors.reset}`);
                 loaded = true;
                 break;
               }
@@ -505,63 +505,63 @@ export class WinterREPL {
       }
     }
 
-    // N?p c?c file quy t?c d? ?n theo th? t? ?u ti?n.
+    // Nạp các file quy tắc dự án theo thứ tự ưu tiên.
     const projectInstructionFiles = await this.readProjectInstructionFiles();
     try {
       if (projectInstructionFiles.length > 0) {
         for (const file of projectInstructionFiles) {
-          const memoryKey = `[Quy t?c d? ?n t? ${file.relativePath}]`;
+          const memoryKey = `[Quy tắc dự án từ ${file.relativePath}]`;
           await this.session.replaceMemory(memoryKey, file.content);
-          console.log(`${colors.dim}? ?? n?p quy t?c d? ?n t? ${file.relativePath}${colors.reset}`);
+          console.log(`${colors.dim}✓ Đã nạp quy tắc dự án từ ${file.relativePath}${colors.reset}`);
         }
       }
     } catch (e) {
-      // N?u kh?ng c?, t? ??ng t?o file m?u!
+      // Nếu không có, tự động tạo file mẫu.
       const template = `# Winter Project Rules
 
-## ?? Project Overview
-- **Name**: [T?n d? ?n]
-- **Description**: [M? t? ng?n v? d? ?n]
+## Project Overview
+- **Name**: [Tên dự án]
+- **Description**: [Mô tả ngắn về dự án]
 
-## ?? Tech Stack
+## Tech Stack
 - **Languages**: JavaScript / TypeScript
 - **Runtime**: Node.js
-- **Frameworks**: [T? ?i?n n?u c?, VD: Express, React...]
+- **Frameworks**: [Tự điền nếu có, VD: Express, React...]
 
-## ?? AI Behavior & Coding Guidelines
+## AI Behavior & Coding Guidelines
 
-### 1. Nguy?n T?c Code (Coding Standards)
-- Lu?n ?u ti?n vi?t code s?ch (Clean Code), d? ??c v? d? b?o tr?.
-- S? d?ng ES Modules (\`import/export\`) thay v? CommonJS (\`require\`) tr? khi c? l? do ??c bi?t.
-- Gi? nguy?n c?c comment v? JSDoc hi?n c? trong file tr? khi ???c y?u c?u s?a.
+### 1. Nguyên tắc Code (Coding Standards)
+- Luôn ưu tiên viết code sạch (Clean Code), dễ đọc và dễ bảo trì.
+- Sử dụng ES Modules (\`import/export\`) thay vì CommonJS (\`require\`) trừ khi có lý do đặc biệt.
+- Giữ nguyên các comment và JSDoc hiện có trong file trừ khi được yêu cầu sửa.
 
-### 2. T??ng T?c V?i Ng??i D?ng (User Interaction)
-- Lu?n gi?i th?ch NG?N G?N l? do th?c hi?n thay ??i tr??c khi s?a file.
-- Khi g?p l?i, h?y ?? xu?t gi?i ph?p thay v? ch? b?o l?i.
-- KH?NG t? ti?n x?a code c? c?a user tr? khi ch?c ch?n n? kh?ng c?n d?ng ho?c ???c y?u c?u.
+### 2. Tương tác với người dùng (User Interaction)
+- Luôn giải thích ngắn gọn lý do thực hiện thay đổi trước khi sửa file.
+- Khi gặp lỗi, hãy đề xuất giải pháp thay vì chỉ báo lỗi.
+- Không tự tiện xóa code cũ của user trừ khi chắc chắn không còn dùng hoặc được yêu cầu.
 
 ### 3. Git & Commits
-- Vi?t commit message theo chu?n Conventional Commits (VD: \`feat:\`, \`fix:\`, \`docs:\`).
-- Lu?n ki?m tra \`git status\` tr??c khi th?c hi?n thay ??i l?n.
+- Viết commit message theo chuẩn Conventional Commits (VD: \`feat:\`, \`fix:\`, \`docs:\`).
+- Luôn kiểm tra \`git status\` trước khi thực hiện thay đổi lớn.
 
-### 4. X? L? File (File Operations)
-- Ch? s?a nh?ng d?ng c?n thi?t, tr?nh vi?t l?i to?n b? file n?u kh?ng c?n.
-- Lu?n ??m b?o file kh?ng b? l?i c? ph?p sau khi s?a.
+### 4. Xử lý File (File Operations)
+- Chỉ sửa những dòng cần thiết, tránh viết lại toàn bộ file nếu không cần.
+- Luôn đảm bảo file không bị lỗi cú pháp sau khi sửa.
 `;
       try {
         const projectWinterMd = path.join(this.projectPath, 'winter.md');
         await fsPromises.writeFile(projectWinterMd, template, 'utf8');
-        console.log(`\n${colors.green}? ?? t? ??ng t?o file winter.md m?u cho d? ?n m?i!${colors.reset}`);
-        console.log(`${colors.dim}B?n c? th? ch?nh s?a file n?y ?? d?y AI c?c quy t?c ri?ng c?a d? ?n.${colors.reset}\n`);
+        console.log(`\n${colors.green}✓ Đã tự động tạo file winter.md mẫu cho dự án mới!${colors.reset}`);
+        console.log(`${colors.dim}Bạn có thể chỉnh sửa file này để dạy AI các quy tắc riêng của dự án.${colors.reset}\n`);
         
-        // N?p lu?n v?o memory
-        await this.session.replaceMemory(`[Quy t?c d? ?n t? winter.md]`, template);
+        // Nạp luôn vào memory.
+        await this.session.replaceMemory(`[Quy tắc dự án từ winter.md]`, template);
       } catch (err) {
-        // B? qua n?u kh?ng ghi ???c file
+        // Bỏ qua nếu không ghi được file.
       }
     }
 
-    // ?? T? ??ng t?o design.md, skill.md, rule.md n?u ch?a c? ??????????????
+    // Tự động tạo design.md, skill.md, rule.md nếu chưa có.
     const autoCreateDocs = await buildProjectDocs({
       projectPath: this.projectPath,
       resourcePaths: this.getResourcePaths(),
@@ -577,17 +577,17 @@ export class WinterREPL {
         if (!isWinterGeneratedProjectDoc(existing)) continue;
 
         await fsPromises.writeFile(filePath, doc.content, 'utf8');
-        console.log(`${colors.green}? ?? n?ng c?p file ${doc.filename} t? local resources.${colors.reset}`);
-        const memoryKey = `[Quy t?c d? ?n t? ${doc.filename}]`;
+        console.log(`${colors.green}✓ Đã nâng cấp file ${doc.filename} từ local resources.${colors.reset}`);
+        const memoryKey = `[Quy tắc dự án từ ${doc.filename}]`;
         await this.session.replaceMemory(memoryKey, doc.content);
       } catch {
         try {
           await fsPromises.writeFile(filePath, doc.content, 'utf8');
-          console.log(`${colors.green}? ?? t? ??ng t?o file ${doc.filename} t? local resources!${colors.reset}`);
-          const memoryKey = `[Quy t?c d? ?n t? ${doc.filename}]`;
+          console.log(`${colors.green}✓ Đã tự động tạo file ${doc.filename} từ local resources!${colors.reset}`);
+          const memoryKey = `[Quy tắc dự án từ ${doc.filename}]`;
           await this.session.replaceMemory(memoryKey, doc.content);
         } catch (err) {
-          // B? qua n?u kh?ng t?o ???c
+          // Bỏ qua nếu không tạo được.
         }
       }
     }
@@ -619,13 +619,13 @@ export class WinterREPL {
       this.showStatus();
     }
 
-    // Hi?n th? l?ch s? chat n?u ?ang load l?i session c?, nh?ng ch? replay b?n t?m t?t.
+    // Hiển thị lịch sử chat nếu đang load lại session cũ, nhưng chỉ replay bản tóm tắt.
     const sessionHistory = this.session.getHistory(4);
     if (sessionHistory.length > 0) {
       const columns = process.stdout.columns || 80;
       const W = Math.max(60, Math.min(Math.floor(columns * 0.95), 100));
-      const titleStr = ' L?ch s? phi?n l?m vi?c ';
-      const ruleChar = this.useUnicodeUi ? '?' : '-';
+      const titleStr = ' Lịch sử phiên làm việc ';
+      const ruleChar = this.useUnicodeUi ? '─' : '-';
       const sideLine = ruleChar.repeat(Math.max(0, Math.floor((W - titleStr.length) / 2)));
       const bottomLine = ruleChar.repeat(W);
 
@@ -633,7 +633,7 @@ export class WinterREPL {
       for (const msg of sessionHistory) {
         const text = this.formatStartupHistoryEntry(msg.content);
         if (msg.role === 'user') {
-          console.log(`\n${colors.cyan}B?n:${colors.reset} ${text}`);
+          console.log(`\n${colors.cyan}Bạn:${colors.reset} ${text}`);
         } else if (msg.role === 'assistant') {
           console.log(`\n${colors.bright}${colors.magenta}Winter:${colors.reset} ${text}`);
         }
@@ -645,12 +645,12 @@ export class WinterREPL {
     this.rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
-      prompt: `${colors.bright}${colors.cyan}${this.useUnicodeUi ? 'winter??:' : 'winter>'}  ${colors.reset}`,
+      prompt: `${colors.bright}${colors.cyan}winter > ${colors.reset}`,
       completer: this.completer.bind(this),
     });
     this.inputController.installSlashSuggestions();
 
-    // B?t s? ki?n Ctrl+C ?? in ra l?nh ti?p t?c session
+    // Bắt sự kiện Ctrl+C để in ra lệnh tiếp tục session.
     this.rl.on('SIGINT', () => {
       console.log(`\n\n${colors.cyan}Cảm ơn đã sử dụng Winter!${colors.reset}`);
       console.log(`${colors.yellow}Tiếp tục phiên làm việc:${colors.reset}`);
@@ -658,7 +658,7 @@ export class WinterREPL {
       process.exit(0);
     });
 
-    // Hi?n th? prompt l?n ??u ti?n ngay khi kh?i ??ng xong
+    // Hiển thị prompt lần đầu tiên ngay khi khởi động xong.
     this.showInputPrompt();
 
     this.rl.on('line', (line) => {
@@ -695,7 +695,7 @@ export class WinterREPL {
     if (!this.useUnicodeUi) {
       text = text
         .replace(/\p{Extended_Pictographic}/gu, '')
-        .replace(/[????????]/g, '-')
+        .replace(/[─━—–]/g, '-')
         .replace(/\s+/g, ' ')
         .trim();
     }
@@ -917,7 +917,7 @@ export class WinterREPL {
   async handleInput(input) {
     if (this.isProcessing) {
       const pos = this.taskQueue.length + 1;
-      console.log(`${colors.magenta}?${colors.reset} ${colors.dim}?? x?p h?ng ch? (v? tr? #${pos})${colors.reset}`);
+      console.log(`${colors.magenta}•${colors.reset} ${colors.dim}Đã xếp hàng chờ (vị trí #${pos})${colors.reset}`);
       this.taskQueue.push(input);
       return;
     }
@@ -998,9 +998,9 @@ export class WinterREPL {
       }
     } catch (error) {
       if (error.message === 'AbortError') {
-        console.log(colors.red + '\n?? h?y c?ng vi?c hi?n t?i.' + colors.reset);
+        console.log(colors.red + '\nĐã hủy công việc hiện tại.' + colors.reset);
       } else {
-        console.log(colors.red + '\nL?i: ' + error.message + colors.reset);
+        console.log(colors.red + '\nLỗi: ' + error.message + colors.reset);
       }
     } finally {
       this.isProcessing = false;
@@ -1063,13 +1063,13 @@ export class WinterREPL {
 
       let printedLines = 0;
       const render = () => {
-        // X?a nh?ng d?ng ?? in tr??c ??
+        // Xóa những dòng đã in trước đó.
         if (printedLines > 0) {
           process.stdout.write('\x1b[' + printedLines + 'A\x1b[J');
         }
 
         let out = `\n[36m${title}[0m\n`;
-        out += `[2mD?ng m?i t?n (?/?) ?? di chuy?n, [Space] ?? ch?n/b? ch?n, [Enter] ?? x?c nh?n[0m\n\n`;
+        out += `[2mDùng mũi tên (↑/↓) để di chuyển, [Space] để chọn/bỏ chọn, [Enter] để xác nhận[0m\n\n`;
 
         for (let i = 0; i < items.length; i++) {
           const isHover = i === cursor;
@@ -1119,11 +1119,11 @@ export class WinterREPL {
   }
 
   async generateInteractivePlan(task) {
-    this.spinner = new Spinner('?ang ph?n t?ch v? chia nh? y?u c?u...');
+    this.spinner = new Spinner('Đang phân tích và chia nhỏ yêu cầu...');
     this.spinner.start();
 
     const messages = [
-      { role: 'system', content: 'B?n l? chuy?n gia l?p k? ho?ch. H?y chia nh? y?u c?u c?a ng??i d?ng th?nh c?c b??c c? th?, h?nh ??ng ???c, r?t ng?n g?n (d??i 15 ch? m?i b??c). CH? TR? V? M?T M?NG JSON C?C CHU?I, KH?NG GI?I TH?CH G? TH?M. V? d?: ["T?o file index.html", "Th?m CSS styling", "Vi?t script.js"]' },
+      { role: 'system', content: 'Bạn là chuyên gia lập kế hoạch. Hãy chia nhỏ yêu cầu của người dùng thành các bước cụ thể, hành động được, rất ngắn gọn (dưới 15 chữ mỗi bước). Chỉ trả về một mảng JSON các chuỗi, không giải thích gì thêm. Ví dụ: ["Tạo file index.html", "Thêm CSS styling", "Viết script.js"]' },
       { role: 'user', content: task }
     ];
 
@@ -1146,40 +1146,40 @@ export class WinterREPL {
       }
 
       if (!Array.isArray(items) || items.length === 0) {
-        console.log(`\x1b[33mKh?ng th? parse k? ho?ch. AI ph?n h?i: ${text}\x1b[0m`);
+        console.log(`\x1b[33mKhông thể parse kế hoạch. AI phản hồi: ${text}\x1b[0m`);
         return;
       }
 
-      const selectedSteps = await this.showInteractiveChecklist('K? HO?CH TH?C HI?N:', items);
+      const selectedSteps = await this.showInteractiveChecklist('KẾ HOẠCH THỰC HIỆN:', items);
 
       if (selectedSteps.length > 0) {
         for (const step of selectedSteps) {
           await this.session.createPlan(step, task);
         }
-        console.log(`\x1b[32m? ?? th?m ${selectedSteps.length} c?ng vi?c v?o Memory (g? /plans ?? xem).\x1b[0m`);
+        console.log(`\x1b[32m✓ Đã thêm ${selectedSteps.length} công việc vào Memory (gõ /plans để xem).\x1b[0m`);
 
-        this.rl.question(`\n\x1b[36mB?n c? mu?n AI b?t tay l?m c?ng vi?c ??U TI?N ngay b?y gi? kh?ng? [y/N]: \x1b[0m`, async (answer) => {
+        this.rl.question(`\n\x1b[36mBạn có muốn AI bắt tay làm công việc ĐẦU TIÊN ngay bây giờ không? [y/N]: \x1b[0m`, async (answer) => {
           if (answer.toLowerCase() === 'y') {
-            await this.chat(`H?y b?t ??u th?c hi?n b??c ??u ti?n: ${selectedSteps[0]}`);
+            await this.chat(`Hãy bắt đầu thực hiện bước đầu tiên: ${selectedSteps[0]}`);
           }
         });
       } else {
-        console.log(`\n\x1b[2m?? hu? k? ho?ch.\x1b[0m`);
+        console.log(`\n\x1b[2mĐã huỷ kế hoạch.\x1b[0m`);
       }
     } catch (e) {
       if (this.spinner) this.spinner.stop();
-      console.log(`\x1b[31mL?i: ${e.message}\x1b[0m`);
+      console.log(`\x1b[31mLỗi: ${e.message}\x1b[0m`);
     }
   }
 
 
   async runAutoHealing(task) {
-    console.log(`\n\x1b[35m[ TDD AUTO-HEALING MODE ]\x1b[0m K?ch ho?t v?ng l?p ch?a l?nh l?i t? ??ng.`);
+    console.log(`\n\x1b[35m[ TDD AUTO-HEALING MODE ]\x1b[0m Kích hoạt vòng lặp tự sửa lỗi.`);
 
-    // T?ng gi?i h?n loop l?n 15 ?? cho ph?p AI t? s?a l?i nhi?u l?n
+    // Tăng giới hạn loop lên 15 để cho phép AI tự sửa lỗi nhiều lần.
     const originalRequestAssistantTurn = this.requestAssistantTurn;
 
-    // Ch?n prompt ??c bi?t ?p AI ph?i verify
+    // Chèn prompt đặc biệt ép AI phải verify.
     const verifyCommands = await this.inferVerificationCommands(task);
     const autoPrompt = `TASK: ${task}
 
@@ -1195,7 +1195,7 @@ CRITICAL DEBUG/AGENT RULES:
   }
 
   async runAutoCommit(context = '') {
-    console.log(`\n${colors.cyan}? T?o commit message t? ??ng...${colors.reset}`);
+    console.log(`\n${colors.cyan}✓ Tạo commit message tự động...${colors.reset}`);
     const diffResult = await this.tools.execute('Bash', { command: 'git diff --cached' }, { cwd: this.projectPath });
 
     let diff = diffResult.stdout;
@@ -1207,14 +1207,14 @@ CRITICAL DEBUG/AGENT RULES:
     }
 
     if (!diff || diff.trim() === '') {
-      console.log(`${colors.yellow}? Kh?ng c? thay ??i n?o ?? commit.${colors.reset}`);
+      console.log(`${colors.yellow}Không có thay đổi nào để commit.${colors.reset}`);
       if (this.running && !this.readlineClosed) this.rl.prompt();
       return;
     }
 
-    const prompt = `B?n l? chuy?n gia Git. H?y vi?t M?T commit message duy nh?t (kh?ng gi?i th?ch th?m) cho nh?ng thay ??i sau ??y. D?ng format chu?n Conventional Commits (feat/fix/chore/refactor: ...). ${context ? `\nNg? c?nh: ${context}` : ''}\n\nDiff:\n${diff.slice(0, 6000)}`;
+    const prompt = `Bạn là chuyên gia Git. Hãy viết MỘT commit message duy nhất (không giải thích thêm) cho những thay đổi sau đây. Dùng format chuẩn Conventional Commits (feat/fix/chore/refactor: ...). ${context ? `\nNgữ cảnh: ${context}` : ''}\n\nDiff:\n${diff.slice(0, 6000)}`;
 
-    this.spinner = new Spinner('?ang sinh commit message...');
+    this.spinner = new Spinner('Đang sinh commit message...');
     this.spinner.start();
     try {
       const response = await this.ai.sendRequest([{ role: 'user', content: prompt }], {
@@ -1222,19 +1222,19 @@ CRITICAL DEBUG/AGENT RULES:
       });
       if (this.spinner) this.spinner.stop();
 
-      const message = response.choices?.[0]?.message?.content?.trim().replace(/^["']|["']$/g, '') || 'C?p nh?t m? ngu?n';
+      const message = response.choices?.[0]?.message?.content?.trim().replace(/^["']|["']$/g, '') || 'Cập nhật mã nguồn';
 
-      console.log(`\n${colors.green}?? xu?t commit message:${colors.reset}`);
+      console.log(`\n${colors.green}Đề xuất commit message:${colors.reset}`);
       console.log(`${colors.bright}${message}${colors.reset}\n`);
 
-      this.rl.question(`${colors.yellow}B?n c? mu?n commit v?i message n?y kh?ng? [y/N/e (t? s?a)]: ${colors.reset}`, async (ans) => {
+      this.rl.question(`${colors.yellow}Bạn có muốn commit với message này không? [y/N/e (tự sửa)]: ${colors.reset}`, async (ans) => {
         const choice = ans.trim().toLowerCase();
         if (choice === 'y') {
           if (!isStaged) await this.tools.execute('Bash', { command: 'git add .' }, { cwd: this.projectPath });
           const res = await this.tools.execute('Bash', { command: `git commit -m "${message.replace(/"/g, '\\"')}"` }, { cwd: this.projectPath });
           console.log(res.stdout);
         } else if (choice === 'e') {
-          this.rl.question(`${colors.cyan}Nh?p commit message: ${colors.reset}`, async (customMsg) => {
+          this.rl.question(`${colors.cyan}Nhập commit message: ${colors.reset}`, async (customMsg) => {
             if (customMsg.trim()) {
               if (!isStaged) await this.tools.execute('Bash', { command: 'git add .' }, { cwd: this.projectPath });
               const res = await this.tools.execute('Bash', { command: `git commit -m "${customMsg.replace(/"/g, '\\"')}"` }, { cwd: this.projectPath });
@@ -1244,28 +1244,28 @@ CRITICAL DEBUG/AGENT RULES:
           });
           return;
         } else {
-          console.log(`${colors.dim}?? hu? commit.${colors.reset}`);
+          console.log(`${colors.dim}Đã huỷ commit.${colors.reset}`);
         }
         if (this.running && !this.readlineClosed) this.rl.prompt();
       });
     } catch (e) {
       if (this.spinner) this.spinner.stop();
-      console.log(`${colors.red}L?i: ${e.message}${colors.reset}`);
+      console.log(`${colors.red}Lỗi: ${e.message}${colors.reset}`);
       if (this.running && !this.readlineClosed) this.rl.prompt();
     }
   }
 
   async runCodeReview(context = '') {
-    console.log(`\n${colors.cyan}? AI ?ang soi code c?a b?n...${colors.reset}`);
+    console.log(`\n${colors.cyan}AI đang soi code của bạn...${colors.reset}`);
     const diffResult = await this.tools.execute('Bash', { command: 'git diff HEAD' }, { cwd: this.projectPath });
     const diff = diffResult.stdout;
 
     if (!diff || diff.trim() === '') {
-      console.log(`${colors.yellow}? Kh?ng c? thay ??i n?o ?? review.${colors.reset}`);
+      console.log(`${colors.yellow}Không có thay đổi nào để review.${colors.reset}`);
       return;
     }
 
-    const prompt = `H?y ??ng vai m?t Senior Developer kh? t?nh. Review nhanh c?c thay ??i sau ??y. Ch? ra bug (n?u c?), v?n ?? b?o m?t, ho?c nh?ng ch? c?n clean code. Kh?ng c?n khen ng?i, h?y n?i th?ng v?o v?n ??. Tr?nh b?y d?ng Markdown ??p m?t. \n\n${context ? `Ng? c?nh: ${context}\n` : ''}Diff:\n${diff.slice(0, 8000)}`;
+    const prompt = `Hãy đóng vai một Senior Developer khó tính. Review nhanh các thay đổi sau đây. Chỉ ra bug nếu có, vấn đề bảo mật, hoặc những chỗ cần clean code. Không cần khen ngợi, hãy nói thẳng vào vấn đề. Trình bày dạng Markdown đẹp mắt.\n\n${context ? `Ngữ cảnh: ${context}\n` : ''}Diff:\n${diff.slice(0, 8000)}`;
 
     await this.chat(prompt);
   }
@@ -1286,39 +1286,39 @@ CRITICAL DEBUG/AGENT RULES:
     };
 
     const body = [
-      `${c.bright}${c.cyan}${this.useUnicodeUi ? '? ' : ''}WINTER COMMANDS${c.reset}`,
+      `${c.bright}${c.cyan}${this.useUnicodeUi ? '❄ ' : ''}WINTER COMMANDS${c.reset}`,
       `${c.dim}@file context | @Agent task | !cmd bash | /theme:toggle${c.reset}`,
       '',
-      `${c.bright}D? ?n & Phi?n l?m vi?c${c.reset}`,
-      row(`${c.yellow}/pwd${c.reset}     Th? m?c hi?n t?i`, `${c.yellow}/session${c.reset}  Phi?n l?m vi?c`),
-      row(`${c.yellow}/cd${c.reset}      ??i th? m?c`, `${c.yellow}/clear${c.reset}    X?a m?n h?nh`),
-      row(`${c.yellow}/config${c.reset}  Xem c?u h?nh`, `${c.yellow}/exit${c.reset}     Tho?t`),
+      `${c.bright}Dự án & Phiên làm việc${c.reset}`,
+      row(`${c.yellow}/pwd${c.reset}     Thư mục hiện tại`, `${c.yellow}/session${c.reset}  Phiên làm việc`),
+      row(`${c.yellow}/cd${c.reset}      Đổi thư mục`, `${c.yellow}/clear${c.reset}    Xóa màn hình`),
+      row(`${c.yellow}/config${c.reset}  Xem cấu hình`, `${c.yellow}/exit${c.reset}     Thoát`),
       '',
-      `${c.bright}AI & C?ng c?${c.reset}`,
-      row(`${c.yellow}/auto${c.reset}    TDD t? s?a l?i`, `${c.yellow}/debug${c.reset}   Auto debug l?i`),
-      row(`${c.yellow}/doctor${c.reset}  Ki?m tra tool-call`, `${c.yellow}/agent${c.reset}   Ch?y sub-agent`),
-      row(`${c.yellow}/swe${c.reset}     SWE workflow`, `${c.yellow}/plan${c.reset}    L?p k? ho?ch`),
-      row(`${c.yellow}/read${c.reset}    ??c file`, `${c.yellow}/write${c.reset}   Ghi file`),
-      row(`${c.yellow}/bash${c.reset}    Ch?y l?nh terminal`, `${c.yellow}/grep${c.reset}    T?m trong file`),
-      row(`${c.yellow}/glob${c.reset}    T?m file theo pattern`, `${c.yellow}/image${c.reset}   ?nh/file/clipboard`),
-      row(`${c.yellow}/paste${c.reset}   D?n text/?nh clipboard`, `${c.yellow}/composer${c.reset}  Multi-file edit`),
-      row(`${c.yellow}/complete${c.reset} G?i ? code`, `${c.yellow}/search${c.reset}   T?m ki?m code`),
-      row(`${c.yellow}/browse${c.reset}   M? URL trong tr?nh duy?t`, `${c.yellow}/page-agent${c.reset} GUI Agent resources`),
-      row(`${c.yellow}/ensemble${c.reset} Ch?y nhi?u AI`, `${c.yellow}/vote${c.reset}     B?nh ch?n hay nh?t`),
-      row(`${c.yellow}/orchestrate${c.reset} Pipeline ?a model`, `${c.yellow}/undo${c.reset}     Undo backup`),
+      `${c.bright}AI & Công cụ${c.reset}`,
+      row(`${c.yellow}/auto${c.reset}    TDD tự sửa lỗi`, `${c.yellow}/debug${c.reset}   Auto debug lỗi`),
+      row(`${c.yellow}/doctor${c.reset}  Kiểm tra tool-call`, `${c.yellow}/agent${c.reset}   Chạy sub-agent`),
+      row(`${c.yellow}/swe${c.reset}     SWE workflow`, `${c.yellow}/plan${c.reset}    Lập kế hoạch`),
+      row(`${c.yellow}/read${c.reset}    Đọc file`, `${c.yellow}/write${c.reset}   Ghi file`),
+      row(`${c.yellow}/bash${c.reset}    Chạy lệnh terminal`, `${c.yellow}/grep${c.reset}    Tìm trong file`),
+      row(`${c.yellow}/glob${c.reset}    Tìm file theo pattern`, `${c.yellow}/image${c.reset}   Ảnh/file/clipboard`),
+      row(`${c.yellow}/paste${c.reset}   Dán text/ảnh clipboard`, `${c.yellow}/composer${c.reset}  Multi-file edit`),
+      row(`${c.yellow}/complete${c.reset} Gợi ý code`, `${c.yellow}/search${c.reset}   Tìm kiếm code`),
+      row(`${c.yellow}/browse${c.reset}   Mở URL trong trình duyệt`, `${c.yellow}/page-agent${c.reset} GUI Agent resources`),
+      row(`${c.yellow}/ensemble${c.reset} Chạy nhiều AI`, `${c.yellow}/vote${c.reset}     Bình chọn hay nhất`),
+      row(`${c.yellow}/orchestrate${c.reset} Pipeline đa model`, `${c.yellow}/undo${c.reset}     Undo backup`),
       row(`${c.yellow}/ecc${c.reset}      ECC resource browser`, `${c.yellow}/codex${c.reset}    Codex resources`),
       '',
       `${c.bright}Git Auto-Pilot${c.reset}`,
-      row(`${c.yellow}/commit${c.reset}  AI t? vi?t commit`, `${c.yellow}/review${c.reset}  AI review code thay ??i`),
+      row(`${c.yellow}/commit${c.reset}  AI tự viết commit`, `${c.yellow}/review${c.reset}  AI review code thay đổi`),
       '',
-      `${c.bright}C?u h?nh Model${c.reset}`,
-      row(`${c.yellow}/provider${c.reset} ??i provider AI`, `${c.yellow}/model${c.reset}    ??i model`),
-      row(`${c.yellow}/providers${c.reset} Danh s?ch provider`, `${c.yellow}/models${c.reset}   Danh s?ch model`),
-      row(`${c.yellow}/mcp${c.reset}      MCP server mgmt`, `${c.yellow}/permissions${c.reset} Quy?n/allowlist`),
+      `${c.bright}Cấu hình Model${c.reset}`,
+      row(`${c.yellow}/provider${c.reset} Đổi provider AI`, `${c.yellow}/model${c.reset}    Đổi model`),
+      row(`${c.yellow}/providers${c.reset} Danh sách provider`, `${c.yellow}/models${c.reset}   Danh sách model`),
+      row(`${c.yellow}/mcp${c.reset}      MCP server mgmt`, `${c.yellow}/permissions${c.reset} Quyền/allowlist`),
       '',
-      `${c.bright}B? nh? & K? n?ng${c.reset}`,
-      row(`${c.yellow}/remember${c.reset} L?u v?o b? nh?`, `${c.yellow}/memories${c.reset} Xem b? nh?`),
-      row(`${c.yellow}/skills${c.reset}  Danh s?ch k? n?ng`, `${c.yellow}/designs${c.reset}  H? th?ng thi?t k?`),
+      `${c.bright}Bộ nhớ & Kỹ năng${c.reset}`,
+      row(`${c.yellow}/remember${c.reset} Lưu vào bộ nhớ`, `${c.yellow}/memories${c.reset} Xem bộ nhớ`),
+      row(`${c.yellow}/skills${c.reset}  Danh sách kỹ năng`, `${c.yellow}/designs${c.reset}  Hệ thống thiết kế`),
     ];
 
     console.log(`
@@ -1329,14 +1329,14 @@ ${renderBox({
       titleColor: c.cyan,
       body,
     })}
-${c.dim}G? tin nh?n tr?c ti?p ?? chat ? ESC ?? h?y ? Prompt t? x?p h?ng ch?${c.reset}
+${c.dim}Gửi tin nhắn trực tiếp để chat, ESC để hủy${c.reset}
 `);
   }
 
   showHelp() {
     console.log(`
-${colors.cyan}? WINTER COMMANDS${colors.reset}
-${colors.dim}${''.padEnd(50, '?')}${colors.reset}
+${colors.cyan}${this.useUnicodeUi ? '❄ ' : ''}WINTER COMMANDS${colors.reset}
+${colors.dim}${''.padEnd(50, this.useUnicodeUi ? '─' : '-')}${colors.reset}
 
 ${colors.white}Project:${colors.reset}
   /project, /pwd    Show current project
@@ -1417,7 +1417,7 @@ ${colors.reset}
       }
       console.log(`${colors.cyan}Design Systems:${colors.reset}`);
       filtered.forEach(e => {
-        const icon = e.isDirectory ? '??' : '??';
+        const icon = e.isDirectory ? '[dir]' : '[file]';
         console.log(`  ${icon} ${e.name}`);
       });
     } catch (error) {
@@ -1437,7 +1437,7 @@ ${colors.reset}
           const entries = await this.listPathEntries(section.path, 50);
           if (entries.length > 0) {
             console.log(`${colors.cyan}${section.label}:${colors.reset}`);
-            entries.forEach(e => console.log(`  ${e.isDirectory ? '??' : '??'} ${e.name}`));
+            entries.forEach(e => console.log(`  ${e.isDirectory ? '[dir]' : '[file]'} ${e.name}`));
           }
         } catch { }
       }
@@ -1451,8 +1451,8 @@ ${colors.reset}
       const providers = this.ai.listProviders();
       console.log(`${colors.cyan}Configured Models:${colors.reset}`);
       providers.forEach(p => {
-        const active = p.name === this.ai.getActiveProvider() ? ` ${colors.green}? active${colors.reset}` : '';
-        const status = p.ready ? `${colors.green}?${colors.reset}` : `${colors.red}?${colors.reset}`;
+        const active = p.name === this.ai.getActiveProvider() ? ` ${colors.green}< active${colors.reset}` : '';
+        const status = p.ready ? `${colors.green}ok${colors.reset}` : `${colors.red}off${colors.reset}`;
         console.log(`  ${status} ${colors.bright}${p.name}${colors.reset}: ${p.model}${active}`);
       });
 
@@ -1506,7 +1506,7 @@ ${colors.reset}
   }
 
   shouldUseCompactPrompt() {
-    return isSmallModel(this.getActiveModelTier());
+    return false;
   }
 
   selectExecutionProfile(messages = [], options = {}) {
@@ -1573,9 +1573,9 @@ ${colors.reset}
     const text = this.getLatestUserText(messages).toLowerCase();
     if (!text.trim()) return false;
 
-    const actionPattern = /\b(fix|repair|bug|debug|implement|create|write|edit|modify|update|delete|remove|refactor|run|test|build|commit|push|publish|install|check|inspect|read|scan|grep|search|change|apply|patch|sua|lam|tao|ghi|doc|xoa|chay|kiem tra|cai|them|doi|review|tim)\b/i;
-    const targetPattern = /\b(file|repo|project|code|src|test|build|git|npm|node|folder|directory|cli|tool|provider|model|config|readme|package\.json|du an|thu muc|tap tin|loi|chuc nang)\b|[A-Za-z]:[\\/]|\.js\b|\.ts\b|\.tsx\b|\.json\b|\.md\b/i;
-    const pureQuestionPattern = /^(what|why|how|when|where|is|are|can|could|should|would|tai sao|vi sao|la gi|co nen|co phai)\b/i;
+    const actionPattern = /\b(fix|repair|bug|debug|implement|create|write|edit|modify|update|delete|remove|refactor|run|test|build|commit|push|publish|install|check|inspect|read|scan|grep|search|change|apply|patch|sua|lam|tao|ghi|doc|xoa|chay|kiem tra|cai|them|doi|review|tim|sửa|làm|tạo|đọc|xóa|xoá|chạy|kiểm tra|cài|thêm|đổi|tìm)\b/i;
+    const targetPattern = /\b(file|repo|project|code|src|test|build|git|npm|node|folder|directory|cli|tool|provider|model|config|readme|package\.json|du an|thu muc|tap tin|loi|chuc nang|dự án|thư mục|tập tin|lỗi|chức năng)\b|[A-Za-z]:[\\/]|\.js\b|\.ts\b|\.tsx\b|\.json\b|\.md\b/i;
+    const pureQuestionPattern = /^(what|why|how|when|where|is|are|can|could|should|would|tai sao|vi sao|la gi|co nen|co phai|tại sao|vì sao|là gì|có nên|có phải)\b/i;
 
     if (pureQuestionPattern.test(text) && !actionPattern.test(text)) return false;
     return actionPattern.test(text) && targetPattern.test(text);
@@ -1585,17 +1585,17 @@ ${colors.reset}
     if (!usedMutatingTools) return false;
     const text = String(originalMessage || '').toLowerCase();
     if (!text.trim()) return false;
-    if (/\b(skip tests?|no verify|don't verify|khong test|khong verify|bo qua test)\b/i.test(text)) {
+    if (/\b(skip tests?|no verify|don't verify|khong test|khong verify|bo qua test|không test|không verify|bỏ qua test)\b/i.test(text)) {
       return false;
     }
-    return /\b(fix|bug|error|test|build|lint|typecheck|compile|refactor|implement|edit|write|change|patch|debug|sua|loi|kiem tra|bien dich|trien khai|lam|doi|viet)\b/i.test(text);
+    return /\b(fix|bug|error|test|build|lint|typecheck|compile|refactor|implement|edit|write|change|patch|debug|sua|loi|kiem tra|bien dich|trien khai|lam|doi|viet|sửa|lỗi|kiểm tra|biên dịch|triển khai|làm|đổi|viết)\b/i.test(text);
   }
 
   responseNeedsToolEvidence(content = '') {
     const text = String(content || '').toLowerCase();
     if (!text.trim()) return false;
 
-    const clarification = /(?:c?n th?m|cho m?nh|vui l?ng|please provide|which file|what file|need more|clarify|kh?ng r?|ch?a r?|file n?o|th? m?c n?o)/i;
+    const clarification = /(?:cần thêm|cho mình|vui lòng|please provide|which file|what file|need more|clarify|không rõ|chưa rõ|file nào|thư mục nào|c?n th?m|cho m?nh|vui l?ng|kh?ng r?|ch?a r?|file n?o|th? m?c n?o)/i;
     if (clarification.test(text)) return false;
     return true;
   }
@@ -1806,7 +1806,7 @@ ${colors.reset}
       if (key.name === 'escape' && this.isProcessing) {
         this.isCancelled = true;
         if (this.spinner) this.spinner.stop();
-        console.log(`\n\x1b[31m[ ?? nh?n l?nh H?Y... AI s? k?t th?c ? thao t?c ti?p theo ]\x1b[0m`);
+        console.log(`\n\x1b[31m[ Đã nhận lệnh HỦY... AI sẽ kết thúc ở thao tác tiếp theo ]\x1b[0m`);
         return;
       }
 
@@ -1842,7 +1842,7 @@ ${colors.reset}
         })
         .catch((error) => {
           this.closeInputBox();
-          console.log(`\n${colors.red}? Paste image error: ${error.message}${colors.reset}\n`);
+          console.log(`\n${colors.red}✖ Paste image error: ${error.message}${colors.reset}\n`);
           if (this.running && !this.readlineClosed) this.showInputPrompt();
         });
       return true;
@@ -1956,13 +1956,13 @@ ${colors.reset}
 
     if (matches.length > maxDisplay) {
       readline.clearLine(process.stdout, 1);
-      process.stdout.write(`  ${colors.dim}... v? ${matches.length - maxDisplay} l?nh kh?c (g? ti?p ?? l?c)${colors.reset}\n`);
+      process.stdout.write(`  ${colors.dim}... và ${matches.length - maxDisplay} lệnh khác (gõ tiếp để lọc)${colors.reset}\n`);
     }
 
     readline.clearLine(process.stdout, 1);
-    process.stdout.write(`${colors.dim}?/? ch?n ? Enter/Tab d?ng ? Esc ??ng${colors.reset}\n`);
+    process.stdout.write(`${colors.dim}↑/↓ chọn · Enter/Tab dùng · Esc đóng${colors.reset}\n`);
 
-    // X?a c?c d?ng th?a n?u s? l??ng d?ng m?i ?t h?n s? l??ng d?ng c?
+    // Xóa các dòng thừa nếu số lượng dòng mới ít hơn số lượng dòng cũ.
     const currentLines = Math.min(matches.length, maxDisplay) + 3 + (matches.length > maxDisplay ? 1 : 0);
     if (this.slashMenu.printedLines > currentLines) {
       for (let i = 0; i < this.slashMenu.printedLines - currentLines; i++) {
@@ -2174,7 +2174,7 @@ ${colors.reset}
       body: [...body, '', `${colors.dim}${footer}${colors.reset}`],
     })}\n`);
     return;
-    console.log(`${colors.dim}${'?'.repeat(50)}${colors.reset}`);
+    console.log(`${colors.dim}${(this.useUnicodeUi ? '─' : '-').repeat(50)}${colors.reset}`);
     console.log(`${colors.dim}${this.formatAnswerFooter(startedAt, usage)}${colors.reset}\n`);
   }
 
@@ -2223,16 +2223,16 @@ ${colors.reset}
   }
 
   async promptToolPermission(commandText) {
-    const side = this.useUnicodeUi ? '?' : '|';
-    const warn = this.useUnicodeUi ? '?' : '!';
-    process.stdout.write(`${colors.magenta}${side}${colors.reset}   ${colors.yellow}${warn}  AI mu?n ch?y: ${colors.bright}${commandText}${colors.reset}\n`);
-    process.stdout.write(`${colors.magenta}${side}${colors.reset}   ${colors.cyan}1.${colors.reset} Cho ph?p\n`);
-    process.stdout.write(`${colors.magenta}${side}${colors.reset}   ${colors.cyan}2.${colors.reset} Cho ph?p trong phi?n\n`);
-    process.stdout.write(`${colors.magenta}${side}${colors.reset}   ${colors.cyan}3.${colors.reset} Kh?ng cho ph?p\n`);
+    const side = this.useUnicodeUi ? '│' : '|';
+    const warn = this.useUnicodeUi ? '!' : '!';
+    process.stdout.write(`${colors.magenta}${side}${colors.reset}   ${colors.yellow}${warn}  AI muốn chạy: ${colors.bright}${commandText}${colors.reset}\n`);
+    process.stdout.write(`${colors.magenta}${side}${colors.reset}   ${colors.cyan}1.${colors.reset} Cho phép\n`);
+    process.stdout.write(`${colors.magenta}${side}${colors.reset}   ${colors.cyan}2.${colors.reset} Cho phép trong phiên\n`);
+    process.stdout.write(`${colors.magenta}${side}${colors.reset}   ${colors.cyan}3.${colors.reset} Không cho phép\n`);
 
     while (true) {
       const answer = await new Promise(resolve => {
-        this.rl.question(`${colors.magenta}${side}${colors.reset}   ${colors.yellow}Ch?n [1/2/3]: ${colors.reset}`, resolve);
+        this.rl.question(`${colors.magenta}${side}${colors.reset}   ${colors.yellow}Chọn [1/2/3]: ${colors.reset}`, resolve);
       });
 
       const choice = String(answer || '').trim().toLowerCase();
@@ -2246,7 +2246,7 @@ ${colors.reset}
         return false;
       }
 
-      process.stdout.write(`${colors.magenta}${side}${colors.reset}   ${colors.dim}Vui l?ng ch?n 1, 2 ho?c 3.${colors.reset}\n`);
+      process.stdout.write(`${colors.magenta}${side}${colors.reset}   ${colors.dim}Vui lòng chọn 1, 2 hoặc 3.${colors.reset}\n`);
     }
   }
 
@@ -2297,7 +2297,7 @@ ${colors.reset}
     await this.session.replaceMemory('[Conversation Summary]', compressed.summary, 'summary');
 
     if (verbose) {
-      console.log(`${colors.green}? Compressed ${compressed.omittedCount} old message(s) into session summary.${colors.reset}`);
+      console.log(`${colors.green}✓ Compressed ${compressed.omittedCount} old message(s) into session summary.${colors.reset}`);
     }
     return compressed;
   }
@@ -2371,7 +2371,7 @@ ${colors.reset}
         this.rl.question(`${colors.yellow}Apply is not automatic here. Continue? [y/N]: ${colors.reset}`, resolve);
       });
       console.log(/^y(es)?$/i.test(String(answer || '').trim())
-        ? `${colors.green}? Confirmed${colors.reset}`
+        ? `${colors.green}✓ Confirmed${colors.reset}`
         : `${colors.dim}Cancelled${colors.reset}`);
     }
   }
@@ -2380,7 +2380,7 @@ ${colors.reset}
     const action = args[0];
     if (action === 'stop') {
       this.stopWatchers();
-      console.log(`${colors.green}? Watcher stopped${colors.reset}`);
+      console.log(`${colors.green}✓ Watcher stopped${colors.reset}`);
       return;
     }
 
@@ -2405,7 +2405,7 @@ ${colors.reset}
       run(name);
     });
     this.watchers.push(watcher);
-    console.log(`${colors.green}? Watching ${this.projectPath}${colors.reset}`);
+    console.log(`${colors.green}✓ Watching ${this.projectPath}${colors.reset}`);
     console.log(`${colors.dim}Command: ${command}. Use /watch stop to stop.${colors.reset}`);
   }
 
@@ -2438,7 +2438,7 @@ ${colors.reset}
       const promptHistory = this.getCompressedPromptHistory({
         limit: 20,
         keepRecent: 14,
-        maxTotalChars: this.shouldUseCompactPrompt() ? 5000 : 12000,
+        maxTotalChars: 16000,
       });
       if (promptHistory.summary) {
         messages.push({ role: 'system', content: `Compressed prior conversation:\n${promptHistory.summary}` });
@@ -2468,7 +2468,7 @@ ${colors.reset}
       await this.session.addToHistory({ role: 'user', content: message });
       await this.session.addToHistory({ role: 'assistant', content: finalContent });
 
-      // T? ??ng verify: n?u AI ?? d?ng tools (s?a code), ch?y test/build
+      // Tự động verify: nếu AI đã dùng tools (sửa code), chạy test/build.
       if (finalContent && this.shouldAutoVerifyAfterTools(message, usedMutatingTools)) {
         const sessionContext = this.session?.getContext?.() || {};
         const profile = String(sessionContext.workflowProfile || 'general');
@@ -2479,7 +2479,7 @@ ${colors.reset}
       }
 
     } catch (error) {
-      console.log(`\n${colors.red}? Error: ${error.message}${colors.reset}\n`);
+      console.log(`\n${colors.red}✖ Error: ${error.message}${colors.reset}\n`);
     }
   }
 
@@ -2541,7 +2541,7 @@ ${colors.reset}
   }
 
   /**
-   * Ch?y verification commands (test, build) v? tr? v? k?t qu?
+   * Chạy verification commands (test, build) và trả về kết quả.
    */
   async inferVerificationCommands(task = '') {
     const fs = await import('fs/promises');
@@ -2551,7 +2551,7 @@ ${colors.reset}
       const pkg = JSON.parse(await fs.readFile(packagePath, 'utf8'));
       const scripts = pkg.scripts || {};
       if (scripts.test) candidates.push('npm test');
-      if (scripts.build && /\b(build|compile|type|typescript|tsc|frontend|ui|design|next|vite|react|debug|fix|bug|error|l?i)\b/i.test(task)) {
+      if (scripts.build && /\b(build|compile|type|typescript|tsc|frontend|ui|design|next|vite|react|debug|fix|bug|error|loi|lỗi)\b/i.test(task)) {
         candidates.push('npm run build');
       }
       if (scripts.lint && /\b(lint|style|eslint|quality|review)\b/i.test(task)) candidates.push('npm run lint');
@@ -2593,10 +2593,10 @@ ${colors.reset}
   }
 
   /**
-   * V?ng l?p t? ??ng verify + s?a l?i:
-   * - Ch?y test/build
-   * - N?u fail, g?i l?i cho AI fix
-   * - L?p ??n khi pass h?t ho?c h?t s? l?n th?
+   * Vòng lặp tự động verify + sửa lỗi:
+   * - Chạy test/build
+   * - Nếu fail, gửi lại cho AI fix
+   * - Lặp đến khi pass hết hoặc hết số lần thử
    */
   async verifyAndHeal(messages, tools, maxAttempts = 5) {
     const verifCommands = await this.inferVerificationCommands(this.getLatestUserText(messages));
@@ -2607,7 +2607,7 @@ ${colors.reset}
       const result = await this.runVerification(verifCommands);
 
       if (result.passed) {
-        console.log(`\n${colors.green}? All verifications passed!${colors.reset}\n`);
+        console.log(`\n${colors.green}✓ All verifications passed!${colors.reset}\n`);
         return;
       }
 
@@ -2617,7 +2617,7 @@ ${colors.reset}
         .map(r => `Command: ${r.cmd}\n${r.output}`)
         .join('\n\n---\n\n');
 
-      console.log(`\n${colors.yellow}? Verification failed. Sending errors back to AI for fix...${colors.reset}\n`);
+      console.log(`\n${colors.yellow}Verification failed. Sending errors back to AI for fix...${colors.reset}\n`);
 
       // Push error output as user message for AI to fix
       const fixPrompt = `VERIFICATION FAILED (attempt ${attempt}/${maxAttempts}):
@@ -2635,12 +2635,12 @@ Do NOT stop until all errors are resolved.`;
       const { usedTools: fixUsedTools } = await this.runConversation(messages, 'Fixing', tools);
 
       if (!fixUsedTools) {
-        console.log(`\n${colors.red}? AI did not attempt to fix the errors. Stopping.${colors.reset}\n`);
+        console.log(`\n${colors.red}AI did not attempt to fix the errors. Stopping.${colors.reset}\n`);
         break;
       }
     }
 
-    console.log(`\n${colors.red}? Max verification attempts (${maxAttempts}) reached. Some issues may remain.${colors.reset}\n`);
+    console.log(`\n${colors.red}Max verification attempts (${maxAttempts}) reached. Some issues may remain.${colors.reset}\n`);
   }
 
   shouldUseTools(message = '', imageAttachments = []) {
@@ -2676,9 +2676,9 @@ Do NOT stop until all errors are resolved.`;
     ];
 
     const promptHistory = this.getCompressedPromptHistory({
-      limit: this.shouldUseCompactPrompt() ? 14 : 30,
-      keepRecent: this.shouldUseCompactPrompt() ? 8 : 14,
-      maxTotalChars: this.shouldUseCompactPrompt() ? 5000 : 12000,
+      limit: 40,
+      keepRecent: 16,
+      maxTotalChars: 16000,
     });
     if (promptHistory.summary) {
       messages.push({ role: 'system', content: `Compressed prior conversation:\n${promptHistory.summary}` });
@@ -2770,14 +2770,14 @@ Do NOT stop until all errors are resolved.`;
     const passed = result.usedTools && Boolean(readEvent || /readme\.md/i.test(result.finalContent || ''));
 
     if (passed) {
-      console.log(`${colors.green}? Tool calling works for ${provider}/${model}.${colors.reset}`);
+      console.log(`${colors.green}✓ Tool calling works for ${provider}/${model}.${colors.reset}`);
       if (readEvent) {
         console.log(`${colors.dim}  Last Read result: ${readEvent.result?.path || probePath}${colors.reset}`);
       }
       return { success: true, provider, model, usedTools: result.usedTools, beforeEvents };
     }
 
-    console.log(`${colors.red}? Tool calling did not execute for ${provider}/${model}.${colors.reset}`);
+    console.log(`${colors.red}✖ Tool calling did not execute for ${provider}/${model}.${colors.reset}`);
     console.log(`${colors.yellow}  Try a stronger model or use a provider that supports OpenAI-compatible tools/fallback text output.${colors.reset}`);
     return { success: false, provider, model, usedTools: result.usedTools, beforeEvents };
   }
@@ -2864,11 +2864,17 @@ Do NOT stop until all errors are resolved.`;
       context.push(requiredLocalResources);
     }
 
+    const shouldIncludeResources = /\b(resource|resources|skill|skills|plugin|plugins|claude|codex|agent|agents|design|ui|figma|brand|mcp)\b/i.test(String(task || ''));
+    const localResources = shouldIncludeResources ? await this.getLocalResourceContext() : '';
+    if (localResources) {
+      context.push(localResources);
+    }
+
     const projectInstructionFiles = await this.readProjectInstructionFiles();
 
     for (const file of projectInstructionFiles) {
       try {
-        const preview = this.compactText(file.content, this.shouldUseCompactPrompt() ? 450 : 900, 'project instruction');
+        const preview = this.compactText(file.content, 1200, 'project instruction');
         context.push(`[${file.relativePath}]\n${preview}`);
       } catch { }
     }
@@ -2878,19 +2884,22 @@ Do NOT stop until all errors are resolved.`;
       const stat = await fs.stat(packageJsonPath);
       if (stat.isFile()) {
         const content = await fs.readFile(packageJsonPath, 'utf-8');
-        context.push(`[package.json]\n${this.compactText(content, this.shouldUseCompactPrompt() ? 650 : 1200, 'package.json')}`);
+        context.push(`[package.json]\n${this.compactText(content, 1600, 'package.json')}`);
       }
     } catch { }
-
-    const shouldIncludeResources = /\b(resource|resources|skill|skills|plugin|plugins|claude|codex|agent|agents|design|ui|figma|brand|mcp)\b/i.test(String(task || ''));
-    const localResources = shouldIncludeResources ? await this.getLocalResourceContext() : '';
-    if (localResources) {
-      context.push(localResources);
-    }
 
     const codebaseContext = await this.buildCodebaseContext(task);
     if (codebaseContext) {
       context.push(codebaseContext);
+    }
+
+    const graphContext = await this.codebaseSearcher?.buildGraphContext?.(task, {
+      maxNodes: 24,
+      maxCodeBlocks: 8,
+      maxCodeBlockSize: 1800,
+    });
+    if (graphContext) {
+      context.push(`[CodeGraph Context]\n${this.compactText(graphContext, 5200, 'codegraph context')}`);
     }
 
     // Git Context
@@ -2902,20 +2911,20 @@ Do NOT stop until all errors are resolved.`;
 
         const gitSummary = execSync('git diff --stat --summary', { cwd: this.projectPath, encoding: 'utf8', stdio: 'pipe', maxBuffer: 1024 * 50 }).trim();
         if (gitSummary) {
-          context.push(`[Git Summary]\n${this.compactText(gitSummary, this.shouldUseCompactPrompt() ? 650 : 1200, 'git summary')}`);
+          context.push(`[Git Summary]\n${this.compactText(gitSummary, 1200, 'git summary')}`);
         }
 
         // Get brief git diff for context
         const gitDiff = execSync('git diff', { cwd: this.projectPath, encoding: 'utf8', stdio: 'pipe', maxBuffer: 1024 * 50 }).trim().split('\n').slice(0, 30).join('\n');
         if (gitDiff) {
-          context.push(`[Git Diff]\n${this.compactText(gitDiff, this.shouldUseCompactPrompt() ? 900 : 1800, 'git diff')}`);
+          context.push(`[Git Diff]\n${this.compactText(gitDiff, 2200, 'git diff')}`);
         }
       }
     } catch (e) {
       // Not a git repo or git not installed
     }
 
-    return this.compactText(context.join('\n\n') || 'No project context found.', this.shouldUseCompactPrompt() ? 4200 : 9000, 'project context');
+    return this.compactText(context.join('\n\n') || 'No project context found.', 14000, 'project context');
   }
 
   async getLocalResourceContext() {
@@ -3017,7 +3026,7 @@ Do NOT stop until all errors are resolved.`;
     this.promptBuilder.tools = this.tools;
     this.promptBuilder.sessionPermissionGrants = this.sessionPermissionGrants;
     return this.promptBuilder.buildSystemPrompt(context, {
-      projectContextBudget: this.shouldUseCompactPrompt() ? 2200 : 3200,
+      projectContextBudget: 5200,
     });
   }
 
@@ -3064,7 +3073,7 @@ Do NOT stop until all errors are resolved.`;
         }
         config.mcp.servers.forEach(server => {
           const enabled = server.enabled === false ? `${colors.red}disabled${colors.reset}` : `${colors.green}enabled${colors.reset}`;
-          console.log(`  ? ${server.name} (${enabled}) -> ${server.command}${server.args?.length ? ` ${server.args.join(' ')}` : ''}`);
+          console.log(`  - ${server.name} (${enabled}) -> ${server.command}${server.args?.length ? ` ${server.args.join(' ')}` : ''}`);
         });
         break;
       case 'add': {
@@ -3086,7 +3095,7 @@ Do NOT stop until all errors are resolved.`;
         config.mcp.servers = (config.mcp.servers || []).filter(server => server.name !== name);
         config.mcp.servers.push({ name, command, args: parsedArgs, enabled: true });
         await this.config.save(config);
-        console.log(`${colors.green}? Added MCP server: ${name}${colors.reset}`);
+        console.log(`${colors.green}✓ Added MCP server: ${name}${colors.reset}`);
         break;
       }
       case 'remove': {
@@ -3097,7 +3106,7 @@ Do NOT stop until all errors are resolved.`;
         }
         config.mcp.servers = (config.mcp.servers || []).filter(server => server.name !== name);
         await this.config.save(config);
-        console.log(`${colors.green}? Removed MCP server: ${name}${colors.reset}`);
+        console.log(`${colors.green}✓ Removed MCP server: ${name}${colors.reset}`);
         break;
       }
       case 'allow': {
@@ -3107,7 +3116,7 @@ Do NOT stop until all errors are resolved.`;
           break;
         }
         await this.config.setPermissionAllowlist({ mcpServers: [name] });
-        console.log(`${colors.green}? MCP server allowed: ${name}${colors.reset}`);
+        console.log(`${colors.green}✓ MCP server allowed: ${name}${colors.reset}`);
         break;
       }
       default:
@@ -3142,13 +3151,13 @@ Do NOT stop until all errors are resolved.`;
           break;
         }
         await this.config.setPermissionAllowlist({ [field]: [value] });
-        console.log(`${colors.green}? Allowed ${kind}: ${value}${colors.reset}`);
+        console.log(`${colors.green}✓ Allowed ${kind}: ${value}${colors.reset}`);
         break;
       }
       case 'prompt': {
         const value = String(rest[0] || '').toLowerCase();
         await this.config.setPermissionAllowlist({ promptByDefault: !(value === 'off' || value === 'false' || value === '0' || value === 'no') });
-        console.log(`${colors.green}? Updated prompt policy${colors.reset}`);
+        console.log(`${colors.green}✓ Updated prompt policy${colors.reset}`);
         break;
       }
       default:

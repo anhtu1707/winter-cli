@@ -38,6 +38,7 @@ export class AgentRuntime {
       depth,
     });
     const maxToolTurns = amplifier.maxToolTurns || 8;
+    let forceTextToolFallback = false;
 
     try {
       for (let i = 0; i < maxToolTurns; i++) {
@@ -46,6 +47,7 @@ export class AgentRuntime {
           provider: executionProfile.provider,
           model: executionProfile.model,
           enableTools: true,
+          toolPromptOnly: forceTextToolFallback,
           requireToolEvidence: requireToolEvidence && !usedTools,
         }, startedAt, totalUsage);
 
@@ -73,6 +75,7 @@ export class AgentRuntime {
               role: 'user',
               content: repl.buildToolEvidenceCorrection(messages),
             });
+            forceTextToolFallback = true;
             finalContent = '';
             continue;
           }

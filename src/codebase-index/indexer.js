@@ -8,7 +8,7 @@ import path from 'path';
 import crypto from 'crypto';
 
 const DEFAULT_IGNORE = new Set([
-  'node_modules', '.git', 'dist', 'build', '.winter', '.claude',
+  'node_modules', '.git', 'dist', 'build', '.winter', '.codegraph', '.claude',
   '.next', '.cache', 'coverage', '.nyc_output',
   '__pycache__', '.venv', 'venv', 'env', '.env',
   'VSCode-win32-x64', 'vscode-main',

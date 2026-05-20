@@ -32,6 +32,7 @@ export function classifyModelTier(modelName, provider = '') {
     /claude-3-5-sonnet/i, /claude-opus/i, /claude-4/i, /claude-sonnet-4/i,
     /gpt-4o/i, /gpt-4-turbo/i, /o1/i, /o3/i,
     /gemini-2\.5-pro/i, /gemini-2\.0-ultra/i,
+    /minimax-?m2\.5/i, /minimax.*m2\.5/i, /minimax/i,
     /deepseek-v3/i, /deepseek-r1/i,
     /llama-4/i, /llama-3-70b/i, /llama3-70b/i, /llama3\.1-70b/i, /llama3\.2-90b/i, /llama3\.3/i,
     /qwen2\.5-?72b/i, /qwen2\.5-?70b/i, /qwen-?2\.5-?72b/i,
@@ -123,7 +124,7 @@ export function classifyModelTier(modelName, provider = '') {
     if (pattern.test(name)) return MODEL_TIERS.SMALL;
   }
 
-  if (/tiny/i.test(name) || /mini/i.test(name) || /small/i.test(name) || /nano/i.test(name)) {
+  if (/\btiny\b/i.test(name) || /(?:^|[-_:/])mini(?:$|[-_:/])/i.test(name) || /\bsmall\b/i.test(name) || /\bnano\b/i.test(name)) {
     return MODEL_TIERS.TINY;
   }
 

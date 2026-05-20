@@ -542,6 +542,163 @@ test('streamRequestToProvider includes reasoning params in request body', async 
   }
 });
 
+test('sendRequestToProvider converts internal tool definitions to OpenAI tool schema', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies = [];
+
+  globalThis.fetch = async (_url, options) => {
+    bodies.push(JSON.parse(options.body));
+    return {
+      ok: true,
+      async json() {
+        return { choices: [{ message: { content: 'tool-ready' } }] };
+      },
+    };
+  };
+
+  try {
+    const ai = new AIProviderManager({
+      async load() {
+        return {
+          defaultProvider: 'custom',
+          custom: {
+            baseURL: 'http://custom.test/v1',
+            apiKey: 'not-required',
+            model: 'lm-model',
+          },
+        };
+      },
+    });
+    ai.loadAuthToken = async () => null;
+    await ai.init();
+    ai.setTools([
+      {
+        type: 'function',
+        name: 'Read',
+        description: 'Read a file',
+        parameters: {
+          type: 'object',
+          properties: { file_path: { type: 'string' } },
+          required: ['file_path'],
+        },
+      },
+    ]);
+
+    await ai.sendRequestToProvider(ai.providers.custom, [{ role: 'user', content: 'read package.json' }], {
+      enableTools: true,
+    });
+
+    assert.deepEqual(bodies[0].tools, [
+      {
+        type: 'function',
+        function: {
+          name: 'Read',
+          description: 'Read a file',
+          parameters: {
+            type: 'object',
+            properties: { file_path: { type: 'string' } },
+            required: ['file_path'],
+          },
+        },
+      },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('streamRequestToProvider converts internal tool definitions to OpenAI tool schema', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies = [];
+  const encoder = new TextEncoder();
+
+  globalThis.fetch = async (_url, options) => {
+    bodies.push(JSON.parse(options.body));
+    return {
+      ok: true,
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"ok"}}]}\n\n'));
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+          controller.close();
+        },
+      }),
+    };
+  };
+
+  try {
+    const ai = new AIProviderManager({
+      async load() {
+        return {
+          defaultProvider: 'custom',
+          custom: {
+            baseURL: 'http://custom.test/v1',
+            apiKey: 'not-required',
+            model: 'lm-model',
+          },
+        };
+      },
+    });
+    ai.loadAuthToken = async () => null;
+    await ai.init();
+    ai.setTools([{ type: 'function', name: 'Bash', description: 'Run command', parameters: { type: 'object', properties: {} } }]);
+
+    for await (const _chunk of ai.streamRequestToProvider(ai.providers.custom, [{ role: 'user', content: 'run test' }], {
+      enableTools: true,
+    })) {
+      // drain stream
+    }
+
+    assert.equal(bodies[0].tools[0].type, 'function');
+    assert.equal(bodies[0].tools[0].function.name, 'Bash');
+    assert.equal(bodies[0].tools[0].name, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('toolPromptOnly keeps tools in the prompt path without sending API tool schema', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies = [];
+
+  globalThis.fetch = async (_url, options) => {
+    bodies.push(JSON.parse(options.body));
+    return {
+      ok: true,
+      async json() {
+        return { choices: [{ message: { content: '<invoke name="Read"><parameter name="file_path">README.md</parameter></invoke>' } }] };
+      },
+    };
+  };
+
+  try {
+    const ai = new AIProviderManager({
+      async load() {
+        return {
+          defaultProvider: 'custom',
+          custom: {
+            baseURL: 'http://custom.test/v1',
+            apiKey: 'not-required',
+            model: 'google/gemma-3-4b',
+          },
+        };
+      },
+    });
+    ai.loadAuthToken = async () => null;
+    await ai.init();
+    ai.setTools([{ type: 'function', name: 'Read', description: 'Read a file', parameters: { type: 'object', properties: {} } }]);
+
+    await ai.sendRequestToProvider(ai.providers.custom, [{ role: 'user', content: 'read README.md' }], {
+      enableTools: true,
+      toolPromptOnly: true,
+    });
+
+    assert.equal(bodies[0].tools, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('selectExecutionProfile includes reasoning level for complex tasks', async () => {
   const ai = new AIProviderManager({
     async load() {
@@ -635,7 +792,7 @@ test('_getReasoningParam builds param from reasoningLevel string', async () => {
   assert.deepEqual(param, { reasoning_effort: 'high' });
 });
 
-test('small model system prompt stays compact and uses real tool names', async () => {
+test('small model system prompt uses full-strength instructions and real tool names', async () => {
   const ai = new AIProviderManager({
     async load() {
       return {
@@ -653,13 +810,14 @@ test('small model system prompt stays compact and uses real tool names', async (
 
   const prompt = ai.getSystemPrompt({ task: 'fix a bug' });
 
-  assert(prompt.length < 2500);
+  assert(prompt.length > 2500);
   assert.match(prompt, /Read, Write, Bash/);
-  assert(!prompt.includes('<thinking>'));
-  assert(!prompt.includes('MANDATORY DEEP REASONING'));
+  assert.match(prompt, /Core Principles/);
+  assert.match(prompt, /Always respond in Vietnamese/);
+  assert.match(prompt, /MANDATORY DEEP REASONING|maximum reasoning/i);
 });
 
-test('model tier updates when switching provider', async () => {
+test('model prompt keeps full instructions when switching provider tiers', async () => {
   const ai = new AIProviderManager({
     async load() {
       return {
@@ -683,6 +841,8 @@ test('model tier updates when switching provider', async () => {
   await ai.switchProvider('custom');
   const largePrompt = ai.getSystemPrompt({ task: 'fix bug' });
 
-  assert(smallPrompt.includes('small local model'));
-  assert(!largePrompt.includes('small local model'));
+  assert.match(smallPrompt, /Core Principles/);
+  assert.match(largePrompt, /Core Principles/);
+  assert.match(smallPrompt, /maximum reasoning/i);
+  assert.match(largePrompt, /maximum reasoning/i);
 });

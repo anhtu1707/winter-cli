@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { buildSmallModelAmplification, isWeakTier } from './small-model-amplifier.js';
 
-test('small model amplifier escalates constraints for weak tiers', () => {
+test('strength amplifier escalates constraints for weak tiers', () => {
   assert.equal(isWeakTier('small'), true);
   const cfg = buildSmallModelAmplification({
     modelTier: 'small',
@@ -14,18 +14,19 @@ test('small model amplifier escalates constraints for weak tiers', () => {
   assert.equal(cfg.weak, true);
   assert.equal(cfg.enforceSelfCritique, true);
   assert(cfg.maxToolTurns >= 10);
-  assert.match(cfg.hint, /Small Model Amplifier/);
+  assert.match(cfg.hint, /Winter Strength Amplifier/);
 });
 
-test('small model amplifier is neutral for strong tiers', () => {
+test('strength amplifier also applies to strong tiers', () => {
   const cfg = buildSmallModelAmplification({
     modelTier: 'large',
     workflowProfile: 'webapp-build',
     depth: 'standard',
   });
 
-  assert.equal(cfg.weak, false);
-  assert.equal(cfg.enforceSelfCritique, false);
-  assert.equal(cfg.maxToolTurns, 8);
+  assert.equal(isWeakTier('large'), true);
+  assert.equal(cfg.weak, true);
+  assert.equal(cfg.enforceSelfCritique, true);
+  assert.equal(cfg.maxToolTurns, 14);
+  assert.match(cfg.hint, /Every model/);
 });
-

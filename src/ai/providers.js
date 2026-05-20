@@ -293,6 +293,44 @@ export class AIProviderManager {
     this.tools = tools;
   }
 
+  normalizeToolDefinitionsForApi(tools = []) {
+    if (!Array.isArray(tools)) return [];
+
+    return tools
+      .map(tool => {
+        if (!tool || typeof tool !== 'object') return null;
+
+        if (tool.type === 'function' && tool.function && typeof tool.function === 'object') {
+          return tool;
+        }
+
+        if (tool.name && tool.parameters) {
+          return {
+            type: 'function',
+            function: {
+              name: tool.name,
+              description: tool.description || '',
+              parameters: tool.parameters,
+            },
+          };
+        }
+
+        if (tool.function?.name) {
+          return {
+            type: 'function',
+            function: {
+              name: tool.function.name,
+              description: tool.function.description || tool.description || '',
+              parameters: tool.function.parameters || tool.parameters || { type: 'object', properties: {} },
+            },
+          };
+        }
+
+        return null;
+      })
+      .filter(Boolean);
+  }
+
   async chat(message, options = {}) {
     await this.init();
     const messages = [
@@ -405,8 +443,9 @@ export class AIProviderManager {
       }
     }
 
-    if (this.tools.length > 0 && options.enableTools) {
-      body.tools = this.tools;
+    if (this.tools.length > 0 && options.enableTools && !options.toolPromptOnly) {
+      const tools = this.normalizeToolDefinitionsForApi(this.tools);
+      if (tools.length > 0) body.tools = tools;
     }
 
     const headers = {
@@ -460,8 +499,9 @@ export class AIProviderManager {
       }
     }
 
-    if (this.tools.length > 0 && options.enableTools) {
-      body.tools = this.tools;
+    if (this.tools.length > 0 && options.enableTools && !options.toolPromptOnly) {
+      const tools = this.normalizeToolDefinitionsForApi(this.tools);
+      if (tools.length > 0) body.tools = tools;
     }
 
     const headers = {
@@ -586,7 +626,7 @@ export class AIProviderManager {
       const body = {
         model: options.model || provider.model,
         messages: currentMessages,
-        tools: this.tools.length > 0 ? this.tools : undefined,
+        tools: this.tools.length > 0 ? this.normalizeToolDefinitionsForApi(this.tools) : undefined,
       };
 
       const headers = {
@@ -681,13 +721,13 @@ export class AIProviderManager {
     let reasoningPrompt = '';
     if (options.reasoningLevel || options.reasoningPrompt) {
       reasoningPrompt = options.reasoningPrompt || new ReasoningConfig({
-        level: options.reasoningLevel || REASONING_LEVELS.MEDIUM,
+        level: options.reasoningLevel || REASONING_LEVELS.MAX,
         provider: this.activeProvider,
         modelTier: this._modelTier,
       }).getPromptInstructions();
     } else if (taskInfo) {
       // Auto-inject based on task complexity for providers without API reasoning
-      const level = complexityToReasoningLevel(taskInfo.type);
+      const level = REASONING_LEVELS.MAX;
       const config = new ReasoningConfig({
         level,
         provider: this.activeProvider,

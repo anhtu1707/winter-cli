@@ -419,10 +419,15 @@ test('plan export and apply create markdown/json and skeleton files', async () =
     exportPath: mdPath,
   });
 
-  const [mdText, jsonText, skeletonText] = await Promise.all([
+  const mobileFeatureTasks = path.join(root, 'src', 'features', 'build-mobile-app-auth', 'tasks.md');
+  const mobileNavigationReadme = path.join(root, 'src', 'navigation', 'README.md');
+
+  const [mdText, jsonText, skeletonText, featureTasksText, navigationText] = await Promise.all([
     readFile(mdPath, 'utf8'),
     readFile(jsonPath, 'utf8'),
     readFile(skeletonPath, 'utf8'),
+    readFile(mobileFeatureTasks, 'utf8'),
+    readFile(mobileNavigationReadme, 'utf8'),
   ]);
 
   assert(mdText.includes('# Winter Plan'));
@@ -431,4 +436,34 @@ test('plan export and apply create markdown/json and skeleton files', async () =
   assert(jsonText.includes('"steps"'));
   assert(skeletonText.includes('# Plan Task List'));
   assert(skeletonText.includes('- [ ] Add auth module'));
+  assert(skeletonText.includes('Scaffold Profile: mobile'));
+  assert(featureTasksText.includes('- [ ] Add auth module'));
+  assert(navigationText.includes('# Navigation'));
+});
+
+test('plan apply scaffold keeps existing files instead of overwriting', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-plan-scaffold-'));
+  const parser = createParser();
+  parser.projectPath = root;
+
+  const existingPath = path.join(root, 'src', 'features', 'build-webapp-auth', 'README.md');
+  await mkdir(path.dirname(existingPath), { recursive: true });
+  await writeFile(existingPath, 'USER CONTENT\n', 'utf8');
+
+  await parser.applyPlanSkeleton({
+    task: 'build webapp auth',
+    workflow: { profile: 'webapp-build', depth: 'standard' },
+    selected: {
+      id: 'balanced',
+      title: 'Balanced',
+      description: 'Balanced plan',
+      steps: ['Create routes', 'Add auth UI'],
+    },
+  });
+
+  const existingText = await readFile(existingPath, 'utf8');
+  const e2eReadme = await readFile(path.join(root, 'tests', 'e2e', 'README.md'), 'utf8');
+
+  assert.equal(existingText, 'USER CONTENT\n');
+  assert(e2eReadme.includes('E2E Tests'));
 });

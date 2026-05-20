@@ -12,18 +12,7 @@ function flattenMessageText(messages) {
 }
 
 import { ReasoningConfig, REASONING_LEVELS } from '../ai/reasoning.js';
-import { classifyModelTier, isSmallModel, getReasoningBump, MODEL_TIERS } from '../ai/model-capabilities.js';
-
-/**
- * Bump reasoning level by N steps.
- */
-function bumpReasoningLevel(level, steps) {
-  const order = [REASONING_LEVELS.NONE, REASONING_LEVELS.LOW, REASONING_LEVELS.MEDIUM, REASONING_LEVELS.HIGH, REASONING_LEVELS.MAX];
-  const idx = order.indexOf(level);
-  if (idx === -1) return level;
-  const newIdx = Math.min(idx + steps, order.length - 1);
-  return order[newIdx];
-}
+import { classifyModelTier } from '../ai/model-capabilities.js';
 
 export function selectExecutionProfile({ messages = [], activeProvider = null, providers = {}, options = {} } = {}) {
   const text = flattenMessageText(messages);
@@ -50,35 +39,9 @@ export function selectExecutionProfile({ messages = [], activeProvider = null, p
   const providerConfig = providers[provider] || providers[activeProvider] || {};
   const model = options.model || providerConfig.model || providers[activeProvider]?.model || null;
 	
-	  // Detect model capability tier
-	  const modelTier = classifyModelTier(model, provider);
-	  const isSmall = isSmallModel(modelTier);
-	  const reasoningBump = getReasoningBump(modelTier);
-	
-	  // Determine reasoning level based on task complexity signals
-	  // Default: HIGH for coding — all models must think deeply
-	  let reasoningLevel = options.reasoningLevel || REASONING_LEVELS.HIGH;
-	  if (!options.reasoningLevel) {
-	    const hasDeepSignals = /\b(refactor|architecture|redesign|migrate|complex|full stack|e2e|end to end|security|optimize|performance|implement|build|create)\b/.test(text);
-	    const hasComplexSignals = /\b(debug|fix|test|multiple|integrate|design|plan|review|analyze)\b/.test(text);
-	
-	    if (hasDeepSignals && text.length > 30) {
-	      reasoningLevel = REASONING_LEVELS.MAX;
-	    } else if (hasComplexSignals && text.length > 20) {
-	      reasoningLevel = REASONING_LEVELS.MAX;
-	    } else if (text.split(/\s+/).length > 10) {
-	      reasoningLevel = REASONING_LEVELS.HIGH;
-	    } else if (text.split(/\s+/).length < 3) {
-	      reasoningLevel = REASONING_LEVELS.MEDIUM;
-	    } else {
-	      reasoningLevel = REASONING_LEVELS.HIGH;
-	    }
-	
-	    // If small model, bump reasoning level even more to compensate
-	    if (isSmall && reasoningBump > 0) {
-	      reasoningLevel = bumpReasoningLevel(reasoningLevel, reasoningBump);
-	    }
-	  }
+  // Keep the real tier for diagnostics, but Winter always pushes max reasoning.
+  const modelTier = classifyModelTier(model, provider);
+  const reasoningLevel = options.reasoningLevel || REASONING_LEVELS.MAX;
 
   const reasoning = new ReasoningConfig({
     level: reasoningLevel,
