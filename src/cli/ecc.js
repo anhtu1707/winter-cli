@@ -137,38 +137,67 @@ export class ECCManager {
 
   async browseSection(sectionName) {
     const sections = this.getSections();
+
+    // Check if it's a nested path like "skills/error-handling"
+    const parts = sectionName.split('/');
     let target = null;
 
-    // Try exact match first
-    target = sections.find(s => s.name === sectionName);
+    // Try exact match for first part
+    target = sections.find(s => s.name === parts[0]);
     if (!target) {
       // Try fuzzy match
       target = sections.find(s =>
-        s.name.includes(sectionName) || sectionName.includes(s.name)
+        s.name.includes(parts[0]) || parts[0].includes(s.name)
       );
     }
 
     if (!target) {
+      // Try direct path within ECC
+      const directPath = path.join(this.eccPath, sectionName);
+      if (existsSync(directPath)) {
+        const entries = await this._listDir(directPath);
+        if (entries) {
+          return {
+            section: sectionName,
+            description: `Custom path: ${sectionName}`,
+            path: directPath,
+            entries,
+          };
+        }
+      }
       return { error: `Không tìm thấy section "${sectionName}". Các section: ${sections.map(s => s.name).join(', ')}` };
     }
 
-    const entries = await this._listDir(target.path);
+    // Build full path for nested request
+    let fullPath = target.path;
+    if (parts.length > 1) {
+      fullPath = path.join(target.path, ...parts.slice(1));
+    }
+
+    // Check if path exists, otherwise fall back to section root
+    if (!existsSync(fullPath)) {
+      fullPath = target.path;
+    }
+
+    const entries = await this._listDir(fullPath);
     if (!entries) {
       return { error: `Không thể đọc section "${sectionName}"` };
     }
 
     return {
-      section: target.name,
+      section: parts[0],
+      subPath: parts.length > 1 ? parts.slice(1).join('/') : null,
       description: target.desc,
-      path: target.path,
+      path: fullPath,
       entries,
     };
   }
 
   async search(query) {
-    const results = { query, matches: [] };
+    const results = { query, matches: [], fileMatches: [] };
     const q = query.toLowerCase();
 
+    // Search in directory names (top-level)
     for (const section of this.getSections()) {
       const entries = await this._listDir(section.path);
       if (!entries) continue;
@@ -186,7 +215,62 @@ export class ECCManager {
       }
     }
 
+    // Search in file contents (.md, .js, .json)
+    const contentExtensions = ['.md', '.js', '.json', '.txt'];
+    await this._searchContent(this.eccPath, q, results.fileMatches, contentExtensions);
+
+    // Merge fileMatches into matches with section info
+    for (const fileMatch of results.fileMatches) {
+      const relativePath = path.relative(this.eccPath, fileMatch.path);
+      const parts = relativePath.split(path.sep);
+      const section = parts[0] || 'root';
+      results.matches.push({
+        section,
+        name: path.basename(fileMatch.path),
+        isDirectory: false,
+        path: fileMatch.path,
+        snippet: fileMatch.snippet,
+        line: fileMatch.line,
+      });
+    }
+
     return results;
+  }
+
+  async _searchContent(dir, query, results, extensions, depth = 0) {
+    if (depth > 5) return; // Limit recursion depth
+
+    try {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+
+        // Skip hidden dirs and .git
+        if (entry.name.startsWith('.') && entry.isDirectory()) continue;
+
+        if (entry.isDirectory()) {
+          await this._searchContent(fullPath, query, results, extensions, depth + 1);
+        } else if (entry.isFile()) {
+          const ext = path.extname(entry.name).toLowerCase();
+          if (!extensions.includes(ext)) continue;
+
+          try {
+            const content = await fs.readFile(fullPath, 'utf8');
+            const lines = content.split('\n');
+            for (let i = 0; i < lines.length; i++) {
+              if (lines[i].toLowerCase().includes(query)) {
+                results.push({
+                  path: fullPath,
+                  line: i + 1,
+                  snippet: lines[i].trim().substring(0, 150),
+                });
+                if (results.length >= 50) return; // Limit results
+              }
+            }
+          } catch {}
+        }
+      }
+    } catch {}
   }
 
   async sync() {

@@ -33,12 +33,16 @@ export function renderInputPanel(snapshot, {
   const c = colors || {};
   const panelWidth = Math.max(64, width - 2);
   const innerWidth = Math.max(20, panelWidth - 4);
-  
+  const projectName = snapshot.projectName || 'project';
+  const providerModel = snapshot.provider && snapshot.model
+    ? `${snapshot.provider}/${snapshot.model}`
+    : snapshot.provider || snapshot.model || 'model';
+
   return {
     top: `${c.dim}┌${'─'.repeat(innerWidth + 2)}┐${c.reset}`,
-    status: '',
-    hint: '',
-    prompt: `${c.bright}${c.green}│${c.reset} `,
+    status: `${c.bright}${c.cyan}WINTER${c.reset} ${c.dim}·${c.reset} ${projectName} ${c.dim}·${c.reset} ${providerModel}`,
+    hint: `${c.dim}@file${c.reset} attach · ${c.dim}!cmd${c.reset} bash · ${c.dim}^V img${c.reset} paste`,
+    prompt: `${c.bright}${c.green}winter${c.reset} ${c.dim}›${c.reset} `,
     bottom: `${c.dim}└${'─'.repeat(innerWidth + 2)}┘${c.reset}`,
   };
 }
@@ -79,7 +83,7 @@ export function renderStatusPanel(snapshot, { colors, title = 'Status' } = {}) {
   const c = colors || {};
   const bgBlue = '\x1b[48;5;236m';
   const header = `${bgBlue}${c.white} ${title.toUpperCase()} ${c.reset}`;
-  
+
   return [
     '',
     header,

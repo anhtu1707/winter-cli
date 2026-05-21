@@ -50,7 +50,8 @@ export class SkillManager {
       {
         name: 'refactor',
         icon: '♻',
-        description: 'Code refactoring and improvements',
+        description: 'AI-assisted refactoring and behavior-safe cleanup',
+        mode: 'AI-assisted',
         prompts: [
           'Simplify this function',
           'Extract reusable components',

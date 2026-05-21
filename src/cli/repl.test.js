@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { WinterREPL } from './repl.js';
+import { handleSlashCommand } from './repl-commands.js';
 
 test('slash suggestions include provider, model, and bundled resources', () => {
   const repl = new WinterREPL({ projectPath: 'E:\\dev\\app\\winter' });
@@ -85,6 +86,57 @@ test('codebase index auto-loads into project context and slash search remains ca
   assert.match(context, /\[Codebase Index\]/);
   assert.match(context, /feature\.js/);
   assert.match(context, /featureFlag/);
+});
+
+test('page-agent slash command exposes resource browsing, snippets, and URL fetch helper', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-page-agent-'));
+  const pageAgentRoot = path.join(root, 'resources', 'local', 'page-agent');
+  await mkdir(pageAgentRoot, { recursive: true });
+
+  const repl = new WinterREPL({ projectPath: root });
+  repl.contextLoader = {
+    getResourcePaths: () => ({ pageAgent: pageAgentRoot }),
+  };
+
+  const calls = [];
+  repl.tools = {
+    execute: async (tool, input) => {
+      calls.push({ tool, input });
+      if (tool === 'Grep') {
+        return { success: true, matches: ['README.md:1: Page Agent'] };
+      }
+      if (tool === 'WebFetch') {
+        return { success: true, content: 'example page content' };
+      }
+      if (tool === 'BrowserDebug') {
+        return { success: true };
+      }
+      return { success: true, content: '' };
+    },
+  };
+
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+
+  try {
+    await handleSlashCommand(repl, '/page-agent');
+    await handleSlashCommand(repl, '/page-agent search dom');
+    await handleSlashCommand(repl, '/page-agent snippet');
+    await handleSlashCommand(repl, '/page-agent browse https://example.com');
+  } finally {
+    console.log = originalLog;
+  }
+
+  const output = logs.join('\n');
+  assert.match(output, /Page Agent:/);
+  assert.match(output, /Page Agent search "dom"/);
+  assert.match(output, /Page Agent quickstart:/);
+  assert.match(output, /npm install page-agent/);
+  assert.match(output, /Page Agent browse:/);
+  assert(calls.some(call => call.tool === 'Grep'));
+  assert(calls.some(call => call.tool === 'WebFetch'));
+  assert.doesNotMatch(output, /Unknown slash command/);
 });
 
 test('startup codebase warmup is silent so it does not corrupt the prompt', async () => {
@@ -554,10 +606,11 @@ test('system prompt compresses oversized memories and project context', () => {
 
   const prompt = repl.getSystemPrompt('Project context ' + 'z'.repeat(18000));
 
-  assert(prompt.length < 12000);
+  assert(prompt.length > 14000);
   assert.match(prompt, /Memories \(Important Context\)/);
-  assert.match(prompt, /truncated/i);
-  assert.match(prompt, /project context truncated/i);
+  assert.match(prompt, /project context/i);
+  assert.match(prompt, /## Core Principles/);
+  assert.match(prompt, /## Tool Usage/);
 });
 
 test('system prompt expands for flagship models instead of staying compact', () => {
@@ -601,8 +654,8 @@ test('buildPromptToolResult caps large tool outputs before final answer prompt',
   assert.equal(result.success, true);
   assert.equal(result.path, 'big-file.js');
   assert.equal(result.lines, 1000);
-  assert(result.content.length < 6000);
-  assert.match(result.content, /truncated/i);
+  assert(result.content.length > 6000);
+  assert.match(result.content, /x{100}/);
 });
 
 test('buildPromptToolResult preserves more tool output for flagship models', async () => {

@@ -1,7 +1,6 @@
 /**
  * ❄ MODEL CAPABILITIES ❄
- * Detect AI model capability tier from model name.
- * Small models need aggressive prompting to compete with large ones.
+ * Treat the active model as flagship so the rest of the stack can size prompts generously.
  */
 
 export const MODEL_TIERS = {
@@ -19,120 +18,11 @@ const TIER_ORDER = [MODEL_TIERS.TINY, MODEL_TIERS.SMALL, MODEL_TIERS.MEDIUM, MOD
 
 /**
  * Classify a model name into a capability tier.
- * @param {string} modelName - e.g. "llama3", "gpt-4", "qwen2.5:7b"
- * @param {string} [provider] - e.g. "ollama", "openai" (optional, helps disambiguate)
+ * Winter now treats every active model as flagship.
  * @returns {string} One of MODEL_TIERS
  */
 export function classifyModelTier(modelName, provider = '') {
-  const name = (modelName || '').toLowerCase().trim();
-  const prov = (provider || '').toLowerCase().trim();
-
-  // ===== FLAGSHIP (frontier models) =====
-  const flagshipPatterns = [
-    /claude-3-5-sonnet/i, /claude-opus/i, /claude-4/i, /claude-sonnet-4/i,
-    /gpt-4o/i, /gpt-4-turbo/i, /o1/i, /o3/i,
-    /gemini-2\.5-pro/i, /gemini-2\.0-ultra/i,
-    /minimax-?m2\.5/i, /minimax.*m2\.5/i, /minimax/i,
-    /deepseek-v3/i, /deepseek-r1/i,
-    /llama-4/i, /llama-3-70b/i, /llama3-70b/i, /llama3\.1-70b/i, /llama3\.2-90b/i, /llama3\.3/i,
-    /qwen2\.5-?72b/i, /qwen2\.5-?70b/i, /qwen-?2\.5-?72b/i,
-    /mistral-large/i, /mixtral-8x22b/i,
-    /command-r-plus/i, /command-a/i,
-    /yi-?34b/i,
-    /dbrx-instruct/i,
-  ];
-
-  // If using a cloud provider like OpenAI/Anthropic/Groq, their default models are typically large+
-  if (prov === 'openai' || prov === 'anthropic' || prov === 'claude') {
-    if (name.includes('gpt-3.5') || name.includes('gpt-3')) return MODEL_TIERS.MEDIUM;
-    if (name.includes('claude-3-haiku') || name.includes('claude-3-5-haiku')) return MODEL_TIERS.MEDIUM;
-    return MODEL_TIERS.LARGE; // Default for OpenAI/Anthropic is >= gpt-4 level
-  }
-
-  if (prov === 'groq') {
-    // Groq runs open models, most are large but some are not
-    if (/llama.*8b|llama3.*8b|llama3\.2.*3b/i.test(name)) return MODEL_TIERS.SMALL;
-    if (/gemma2.*9b/i.test(name)) return MODEL_TIERS.SMALL;
-    if (/mixtral-8x7|llama.*70b|llama3.*70b|llama3\.1.*70b|qwen/i.test(name)) return MODEL_TIERS.LARGE;
-    return MODEL_TIERS.MEDIUM; // Default for Groq
-  }
-
-  // Check patterns for any provider
-  for (const pattern of flagshipPatterns) {
-    if (pattern.test(name)) return MODEL_TIERS.FLAGSHIP;
-  }
-
-  // ===== LARGE MODELS =====
-  const largePatterns = [
-    /claude-sonnet/i, /claude-3/i, /claude-2/i,
-    /gpt-4/i, /gpt-4-32k/i,
-    /llama-3\.1-?70b/i, /llama-3\.2-?70b/i, /llama3-?70b/i,
-    /llama-2-?70b/i,
-    /qwen-?2\.5-?32b/i, /qwen-?2-?72b/i,
-    /codellama-?70b/i,
-    /mixtral/i,
-    /deepseek-?v2/i,
-    /gemini-1\.5-pro/i, /gemini-2\.0-flash/i,
-    /command-r/i,
-    /yi-?34b/i,
-    /mistral-medium/i,
-  ];
-
-  for (const pattern of largePatterns) {
-    if (pattern.test(name)) return MODEL_TIERS.LARGE;
-  }
-
-  // ===== MEDIUM MODELS =====
-  const mediumPatterns = [
-    /qwen-?2\.5-?14b/i, /qwen-?2\.5-?7b/i, /qwen-?2/i,
-    /llama-3-?8b/i, /llama-3\.1-?8b/i, /llama-3\.2-?11b/i,
-    /llama-2-?13b/i, /llama-2-?7b/i,
-    /deepseek-coder-?6\.7b/i, /deepseek-coder-?33b/i,
-    /codellama-?34b/i, /codellama-?13b/i, /codellama-?7b/i,
-    /mistral/i, /mistral-7b/i,
-    /gemma-2-?9b/i, /gemma-?7b/i,
-    /phi-3/i, /phi-3-medium/i,
-    /nemotron/i,
-    /solar/i,
-    /dbrx/i,
-    /starcoder2/i,
-    /deepseek-llm/i,
-    /yi-?6b/i, /yi-?9b/i,
-  ];
-
-  for (const pattern of mediumPatterns) {
-    if (pattern.test(name)) return MODEL_TIERS.MEDIUM;
-  }
-
-  // ===== SMALL MODELS =====
-  const smallPatterns = [
-    /llama-3\.2-?3b/i, /llama-3\.2-?1b/i, /tinyllama/i,
-    /qwen-?2\.5-?3b/i, /qwen-?2\.5-?1\.5b/i, /qwen-?2\.5-?0\.5b/i,
-    /phi-?3-?mini/i, /phi-?2/i, /phi-?1/i,
-    /gemma-?2-?2b/i,
-    /stablelm/i,
-    /orca/i,
-    /falcon/i,
-    /red-pajama/i,
-    /pythia/i,
-    /opt/i,
-    /bloom/i,
-    /mpnet/i,
-  ];
-
-  for (const pattern of smallPatterns) {
-    if (pattern.test(name)) return MODEL_TIERS.SMALL;
-  }
-
-  if (/\btiny\b/i.test(name) || /(?:^|[-_:/])mini(?:$|[-_:/])/i.test(name) || /\bsmall\b/i.test(name) || /\bnano\b/i.test(name)) {
-    return MODEL_TIERS.TINY;
-  }
-
-  // Fallback: if Ollama, likely small
-  if (prov === 'ollama' || prov === 'local') return MODEL_TIERS.SMALL;
-
-  // Default: assume medium
-  return MODEL_TIERS.MEDIUM;
+  return MODEL_TIERS.FLAGSHIP;
 }
 
 /**

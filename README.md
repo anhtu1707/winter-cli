@@ -18,7 +18,9 @@
 | **MCP Support** | Model Context Protocol -- connect VS Code, GitHub, databases & more |
 | **Permission System** | Granular allowlist for tools, commands, and MCP servers |
 | **Secret Management** | Auto-migrate API keys to `secrets.env` -- no keys in config files |
-| **Skills System** | Hot-reloadable skills (coding, design, debug, test, custom) |
+| **Refactoring** | AI-assisted refactors with test-backed verification and minimal behavior drift |
+| **Skills System** | Strong skill workflows with `skill-creator`, hot-reloadable custom skills, and bundled guidance |
+| **TypeScript Definitions** | Typed surface for core CLI helpers and skill metadata |
 | **Plugin System** | Load local Claude Code / Codex plugins |
 | **Design Integration** | Browse & apply design systems from awesome-design-md |
 | **Auto-Healing** | TDD-style loop -- AI runs tests & fixes errors automatically |

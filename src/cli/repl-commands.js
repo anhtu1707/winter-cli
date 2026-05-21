@@ -3,6 +3,137 @@ import { promises as fs } from 'fs';
 import { colors } from './snowflake-logo.js';
 import { SLASH_COMMANDS } from './slash-commands.js';
 
+function getPageAgentRoot(repl) {
+  return repl.contextLoader?.getResourcePaths?.()?.pageAgent || path.join(repl.projectPath, 'resources', 'local', 'page-agent');
+}
+
+function printPageAgentSnippet() {
+  console.log(`${colors.cyan}Page Agent quickstart:${colors.reset}`);
+  console.log(`  npm install page-agent`);
+  console.log(`  import { PageAgent } from 'page-agent'`);
+  console.log(`  const agent = new PageAgent({ model: 'qwen3.5-plus', baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1', apiKey: 'YOUR_API_KEY', language: 'en-US' })`);
+  console.log(`  await agent.execute('Click the login button')`);
+}
+
+async function printDirectoryEntries(root, label, limit = 40) {
+  try {
+    const entries = await fs.readdir(root, { withFileTypes: true });
+    console.log(`${colors.cyan}${label}:${colors.reset} ${root}`);
+    if (entries.length === 0) {
+      console.log(`  ${colors.dim}(empty)${colors.reset}`);
+      return;
+    }
+    entries
+      .filter(entry => entry.isDirectory() || entry.isFile())
+      .sort((a, b) => {
+        if (a.isDirectory() && !b.isDirectory()) return -1;
+        if (!a.isDirectory() && b.isDirectory()) return 1;
+        return a.name.localeCompare(b.name);
+      })
+      .slice(0, limit)
+      .forEach(entry => {
+        console.log(`  ${entry.isDirectory() ? '[dir] ' : '[file]'} ${entry.name}`);
+      });
+  } catch (error) {
+    console.log(`${colors.red}${label} not available: ${error.message}${colors.reset}`);
+  }
+}
+
+async function handlePageAgentBrowse(repl, url) {
+  console.log(`${colors.cyan}Page Agent browse:${colors.reset} ${url}`);
+  try {
+    const result = await repl.tools.execute('WebFetch', { url, prompt: 'Extract the main content, key controls, and forms.' });
+    if (result.success) {
+      const content = result.content || result.text || '';
+      console.log(`${colors.green}✓ Fetched ${url} (${content.length} chars)${colors.reset}`);
+      const display = content.length > 4000 ? `${content.slice(0, 4000)}\n${colors.dim}... (${content.length - 4000} more chars)${colors.reset}` : content;
+      console.log(`\n${colors.dim}${'─'.repeat(50)}${colors.reset}`);
+      console.log(display);
+      console.log(`${colors.dim}${'─'.repeat(50)}${colors.reset}`);
+      return;
+    }
+
+    console.log(`${colors.yellow}WebFetch could not extract the page, trying BrowserDebug...${colors.reset}`);
+    const bdResult = await repl.tools.execute('BrowserDebug', { url, action: 'open' });
+    if (bdResult.success) {
+      console.log(`${colors.green}✓ BrowserDebug loaded: ${url}${colors.reset}`);
+    } else {
+      console.log(`${colors.red}✖ Could not load: ${bdResult.error || result.error || 'unknown error'}${colors.reset}`);
+    }
+  } catch (error) {
+    console.log(`${colors.red}✖ Error: ${error.message}${colors.reset}`);
+  }
+}
+
+async function handlePageAgentCommand(repl, args = []) {
+  const root = getPageAgentRoot(repl);
+  const [action = 'info', ...rest] = args;
+
+  if (action === 'search') {
+    const query = rest.join(' ');
+    if (!query) {
+      console.log(`${colors.yellow}Usage: /page-agent search <query>${colors.reset}`);
+      return;
+    }
+    const result = await repl.tools.execute('Grep', { pattern: query, path: root });
+    console.log(`${colors.cyan}Page Agent search "${query}":${colors.reset}`);
+    if (!result.success || !result.matches || result.matches.length === 0) {
+      console.log(`  ${colors.dim}No results${colors.reset}`);
+      return;
+    }
+    result.matches.slice(0, 20).forEach(match => console.log(`  ${match}`));
+    return;
+  }
+
+  if (action === 'read') {
+    const requestedPath = rest.join(' ') || 'README.md';
+    const target = path.resolve(root, requestedPath);
+    if (!target.startsWith(path.resolve(root))) {
+      console.log(`${colors.red}Path must stay inside page-agent resources.${colors.reset}`);
+      return;
+    }
+
+    const result = await repl.tools.execute('Read', { file_path: target });
+    if (!result.success) {
+      console.log(`${colors.red}${result.error}${colors.reset}`);
+      return;
+    }
+
+    console.log(`${colors.cyan}page-agent/${requestedPath}:${colors.reset} ${target}`);
+    const content = String(result.content || '');
+    const lines = content.split(/\r?\n/);
+    console.log(lines.slice(0, 40).join('\n'));
+    if (lines.length > 40) {
+      console.log(`${colors.dim}...${colors.reset}`);
+    }
+    return;
+  }
+
+  if (action === 'docs') {
+    await printDirectoryEntries(path.join(root, 'docs'), 'page-agent/docs', 80);
+    return;
+  }
+
+  if (action === 'snippet' || action === 'quickstart' || action === 'install') {
+    printPageAgentSnippet();
+    return;
+  }
+
+  if (action === 'browse' || action === 'fetch' || action === 'open') {
+    const url = rest[0];
+    if (!url) {
+      console.log(`${colors.yellow}Usage: /page-agent browse <url>${colors.reset}`);
+      return;
+    }
+    await handlePageAgentBrowse(repl, url.replace(/^['"]|['"]$/g, ''));
+    return;
+  }
+
+  console.log(`${colors.cyan}Page Agent:${colors.reset} ${root}`);
+  console.log(`${colors.dim}The GUI Agent living in your webpage. In-page JavaScript, text-based DOM manipulation, no headless browser required.${colors.reset}`);
+  console.log(`${colors.dim}Commands: /page-agent search <query>, /page-agent read <path>, /page-agent docs, /page-agent snippet, /page-agent browse <url>${colors.reset}`);
+}
+
 /**
  * Handle slash commands in the Winter REPL.
  * Delegated from WinterREPL.handleSlashCommand to reduce file size.
@@ -534,6 +665,10 @@ export async function handleSlashCommand(repl, input) {
       } catch (e) {
         console.log(`${colors.red}Error: ${e.message}${colors.reset}`);
       }
+      break;
+    case '/page-agent':
+    case '/pageagent':
+      await handlePageAgentCommand(repl, args);
       break;
     case '/image':
       const imagePath = args[0];

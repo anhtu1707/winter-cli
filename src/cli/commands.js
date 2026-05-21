@@ -19,6 +19,7 @@ import { buildTuiSnapshot, renderLandingTui } from './tui.js';
 import { HtmlFxManager } from '../integrations/htmlfx-manager.js';
 import { selectWorkflow } from '../ai/workflow-selector.js';
 import { getProfileBlueprint } from '../ai/profile-blueprints.js';
+import { ToolExecutor } from '../tools/executor.js';
 import { promises as fs } from 'fs';
 import path from 'path';
 import readline from 'node:readline/promises';
@@ -46,10 +47,11 @@ export function redactSecretsLegacy(value) {
 }
 
 export class CommandParser {
-  constructor({ session, ai, config }) {
+  constructor({ session, ai, config, tools }) {
     this.session = session;
     this.ai = ai;
     this.config = config;
+    this.tools = tools || new ToolExecutor({ session: this.session, config: this.config, projectPath: process.cwd() });
     this.design = new DesignCommands(this.session, this.config);
     this.skills = new SkillManager(this.session);
     this.plugins = new PluginManager(this.session);
@@ -309,8 +311,49 @@ export class CommandParser {
       return;
     }
 
+    if (action === 'snippet' || action === 'quickstart' || action === 'install') {
+      console.log(`${colors.cyan}Page Agent quickstart:${colors.reset}`);
+      console.log(`  npm install page-agent`);
+      console.log(`  import { PageAgent } from 'page-agent'`);
+      console.log(`  const agent = new PageAgent({ model: 'qwen3.5-plus', baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1', apiKey: 'YOUR_API_KEY', language: 'en-US' })`);
+      console.log(`  await agent.execute('Click the login button')`);
+      return;
+    }
+
+    if (action === 'browse' || action === 'fetch' || action === 'open') {
+      const url = rest[0];
+      if (!url) {
+        console.log(`${colors.yellow}Usage: winter page-agent browse <url>${colors.reset}`);
+        return;
+      }
+      console.log(`${colors.cyan}Page Agent browse:${colors.reset} ${url}`);
+      try {
+        const result = await this.tools.execute('WebFetch', { url, prompt: 'Extract the main content, key controls, and forms.' });
+        if (result.success) {
+          const content = result.content || result.text || '';
+          console.log(`${colors.green}✓ Fetched ${url} (${content.length} chars)${colors.reset}`);
+          const display = content.length > 4000 ? `${content.slice(0, 4000)}\n${colors.dim}... (${content.length - 4000} more chars)${colors.reset}` : content;
+          console.log(`\n${colors.dim}${'─'.repeat(50)}${colors.reset}`);
+          console.log(display);
+          console.log(`${colors.dim}${'─'.repeat(50)}${colors.reset}`);
+          return;
+        }
+
+        console.log(`${colors.yellow}WebFetch could not extract the page, trying BrowserDebug...${colors.reset}`);
+        const bdResult = await this.tools.execute('BrowserDebug', { url, action: 'open' });
+        if (bdResult.success) {
+          console.log(`${colors.green}✓ BrowserDebug loaded: ${url}${colors.reset}`);
+        } else {
+          console.log(`${colors.red}✖ Could not load: ${bdResult.error || result.error || 'unknown error'}${colors.reset}`);
+        }
+      } catch (error) {
+        console.log(`${colors.red}✖ Error: ${error.message}${colors.reset}`);
+      }
+      return;
+    }
+
     await this.printPathPreview(root, 'page-agent', 80);
-    console.log(`${colors.dim}Commands: page-agent search <query>, page-agent read <path>, page-agent docs${colors.reset}`);
+    console.log(`${colors.dim}Commands: page-agent search <query>, page-agent read <path>, page-agent docs, page-agent snippet, page-agent browse <url>${colors.reset}`);
   }
 
   async handleEcc(args = []) {
@@ -354,7 +397,12 @@ export class CommandParser {
         console.log(`  ${colors.dim}No results${colors.reset}`);
         return;
       }
-      result.matches.forEach(match => console.log(`  [${match.section}] ${match.isDirectory ? '[dir] ' : '[file]'} ${match.name}`));
+      result.matches.forEach(match => {
+        console.log(`  [${match.section}] ${match.isDirectory ? '[dir] ' : '[file]'} ${match.name}`);
+        if (match.snippet) {
+          console.log(`      ${colors.dim}${match.snippet.substring(0, 100)}${colors.reset}`);
+        }
+      });
       return;
     }
 
@@ -674,7 +722,11 @@ EXECUTION CONTRACT:
       case 'list':
         const skills = await this.skills.listSkills();
         console.log(`\n${colors.cyan}Available Skills:${colors.reset}`);
-        skills.forEach(s => console.log(`  ${s.icon} ${s.name} - ${s.description}`));
+        console.log(`${colors.dim}Skills System: Strong · skill-creator · TypeScript definitions${colors.reset}`);
+        skills.forEach(s => {
+          const mode = s.mode ? ` ${colors.dim}[${s.mode}]${colors.reset}` : '';
+          console.log(`  ${s.icon} ${s.name}${mode} - ${s.description}`);
+        });
         break;
       case 'enable':
         await this.skills.enableSkill(rest[0]);
@@ -682,7 +734,7 @@ EXECUTION CONTRACT:
         break;
       case 'create':
         await this.skills.createSkill(rest[0]);
-        console.log(`${statusIcons.success} Created skill: ${rest[0]}`);
+        console.log(`${statusIcons.success} Created skill: ${rest[0]} (${colors.dim}skill-creator${colors.reset})`);
         break;
       default:
         console.log(`${colors.yellow}Usage: winter skill <list|enable|create>${colors.reset}`);

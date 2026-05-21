@@ -33,6 +33,7 @@ function createParser() {
   parser.skills = {
     listSkills: async () => [
       { icon: '■', name: 'coding', description: 'Code analysis, generation, and review' },
+      { icon: '♻', name: 'refactor', description: 'AI-assisted refactoring and behavior-safe cleanup', mode: 'AI-assisted' },
     ],
     enableSkill: async () => true,
     createSkill: async () => {},
@@ -90,6 +91,9 @@ test('skill and plugin commands default to list output', async () => {
   }
 
   assert(logs.some(line => line.includes('Available Skills')));
+  assert(logs.some(line => line.includes('Skills System: Strong')));
+  assert(logs.some(line => line.includes('skill-creator')));
+  assert(logs.some(line => line.includes('AI-assisted')));
   assert(logs.some(line => line.includes('Installed Plugins')));
 });
 
@@ -177,8 +181,8 @@ test('tui command renders dashboard in slash and plain command modes', async () 
   }
 
   const output = logs.join('\n');
-  assert.match(output, /Winter Dashboard/);
-  assert.match(output, /custom\/gpt-test/);
+  assert.match(output, /Winter will run commands on your behalf/);
+  assert.match(output, /gpt-test/);
   assert.doesNotMatch(output, /Unknown slash command/);
 });
 
@@ -368,6 +372,38 @@ test('ecc and page-agent slash commands browse bundled resources', async () => {
   assert(logs.some(line => line.includes('Page Agent search "dom"')));
   assert(logs.some(line => line.includes('html-effectiveness:')));
   assert(!logs.some(line => line.includes('Unknown slash command')));
+});
+
+test('page-agent commands work in the non-interactive CLI parser', async () => {
+  const parser = createParser();
+  const calls = [];
+  parser.tools = {
+    execute: async (tool, input) => {
+      calls.push({ tool, input });
+      if (tool === 'WebFetch') {
+        return { success: true, content: 'example page content' };
+      }
+      return { success: true };
+    },
+  };
+
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+
+  try {
+    await parser.parse(['page-agent', 'snippet']);
+    await parser.parse(['page-agent', 'browse', 'https://example.com']);
+  } finally {
+    console.log = originalLog;
+  }
+
+  const output = logs.join('\n');
+  assert.match(output, /Page Agent quickstart:/);
+  assert.match(output, /Page Agent browse:/);
+  assert.match(output, /example page content/);
+  assert(calls.some(call => call.tool === 'WebFetch'));
+  assert.doesNotMatch(output, /Unknown command/);
 });
 
 test('plugin manager loads local plugin files via file URLs', async () => {

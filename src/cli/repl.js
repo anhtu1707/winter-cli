@@ -1125,6 +1125,8 @@ export class WinterREPL {
       this.currentAbortController = null;
       if (this.spinner) this.spinner.stop();
 
+      this.showSmartTip(input);
+
       if (this.taskQueue.length > 0) {
         this.closeInputBox();
         const nextTask = this.taskQueue.shift();
@@ -1132,6 +1134,36 @@ export class WinterREPL {
       } else {
         if (!this.readlineClosed) this.showInputPrompt();
       }
+    }
+  }
+
+  showSmartTip(input = '') {
+    const text = input.toLowerCase();
+    let tip = null;
+
+    if (text.match(/\b(lỗi|error|bug|fail|crash|không chạy)\b/) && Math.random() < 0.6) {
+      tip = 'Gõ /debug để Winter tự động đọc lỗi, tìm nguyên nhân và fix bug giúp bạn.';
+    } else if (text.match(/\b(test|kiểm tra)\b/) && Math.random() < 0.5) {
+      tip = 'Gõ /tdd <task> để bật chế độ Auto Healing (Winter tự code, tự test đến khi pass).';
+    } else if (text.match(/\b(tìm|search|kiếm|ở đâu)\b/) && Math.random() < 0.5) {
+      tip = 'Gõ /search <từ khoá> để tìm kiếm thông minh (semantic search) trên toàn dự án.';
+    } else if (text.match(/\b(dự án|app|project|tính năng lớn)\b/) && Math.random() < 0.4) {
+      tip = 'Gõ /plan để tạo và quản lý kế hoạch từng bước trước khi code tính năng phức tạp.';
+    } else if (Math.random() < 0.15) {
+      const tips = [
+        'Gõ /composer <task> để bật chế độ sửa đa file cực mạnh (giống Cursor Composer).',
+        'Gõ /undo để hoàn tác (phục hồi) lại file nếu AI lỡ sửa sai.',
+        'Gõ /history để xem lại lịch sử các tin nhắn và tool calls.',
+        'Gõ /diff để kiểm tra các dòng code đã thay đổi (git diff).',
+        'Gõ /watch <npm test> để Winter tự động chạy lại lệnh mỗi khi bạn lưu file.',
+        'Dùng @swe <task> để khởi động luồng SWE-Agent tự động giải quyết issue.',
+        'Bôi đen code và bấm phím tắt, hoặc gõ /complete để yêu cầu AI viết tiếp code.'
+      ];
+      tip = tips[Math.floor(Math.random() * tips.length)];
+    }
+
+    if (tip) {
+      console.log(`\n${colors.dim}💡 Mẹo: ${tip}${colors.reset}`);
     }
   }
 
@@ -2420,8 +2452,20 @@ ${colors.reset}
       const tools = this.getAgentTools('general');
       const { finalContent, usedMutatingTools } = await this.runConversation(messages, 'Thinking', tools);
 
+      const allToolCalls = [];
+      for (const msg of messages) {
+        if (msg.role === 'assistant' && msg.tool_calls && Array.isArray(msg.tool_calls)) {
+          allToolCalls.push(...msg.tool_calls);
+        }
+      }
+
       await this.session.addToHistory({ role: 'user', content: message });
-      await this.session.addToHistory({ role: 'assistant', content: finalContent });
+      
+      const historyEntry = { role: 'assistant', content: finalContent };
+      if (allToolCalls.length > 0) {
+        historyEntry.tool_calls = allToolCalls;
+      }
+      await this.session.addToHistory(historyEntry);
 
       // Tự động verify: nếu AI đã dùng tools (sửa code), chạy test/build.
       if (finalContent && this.shouldAutoVerifyAfterTools(message, usedMutatingTools)) {

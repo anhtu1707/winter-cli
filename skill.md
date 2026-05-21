@@ -16,11 +16,12 @@ File này định nghĩa cách Winter chọn và áp dụng skill. Không chỉ 
 - **security**: Protect secrets, validate inputs, avoid unsafe shell/file operations.
 - **performance**: Measure or reason from the hot path before optimizing.
 
-## Available Local Skills (12)
+## Available Local Skills (13)
 - codex-primary-runtime
 - coding
 - debug
 - design
+- learned
 - performance
 - refactor
 - security

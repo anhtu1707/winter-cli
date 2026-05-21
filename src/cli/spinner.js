@@ -20,7 +20,29 @@ export class Spinner {
       if (elapsed >= 5) {
         timeStr = ` (still thinking... ${elapsed}s)`;
       }
-      process.stdout.write(`\r\x1b[K${cyan}${this.frames[this.frameIndex]}${reset} ${dim}${this.text}${timeStr}${reset}`);
+      
+      const cols = process.stdout.columns || 80;
+      let fullStr = `${this.frames[this.frameIndex]} ${this.text}${timeStr}`;
+      
+      // Clean ANSI for length calculation (approximate)
+      const visibleLen = fullStr.replace(/\x1b\[[0-9;]*m/g, '').length;
+      
+      if (visibleLen >= cols - 1) {
+        // Truncate the text part, leave room for timeStr and frame
+        const timeStrLen = timeStr.length;
+        const availableSpaceForText = cols - timeStrLen - 6; 
+        if (availableSpaceForText > 10) {
+          const truncText = this.text.length > availableSpaceForText 
+            ? '...' + this.text.slice(-(availableSpaceForText - 3))
+            : this.text;
+          fullStr = `${this.frames[this.frameIndex]} ${truncText}${timeStr}`;
+        } else {
+          // Terminal is extremely narrow, just truncate everything
+          fullStr = fullStr.slice(0, cols - 4) + '...';
+        }
+      }
+
+      process.stdout.write(`\r\x1b[K${cyan}${fullStr.slice(0, 2)}${reset}${dim}${fullStr.slice(2)}${reset}`);
       this.frameIndex = (this.frameIndex + 1) % this.frames.length;
     }, 80);
   }
