@@ -1,5 +1,5 @@
 /**
- * ❄️ COMPOSER MODE ❄️
+ * ❄ COMPOSER MODE ❄
  * Multi-file editing orchestration with batch apply/reject.
  * Inspired by Cursor Composer.
  *
@@ -78,7 +78,7 @@ export class Composer {
     });
 
     console.log(`\n${renderBox({
-      title: ` 📋 Composer: ${this.pendingChanges.length} file(s) `,
+      title: ` ≡ Composer: ${this.pendingChanges.length} file(s) `,
       width,
       borderColor: colors.magenta,
       titleColor: colors.bright,

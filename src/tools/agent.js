@@ -1,5 +1,5 @@
 /**
- * ❄️ AGENT TOOL ❄️
+ * ❄ AGENT TOOL ❄
  * Full subagent orchestration tool
  */
 

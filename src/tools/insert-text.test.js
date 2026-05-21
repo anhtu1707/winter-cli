@@ -1,5 +1,5 @@
 /**
- * ❄️ INSERT TEXT TOOL TESTS ❄️
+ * ❄ INSERT TEXT TOOL TESTS ❄
  */
 
 import { test } from 'node:test';

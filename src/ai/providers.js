@@ -1,5 +1,5 @@
 /**
- * ❄️ WINTER AI PROVIDER ❄️
+ * ❄ WINTER AI PROVIDER ❄
  * Full Claude Code / Codex compatible AI integration
  */
 
@@ -25,7 +25,7 @@ const RESERVED_CONFIG_SECTIONS = new Set([
   'ui',
 ]);
 
-const DEFAULT_REQUEST_TIMEOUT_MS = 120000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 600000;
 
 function isAuthError(error) {
   const msg = String(error?.message || error || '');
@@ -47,6 +47,8 @@ function getRequestTimeoutMs(options = {}) {
 function createTimeoutSignal(timeoutMs, externalSignal = null) {
   const controller = new AbortController();
   let timedOut = false;
+  let timer;
+
   const onAbort = () => {
     controller.abort(externalSignal?.reason || new DOMException('The operation was aborted.', 'AbortError'));
   };
@@ -55,16 +57,24 @@ function createTimeoutSignal(timeoutMs, externalSignal = null) {
   } else if (externalSignal) {
     externalSignal.addEventListener('abort', onAbort, { once: true });
   }
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort(new Error(`Winter request timed out after ${timeoutMs}ms`));
-  }, timeoutMs);
-  if (typeof timer.unref === 'function') timer.unref();
+
+  const startTimer = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort(new Error(`Winter request timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    if (typeof timer.unref === 'function') timer.unref();
+  };
+
+  startTimer();
+
   return {
     signal: controller.signal,
     timedOut: () => timedOut,
+    resetTimer: startTimer,
     cleanup: () => {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       if (externalSignal) externalSignal.removeEventListener('abort', onAbort);
     },
   };
@@ -606,6 +616,8 @@ export class AIProviderManager {
       let buffer = '';
 
       for await (const chunk of response.body) {
+        if (timeout.resetTimer) timeout.resetTimer();
+        
         buffer += decoder.decode(chunk, { stream: true });
         const lines = buffer.split(/\r?\n/);
         buffer = lines.pop() || '';

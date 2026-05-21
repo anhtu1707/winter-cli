@@ -140,7 +140,7 @@ export class AgentRuntime {
           const enrichedArgs = argParseError && !canUseRecoveredArgs ? {} : repl.enrichToolArgs(canonicalToolName, normalizedArgs, messages);
 
           const icon = repl.useUnicodeUi
-            ? (canonicalToolName === 'Bash' ? '⚙' : canonicalToolName === 'Read' ? '📖' : canonicalToolName === 'Write' ? '✏️' : canonicalToolName === 'Edit' ? '🔧' : canonicalToolName === 'Grep' ? '🔍' : canonicalToolName === 'Glob' ? '📂' : '⚡')
+            ? (canonicalToolName === 'Bash' ? '$' : canonicalToolName === 'Read' ? '≡' : canonicalToolName === 'Write' ? '±' : canonicalToolName === 'Edit' ? '$' : canonicalToolName === 'Grep' ? '⌕' : canonicalToolName === 'Glob' ? '►' : '▶')
             : `[${canonicalToolName}]`;
 
           let proceed = true;
@@ -200,7 +200,9 @@ export class AgentRuntime {
             }));
           }
         }
-        console.log('');
+        if (toolSummaries.length > 0) {
+          console.log(`\n${colors.dim}💡 Tip: Gõ /tool để xem lại toàn bộ dữ liệu (data) của các tool calls vừa chạy.${colors.reset}\n`);
+        }
       }
 
       if (usedTools && !finalContent) {

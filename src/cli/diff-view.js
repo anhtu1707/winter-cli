@@ -1,5 +1,5 @@
 /**
- * ❄️ DIFF VIEW — APPLY/REJECT UI ❄️
+ * ❄ DIFF VIEW — APPLY/REJECT UI ❄
  * Provides diff preview and interactive accept/reject/edit workflow.
  * Inspired by Cursor's apply/reject UI.
  */
@@ -297,7 +297,7 @@ export class DiffView {
         `  ${colors.red}[r]${colors.reset} Reject   — Discard these changes\n` +
         `  ${colors.yellow}[m]${colors.reset} Manual   — Open file in $EDITOR to manually resolve\n` +
         `  ${colors.dim}[s]${colors.reset} Skip     — Skip for now\n` +
-        `${colors.yellow}👉 Choose [a/r/m/s]: ${colors.reset}`,
+        `${colors.yellow}→ Choose [a/r/m/s]: ${colors.reset}`,
         onAnswer
       );
 

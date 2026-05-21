@@ -1626,5 +1626,5 @@ test('interactive prompt and system prompt do not brand Winter with emoji', () =
   const repl = new WinterREPL({ projectPath: process.cwd() });
 
   assert.match(repl.getSystemPrompt(''), /You are Winter, an expert AI coding assistant/);
-  assert.doesNotMatch(repl.getSystemPrompt(''), /You are Winter ❄️/);
+  assert.doesNotMatch(repl.getSystemPrompt(''), /You are Winter ❄/);
 });

@@ -1,5 +1,5 @@
 /**
- * ❄️ WINTER TOOL EXECUTOR ❄️
+ * ❄ WINTER TOOL EXECUTOR ❄
  * Complete Claude Code / Codex compatible tool system
  */
 

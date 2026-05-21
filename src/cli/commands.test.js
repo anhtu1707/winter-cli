@@ -32,7 +32,7 @@ function createParser() {
 
   parser.skills = {
     listSkills: async () => [
-      { icon: '💻', name: 'coding', description: 'Code analysis, generation, and review' },
+      { icon: '■', name: 'coding', description: 'Code analysis, generation, and review' },
     ],
     enableSkill: async () => true,
     createSkill: async () => {},
@@ -40,7 +40,7 @@ function createParser() {
 
   parser.plugins = {
     listPlugins: async () => [
-      { icon: '❄️', name: 'winter-core', version: '1.0.0' },
+      { icon: '❄', name: 'winter-core', version: '1.0.0' },
     ],
     installPlugin: async () => {},
     removePlugin: async () => {},

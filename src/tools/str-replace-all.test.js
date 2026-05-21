@@ -1,5 +1,5 @@
 /**
- * ❄️ STRING REPLACE ALL TOOL TESTS ❄️
+ * ❄ STRING REPLACE ALL TOOL TESTS ❄
  */
 
 import { test } from 'node:test';

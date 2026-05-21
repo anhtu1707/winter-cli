@@ -1,5 +1,5 @@
 /**
- * ❄️ MULTI-MODEL ORCHESTRATOR ❄️
+ * ❄ MULTI-MODEL ORCHESTRATOR ❄
  * Run multiple AI models in parallel, compare results, vote, and merge.
  */
 
@@ -69,7 +69,7 @@ Respond with the NUMBER of the best solution only, no explanation.
       { role: 'user', content: prompt },
     ];
 
-    console.log(`\n${colors.cyan}🧠 Ensemble: running ${providers.length} providers in parallel...${colors.reset}`);
+    console.log(`\n${colors.cyan}◆ Ensemble: running ${providers.length} providers in parallel...${colors.reset}`);
 
     const results = await Promise.allSettled(
       providers.map(async ([name, provider]) => {
@@ -160,7 +160,7 @@ Respond with the NUMBER of the best solution only, no explanation.
       .join('\n\n---\n\n');
     const votePrompt = template.replace('{solutions}', solutionBlocks);
 
-    console.log(`\n${colors.cyan}🗳️  Voting: comparing ${entries.length} solutions...${colors.reset}`);
+    console.log(`\n${colors.cyan}✓  Voting: comparing ${entries.length} solutions...${colors.reset}`);
 
     // Choose judge — prefer best available model
     const judgeProvider = options.judge || this._pickBestJudge(entries.map(([n]) => n));
@@ -185,7 +185,7 @@ Respond with the NUMBER of the best solution only, no explanation.
     }
 
     const [winnerName] = entries[winnerIndex];
-    console.log(`  ${colors.green}🏆 Winner: ${winnerName}${colors.reset}`);
+    console.log(`  ${colors.green}★ Winner: ${winnerName}${colors.reset}`);
 
     return {
       ...ensembleResults,
@@ -202,7 +202,7 @@ Respond with the NUMBER of the best solution only, no explanation.
    */
   async orchestrate(task, options = {}) {
     const startTime = measureTime();
-    console.log(`\n${colors.cyan}🔀 Pipeline orchestration starting...${colors.reset}`);
+    console.log(`\n${colors.cyan}» Pipeline orchestration starting...${colors.reset}`);
 
     // Step 1: Classify task
     const taskInfo = this._classifyTask(task);
@@ -293,7 +293,7 @@ Respond with the NUMBER of the best solution only, no explanation.
     const requiredTier = complexity === 'deep' || complexity === 'complex'
       ? 'large' : complexity === 'moderate' ? 'medium' : 'small';
 
-    console.log(`\n${colors.cyan}🧠 Smart route: required tier=${requiredTier}, task=${complexity}${colors.reset}`);
+    console.log(`\n${colors.cyan}◆ Smart route: required tier=${requiredTier}, task=${complexity}${colors.reset}`);
 
     const messages = [
       { role: 'system', content: options.system || this.ai.getSystemPrompt() },

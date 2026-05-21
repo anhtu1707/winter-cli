@@ -1,5 +1,5 @@
 /**
- * ❄️ SESSION MANAGER ❄️
+ * ❄ SESSION MANAGER ❄
  * Handles session management with context memory,
  * plans, and project tracking.
  */

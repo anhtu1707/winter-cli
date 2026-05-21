@@ -1,5 +1,5 @@
 /**
- * ❄️ PLUGIN MANAGER ❄️
+ * ❄ PLUGIN MANAGER ❄
  * Manage Winter CLI plugins
  */
 
@@ -21,7 +21,7 @@ export class PluginManager {
       {
         name: 'winter-core',
         version: '1.0.0',
-        icon: '❄️',
+        icon: '❄',
         description: 'Core Winter CLI functionality',
         hooks: {},
         commands: {},
@@ -30,7 +30,7 @@ export class PluginManager {
       {
         name: 'winter-design',
         version: '1.0.0',
-        icon: '🎨',
+        icon: '*',
         description: 'Design system integration',
         hooks: {},
         commands: {},
@@ -39,7 +39,7 @@ export class PluginManager {
       {
         name: 'winter-coding',
         version: '1.0.0',
-        icon: '💻',
+        icon: '■',
         description: 'Coding assistance tools',
         hooks: {},
         commands: {},
@@ -67,7 +67,7 @@ export class PluginManager {
             plugins.push({
               name: plugin.default?.name || file.replace('.js', ''),
               version: plugin.default?.version || '1.0.0',
-              icon: plugin.default?.icon || '🔌',
+              icon: plugin.default?.icon || '+',
               description: plugin.default?.description || 'Plugin',
               hooks: plugin.default?.hooks || {},
               commands: plugin.default?.commands || {},

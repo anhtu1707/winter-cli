@@ -1,5 +1,5 @@
 /**
- * ❄️ INTERACTIVE TOOL TESTS ❄️
+ * ❄ INTERACTIVE TOOL TESTS ❄
  * Note: Tests that require stdin (promptSelect, promptText) are skipped
  * since there's no way to provide input in test mode.
  */

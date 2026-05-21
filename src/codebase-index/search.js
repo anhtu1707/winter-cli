@@ -1,5 +1,5 @@
 /**
- * ❄️ CODEBASE SEMANTIC SEARCH ❄️
+ * ❄ CODEBASE SEMANTIC SEARCH ❄
  * Wraps CodebaseIndexer with advanced query capabilities:
  * - Natural language search
  * - Symbol/definition search

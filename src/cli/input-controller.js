@@ -86,6 +86,12 @@ export class WinterInputController {
         void this.handleDirectClipboardPaste();
         return;
       }
+
+      if (key.name === 'return' && (key.shift || key.meta)) {
+        repl.rl.write('\\\n');
+        return;
+      }
+
       if (key.ctrl || key.meta) return;
 
       if (typeof str === 'string' && str.length > 1) {

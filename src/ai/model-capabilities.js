@@ -1,5 +1,5 @@
 /**
- * ❄️ MODEL CAPABILITIES ❄️
+ * ❄ MODEL CAPABILITIES ❄
  * Detect AI model capability tier from model name.
  * Small models need aggressive prompting to compete with large ones.
  */

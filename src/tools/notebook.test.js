@@ -1,5 +1,5 @@
 /**
- * ❄️ NOTEBOOK TOOL TESTS ❄️
+ * ❄ NOTEBOOK TOOL TESTS ❄
  */
 
 import { test, afterEach } from 'node:test';

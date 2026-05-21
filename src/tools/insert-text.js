@@ -1,5 +1,5 @@
 /**
- * ❄️ INSERT TEXT TOOL ❄️
+ * ❄ INSERT TEXT TOOL ❄
  * Insert text at a specific line or position in a file
  */
 

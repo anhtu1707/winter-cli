@@ -1,5 +1,5 @@
 /**
- * ❄️ COMMAND PARSER ❄️
+ * ❄ COMMAND PARSER ❄
  * Parse and execute CLI commands
  */
 

@@ -1,5 +1,5 @@
 /**
- * ❄️ NOTEBOOK TOOL ❄️
+ * ❄ NOTEBOOK TOOL ❄
  * Jupyter notebook read/edit support (.ipynb files)
  */
 

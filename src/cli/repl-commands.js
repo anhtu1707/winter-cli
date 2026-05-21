@@ -103,7 +103,7 @@ export async function handleSlashCommand(repl, input) {
             console.log(`\n${colors.cyan}ECC ${result.section}:${colors.reset} ${result.description}`);
             if (result.entries) {
               result.entries.forEach(e => {
-                const icon = e.isDirectory ? '📂' : '📄';
+                const icon = e.isDirectory ? '►' : '📄';
                 console.log(`  ${icon} ${e.name}`);
               });
             }
@@ -120,7 +120,7 @@ export async function handleSlashCommand(repl, input) {
             console.log(`  ${colors.dim}No results${colors.reset}`);
           } else {
             searchResult.matches.forEach(m => {
-              const icon = m.isDirectory ? '📂' : '📄';
+              const icon = m.isDirectory ? '►' : '📄';
               console.log(`  ${icon} [${m.section}] ${m.name}`);
             });
           }
@@ -174,7 +174,7 @@ export async function handleSlashCommand(repl, input) {
           console.log(`\n${colors.cyan}=== Vote Results ===${colors.reset}`);
           if (result.winner) {
             const winner = result.results[result.winner];
-            console.log(`\n${colors.green}🏆 Winner: ${result.winner} (${winner.model})${colors.reset}`);
+            console.log(`\n${colors.green}★ Winner: ${result.winner} (${winner.model})${colors.reset}`);
             console.log(`${colors.dim}${'─'.repeat(50)}${colors.reset}`);
             console.log(winner.content.slice(0, 2000));
             if (winner.content.length > 2000) console.log(`${colors.dim}... (${winner.content.length - 2000} more chars)${colors.reset}`);
@@ -219,7 +219,7 @@ export async function handleSlashCommand(repl, input) {
       }
       {
         const url = args[0].replace(/^['"]|['"]$/g, '');
-        console.log(`${colors.cyan}🌐 Đang mở: ${url}${colors.reset}`);
+        console.log(`${colors.cyan}@ Đang mở: ${url}${colors.reset}`);
         try {
           // Thử WebFetch trước (nhanh, lấy text)
           const result = await repl.tools.execute('WebFetch', { url });
@@ -288,6 +288,46 @@ export async function handleSlashCommand(repl, input) {
       break;
     case '/history':
       repl.showReplay(args[0] ? parseInt(args[0], 10) : 20);
+      return;
+    case '/tool':
+      const toolCalls = [];
+      const history = repl.session.getHistory(30);
+      let idxCounter = 1;
+      for (const msg of history) {
+        if (msg.tool_calls && Array.isArray(msg.tool_calls)) {
+          for (const tc of msg.tool_calls) {
+            toolCalls.push({ index: idxCounter++, call: tc });
+          }
+        }
+      }
+      if (args.length === 0) {
+        if (toolCalls.length === 0) {
+          console.log(`${colors.dim}No recent tool calls found.${colors.reset}`);
+        } else {
+          console.log(`${colors.cyan}Recent Tool Calls:${colors.reset}`);
+          for (const tc of toolCalls.slice(-10)) {
+            const funcName = tc.call.function?.name || tc.call.toolName || 'Unknown';
+            console.log(`  ${colors.green}[${tc.index}]${colors.reset} ${funcName}`);
+          }
+          console.log(`${colors.dim}Use /tool <index> to view arguments.${colors.reset}`);
+        }
+      } else {
+        const targetIndex = parseInt(args[0], 10);
+        const target = toolCalls.find(tc => tc.index === targetIndex);
+        if (!target) {
+          console.log(`${colors.red}Tool call [${targetIndex}] not found.${colors.reset}`);
+        } else {
+          const funcName = target.call.function?.name || target.call.toolName || 'Unknown';
+          const argsStr = target.call.function?.arguments || target.call.toolArgs || '{}';
+          console.log(`\n${colors.cyan}=== Tool Call [${targetIndex}]: ${funcName} ===${colors.reset}`);
+          try {
+            const parsed = typeof argsStr === 'string' ? JSON.parse(argsStr) : argsStr;
+            console.log(JSON.stringify(parsed, null, 2));
+          } catch (e) {
+            console.log(argsStr);
+          }
+        }
+      }
       return;
     case '/new':
       await repl.session.newSession({ project: repl.projectPath });

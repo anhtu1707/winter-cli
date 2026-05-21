@@ -1,5 +1,5 @@
 /**
- * ❄️ SCHEDULER TOOL ❄️
+ * ❄ SCHEDULER TOOL ❄
  * Schedule wakeup reminders and recurring tasks
  */
 

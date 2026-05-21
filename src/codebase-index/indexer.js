@@ -1,5 +1,5 @@
 /**
- * ❄️ CODEBASE INDEXER ❄️
+ * ❄ CODEBASE INDEXER ❄
  * Scans project files, creates chunks for embedding/search.
  * Phase 1 — Cursor-like codebase indexing.
  */

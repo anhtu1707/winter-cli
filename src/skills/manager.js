@@ -1,5 +1,5 @@
 /**
- * ❄️ SKILL MANAGER ❄️
+ * ❄ SKILL MANAGER ❄
  * Manage Winter CLI skills
  */
 
@@ -19,7 +19,7 @@ export class SkillManager {
     return [
       {
         name: 'coding',
-        icon: '💻',
+        icon: '■',
         description: 'Code analysis, generation, and review',
         prompts: [
           'Analyze this code for issues',
@@ -29,7 +29,7 @@ export class SkillManager {
       },
       {
         name: 'design',
-        icon: '🎨',
+        icon: '*',
         description: 'Design system and brand guidelines',
         prompts: [
           'Apply {brand} design patterns',
@@ -39,7 +39,7 @@ export class SkillManager {
       },
       {
         name: 'debug',
-        icon: '🔧',
+        icon: '$',
         description: 'Debugging and error analysis',
         prompts: [
           'Find the root cause of this error',
@@ -49,7 +49,7 @@ export class SkillManager {
       },
       {
         name: 'refactor',
-        icon: '♻️',
+        icon: '♻',
         description: 'Code refactoring and improvements',
         prompts: [
           'Simplify this function',
@@ -69,7 +69,7 @@ export class SkillManager {
       },
       {
         name: 'security',
-        icon: '🔒',
+        icon: '#',
         description: 'Security analysis and best practices',
         prompts: [
           'Find potential security vulnerabilities',
@@ -79,7 +79,7 @@ export class SkillManager {
       },
       {
         name: 'performance',
-        icon: '⚡',
+        icon: '▶',
         description: 'Performance optimization',
         prompts: [
           'Identify performance bottlenecks',
@@ -107,7 +107,7 @@ export class SkillManager {
           const name = file.replace('.md', '');
           skills.push({
             name,
-            icon: '🔧',
+            icon: '$',
             description: this.extractDescription(content),
             isCustom: true,
           });

@@ -1,5 +1,5 @@
 /**
- * ❄️ STRING REPLACE ALL TOOL ❄️
+ * ❄ STRING REPLACE ALL TOOL ❄
  * Batch replace all occurrences of a string in a file
  */
 

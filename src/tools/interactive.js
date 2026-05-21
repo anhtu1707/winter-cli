@@ -1,5 +1,5 @@
 /**
- * ❄️ INTERACTIVE TOOL ❄️
+ * ❄ INTERACTIVE TOOL ❄
  * Ask user questions with multi-select, single-select, and text input support.
  * Pauses execution and waits for user input.
  */

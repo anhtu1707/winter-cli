@@ -1,5 +1,5 @@
 /**
- * ❄️ WEB ARCHIVE TOOL TESTS ❄️
+ * ❄ WEB ARCHIVE TOOL TESTS ❄
  */
 
 import { test, afterEach } from 'node:test';

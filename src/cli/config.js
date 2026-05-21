@@ -1,5 +1,5 @@
 /**
- * ❄️ CONFIG LOADER ❄️
+ * ❄ CONFIG LOADER ❄
  * Load and save Winter CLI configuration
  */
 

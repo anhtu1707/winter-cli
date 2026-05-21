@@ -1,5 +1,5 @@
 /**
- * ❄️ WEB ARCHIVE TOOL ❄️
+ * ❄ WEB ARCHIVE TOOL ❄
  * Fetch archived/cached versions of web pages from Wayback Machine,
  * Google Cache, and local cache. Inspired by Claude Code's WebArchive.
  */

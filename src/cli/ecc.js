@@ -1,5 +1,5 @@
 /**
- * ❄️ ECC Integration ❄️
+ * ❄ ECC Integration ❄
  * Everything Claude Code — agent harness performance optimization system
  * Browsing, searching, syncing ECC resources inside Winter
  */
@@ -246,7 +246,7 @@ export class ECCManager {
     for (const section of sections) {
       const entries = await this._listDir(section.path);
       const count = entries ? entries.length : 0;
-      const icon = entries ? (count > 0 ? '📂' : '📁') : '⛔';
+      const icon = entries ? (count > 0 ? '►' : '►') : '⛔';
       console.log(`  ${icon} ${colors.green}${section.name}${colors.reset} ${colors.dim}(${count} items)${colors.reset}`);
       console.log(`    ${colors.dim}${section.desc}${colors.reset}`);
     }

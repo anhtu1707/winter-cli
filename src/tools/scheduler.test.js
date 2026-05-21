@@ -1,5 +1,5 @@
 /**
- * ❄️ SCHEDULER TOOL TESTS ❄️
+ * ❄ SCHEDULER TOOL TESTS ❄
  */
 
 import { test } from 'node:test';

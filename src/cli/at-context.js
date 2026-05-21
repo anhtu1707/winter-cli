@@ -1,5 +1,5 @@
 /**
- * ❄️ @-SYMBOLS CONTEXT SYSTEM ❄️
+ * ❄ @-SYMBOLS CONTEXT SYSTEM ❄
  * Parses @-symbols in user input and resolves them to context.
  * Supports: @file, @folder, @def, @code, @problems, @web, @docs, @search
  *

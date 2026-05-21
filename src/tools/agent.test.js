@@ -1,5 +1,5 @@
 /**
- * ❄️ AGENT TOOL TESTS ❄️
+ * ❄ AGENT TOOL TESTS ❄
  */
 
 import { test } from 'node:test';

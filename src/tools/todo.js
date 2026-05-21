@@ -1,5 +1,5 @@
 /**
- * ❄️ TODO TOOL ❄️
+ * ❄ TODO TOOL ❄
  * Persistent todo list management
  */
 

@@ -191,5 +191,7 @@ export function renderToolPanel({ toolName = 'Tool', summary = '', success = tru
     return `    ${c.dim}${line}${c.reset}`;
   }).join('\n');
 
-  return `${status} ${c.bright}${c.cyan}${toolName}${c.reset} ${c.dim}· ${firstLine}${c.reset}\n${formattedRest}`;
+  let output = `${status} ${c.bright}${c.cyan}${toolName}${c.reset} ${c.dim}· ${firstLine}${c.reset}`;
+  if (formattedRest) output += `\n${formattedRest}`;
+  return output;
 }

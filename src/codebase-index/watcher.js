@@ -1,5 +1,5 @@
 /**
- * ❄️ CODEBASE WATCHER ❄️
+ * ❄ CODEBASE WATCHER ❄
  * Watches project files for changes and triggers re-indexing.
  * Uses fs.watch with debouncing.
  */

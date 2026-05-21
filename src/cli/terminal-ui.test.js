@@ -9,7 +9,7 @@ test('visibleWidth ignores ANSI styling', () => {
 test('visibleWidth counts emoji as wider cells', () => {
   assert.equal(visibleWidth('⚠'), 2);
   assert.equal(visibleWidth('✓'), 1);
-  assert.equal(visibleWidth('⚙'), 2);
+  assert.equal(visibleWidth('$'), 2);
 });
 
 test('supportsUnicodeUi defaults to ASCII in plain Windows shells', () => {

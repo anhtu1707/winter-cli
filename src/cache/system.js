@@ -1,5 +1,5 @@
 /**
- * ❄️ CACHE SYSTEM ❄️
+ * ❄ CACHE SYSTEM ❄
  * Context embedding and response caching
  */
 

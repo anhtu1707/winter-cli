@@ -275,17 +275,17 @@ export class BenchmarkRunner {
 
     const lines = [];
     lines.push(`\n${colors.cyan}${'═'.repeat(60)}${colors.reset}`);
-    lines.push(`${colors.bright}${colors.cyan}   🧠 WINTER MODEL BENCHMARK${colors.reset}`);
+    lines.push(`${colors.bright}${colors.cyan}   ◆ WINTER MODEL BENCHMARK${colors.reset}`);
     lines.push(`${colors.cyan}${'═'.repeat(60)}${colors.reset}`);
     lines.push(`  ${colors.dim}${benchmarkResult.timestamp}${colors.reset}`);
     lines.push(`  ${colors.dim}Total time: ${(benchmarkResult.totalElapsed / 1000).toFixed(1)}s${colors.reset}`);
     lines.push('');
 
     // Ranking
-    lines.push(`${colors.bright}🏆 RANKING${colors.reset}`);
+    lines.push(`${colors.bright}★ RANKING${colors.reset}`);
     lines.push(`${'─'.repeat(40)}`);
     benchmarkResult.ranking.forEach((r, i) => {
-      const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : ` ${i + 1}.`;
+      const medal = i === 0 ? '1.' : i === 1 ? '2.' : i === 2 ? '3.' : ` ${i + 1}.`;
       const bar = this._scoreBar(r.score, 20);
       lines.push(`  ${medal} ${colors.bright}${r.name}${colors.reset} ${bar} ${r.score}%`);
       lines.push(`     ${colors.dim}Model: ${r.model} | Time: ${(r.elapsed / 1000).toFixed(1)}s${colors.reset}`);
@@ -295,7 +295,7 @@ export class BenchmarkRunner {
     // Detail per provider
     for (const [name, data] of Object.entries(benchmarkResult.providers)) {
       lines.push(`${colors.bright}${'─'.repeat(50)}${colors.reset}`);
-      lines.push(`${colors.bright}📊 ${name}${colors.reset} ${colors.dim}(${data.model})${colors.reset}`);
+      lines.push(`${colors.bright}≡ ${name}${colors.reset} ${colors.dim}(${data.model})${colors.reset}`);
       lines.push(`${'─'.repeat(50)}`);
 
       const categories = {};
@@ -316,7 +316,7 @@ export class BenchmarkRunner {
 
       // Per-item breakdown
       for (const r of data.results) {
-        const icon = r.score >= 0.8 ? '✅' : r.score >= 0.5 ? '🟡' : r.score >= 0.2 ? '🟠' : '❌';
+        const icon = r.score >= 0.8 ? '✅' : r.score >= 0.5 ? '○' : r.score >= 0.2 ? '●' : '❌';
         const label = r.type === 'question' ? r.id : r.title;
         lines.push(`  ${icon} ${colors.dim}${label}:${colors.reset} ${Math.round(r.score * 100)}% (${(r.elapsed / 1000).toFixed(1)}s)`);
         // Show preview of answer

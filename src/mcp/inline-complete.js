@@ -1,5 +1,5 @@
 /**
- * ❄️ INLINE COMPLETION — /complete command ❄️
+ * ❄ INLINE COMPLETION — /complete command ❄
  * Provides code completion suggestions based on context.
  * Integrates the existing CompletionProvider into the REPL.
  */
@@ -76,15 +76,15 @@ export class InlineComplete {
     const width = terminalWidth(76, 116, 92);
     const body = result.completions.map((c, i) => {
       const typeIcon = c.type === 'block-close' ? '}' :
-                       c.type === 'import' ? '📦' :
+                       c.type === 'import' ? '■' :
                        c.type === 'function' ? 'ƒ' :
                        c.type === 'method' ? '.' :
                        c.type === 'arrow-function' ? '=>' :
                        c.type === 'variable' ? '✕' :
-                       c.type === 'keyword' ? '🔑' :
-                       c.type === 'export' ? '📤' :
-                       c.type === 'import-path' ? '📁' :
-                       c.type === 'cached' ? '💾' : '•';
+                       c.type === 'keyword' ? '#' :
+                       c.type === 'export' ? '^' :
+                       c.type === 'import-path' ? '►' :
+                       c.type === 'cached' ? 'v' : '•';
       const confidence = (c.confidence * 100).toFixed(0);
       return `  ${colors.cyan}#${i + 1}${colors.reset} ${typeIcon} ${colors.green}${c.text}${colors.reset}` +
         `\n    ${colors.dim}type: ${c.type}, confidence: ${confidence}%${colors.reset}`;

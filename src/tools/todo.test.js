@@ -1,5 +1,5 @@
 /**
- * ❄️ TODO TOOL TESTS ❄️
+ * ❄ TODO TOOL TESTS ❄
  */
 
 import { test } from 'node:test';

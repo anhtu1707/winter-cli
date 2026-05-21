@@ -1847,6 +1847,22 @@ ${colors.reset}
       if (chunk.content) {
         content += chunk.content;
       }
+
+      if (this.spinner && printed === false) {
+        if (toolCallParts.length > 0) {
+          const lastCall = toolCallParts[toolCallParts.length - 1];
+          if (lastCall.function?.name) {
+            const args = lastCall.function.arguments || '';
+            let summary = args.replace(/\s+/g, ' ');
+            if (summary.length > 60) summary = '...' + summary.slice(-60);
+            this.spinner.update(`Calling ${lastCall.function.name}... ${summary}`);
+          }
+        } else if (content.length > 0 && bufferToolModeContent) {
+          let summary = content.replace(/\s+/g, ' ');
+          if (summary.length > 60) summary = '...' + summary.slice(-60);
+          this.spinner.update(`Generating... ${summary}`);
+        }
+      }
     }
 
     if (this.spinner) this.spinner.stop();

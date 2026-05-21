@@ -1,5 +1,5 @@
 /**
- * ❄️ DESIGN COMMANDS ❄️
+ * ❄ DESIGN COMMANDS ❄
  * Design system integration with brand guidelines
  */
 
@@ -163,7 +163,7 @@ export class DesignCommands {
       }
 
       console.log(`\n${'='.repeat(60)}`);
-      console.log(`${colors.cyan}📋 ${brand} - ${fileName}${colors.reset}`);
+      console.log(`${colors.cyan}≡ ${brand} - ${fileName}${colors.reset}`);
       console.log('='.repeat(60));
       console.log('');
 

@@ -13,8 +13,14 @@ export class Spinner {
     const cyan = this.colors.cyan || '';
     const reset = this.colors.reset || '';
     const dim = this.colors.dim || '';
+    this.startTime = Date.now();
     this.interval = setInterval(() => {
-      process.stdout.write(`\r\x1b[K${cyan}${this.frames[this.frameIndex]}${reset} ${dim}${this.text}${reset}`);
+      const elapsed = Math.floor((Date.now() - this.startTime) / 1000);
+      let timeStr = '';
+      if (elapsed >= 5) {
+        timeStr = ` (still thinking... ${elapsed}s)`;
+      }
+      process.stdout.write(`\r\x1b[K${cyan}${this.frames[this.frameIndex]}${reset} ${dim}${this.text}${timeStr}${reset}`);
       this.frameIndex = (this.frameIndex + 1) % this.frames.length;
     }, 80);
   }

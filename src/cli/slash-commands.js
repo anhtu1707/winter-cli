@@ -9,6 +9,7 @@ export const SLASH_COMMANDS = [
   { cmd: '/session', desc: 'Session management' },
   { cmd: '/sessions', desc: 'List all sessions' },
   { cmd: '/history', desc: 'Browse recent chat and tool history', usage: '/history [count]' },
+  { cmd: '/tool', desc: 'Inspect recent tool calls and their raw data', usage: '/tool [index]' },
   { cmd: '/new', desc: 'Start a new conversation' },
   { cmd: '/clear', desc: 'Clear screen' },
   { cmd: '/remember', desc: 'Store in memory', usage: '/remember <text>' },
