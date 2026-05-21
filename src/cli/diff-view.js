@@ -8,8 +8,15 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import readline from 'readline';
 import { spawn } from 'child_process';
+import { highlight } from 'cli-highlight';
 import { renderBox, terminalWidth, stripAnsi, wrapText, visibleWidth } from './terminal-ui.js';
 import { colors } from './snowflake-logo.js';
+
+// Setup background colors if not defined in snowflake-logo
+const bgRed = '\x1b[41m';
+const bgGreen = '\x1b[42m';
+const bgDarkRed = '\x1b[48;5;52m';
+const bgDarkGreen = '\x1b[48;5;22m';
 
 export class DiffView {
   constructor(options = {}) {
@@ -124,42 +131,91 @@ export class DiffView {
   // ── Private Methods ─────────────────────────────────
 
   _renderDiff(title, diff, width) {
-    const body = [];
-    const maxLines = Math.min(30, diff.additionsList.length + diff.removalsList.length);
-    let added = 0;
-    let removed = 0;
+    const innerWidth = Math.max(40, width - 6);
+    const header = `${colors.bright} ${title} ${colors.reset} ${colors.dim}— ${diff.additions} additions, ${diff.removals} deletions${colors.reset}`;
 
-    body.push(`  ${colors.dim}${path.basename(title)} — ${diff.additions} additions, ${diff.removals} deletions${colors.reset}`);
+    console.log(`\n${colors.magenta}┌${'─'.repeat(width - 2)}┐${colors.reset}`);
+    console.log(`${colors.magenta}│${colors.reset} ${header}${''.padEnd(Math.max(0, width - 4 - stripAnsi(header).length))}${colors.magenta}│${colors.reset}`);
+    console.log(`${colors.magenta}├${'─'.repeat(width - 2)}┤${colors.reset}`);
 
+    const maxLines = 40;
+    let printed = 0;
+    let lineNum = 0;
+    const contextLines = 2; // lines of context around changes
+
+    // Build display entries with context
+    const entries = [];
     for (const part of diff.raw) {
-      if (added + removed >= maxLines) {
-        body.push(`  ${colors.dim}... and ${diff.changes - maxLines} more changes${colors.reset}`);
-        break;
-      }
-
-      const lines = part.value.split('\n').filter(Boolean);
-      const isAdded = part.added;
-      const isRemoved = part.removed;
-
+      const lines = part.value.replace(/\n$/, '').split('\n');
       for (const line of lines) {
-        if (added + removed >= maxLines) break;
-        if (isAdded) {
-          added++;
-          body.push(`  ${colors.green}+ ${line}${colors.reset}`);
-        } else if (isRemoved) {
-          removed++;
-          body.push(`  ${colors.red}- ${line}${colors.reset}`);
+        lineNum++;
+        if (part.added) {
+          entries.push({ type: 'add', num: lineNum, text: line });
+        } else if (part.removed) {
+          entries.push({ type: 'del', num: lineNum, text: line });
+        } else {
+          entries.push({ type: 'ctx', num: lineNum, text: line });
         }
       }
     }
 
-    console.log(`\n${renderBox({
-      title: ` ${title} `,
-      width,
-      borderColor: colors.magenta,
-      titleColor: colors.bright,
-      body,
-    })}\n`);
+    // Find which context lines to show (near changes)
+    const changeIndices = new Set();
+    entries.forEach((e, i) => {
+      if (e.type !== 'ctx') {
+        for (let j = Math.max(0, i - contextLines); j <= Math.min(entries.length - 1, i + contextLines); j++) {
+          changeIndices.add(j);
+        }
+      }
+    });
+
+    let lastPrinted = -1;
+    for (let i = 0; i < entries.length && printed < maxLines; i++) {
+      const e = entries[i];
+      if (e.type === 'ctx' && !changeIndices.has(i)) continue;
+
+      // Show separator if there's a gap
+      if (lastPrinted >= 0 && i - lastPrinted > 1) {
+        console.log(`${colors.magenta}│${colors.reset} ${colors.dim}${'·'.repeat(Math.min(20, innerWidth))}${colors.reset}`);
+      }
+
+      const numStr = String(e.num).padStart(4);
+      const maxText = Math.max(10, innerWidth - 8);
+      const truncated = e.text.length > maxText ? e.text.slice(0, maxText - 3) + '...' : e.text;
+
+      // Detect language from file extension for highlight
+      const ext = path.extname(title).slice(1) || 'javascript';
+      const syntaxHighlight = (text) => {
+        try {
+          return highlight(text, { language: ext, ignoreIllegals: true });
+        } catch (e) {
+          return text;
+        }
+      };
+
+      if (e.type === 'add') {
+        const lineContent = syntaxHighlight(truncated);
+        console.log(`${colors.magenta}│${colors.reset} ${bgDarkGreen}${colors.white}${numStr} + ${lineContent}${' '.repeat(Math.max(0, innerWidth - stripAnsi(truncated).length - 8))}${colors.reset}`);
+      } else if (e.type === 'del') {
+        const lineContent = syntaxHighlight(truncated);
+        console.log(`${colors.magenta}│${colors.reset} ${bgDarkRed}${colors.white}${numStr} - ${lineContent}${' '.repeat(Math.max(0, innerWidth - stripAnsi(truncated).length - 8))}${colors.reset}`);
+      } else {
+        const lineContent = syntaxHighlight(truncated);
+        console.log(`${colors.magenta}│${colors.reset} ${colors.dim}${numStr}   ${colors.reset}${lineContent}`);
+      }
+
+      printed++;
+      lastPrinted = i;
+    }
+
+    if (printed >= maxLines && entries.length > maxLines) {
+      const remaining = entries.filter(e => e.type !== 'ctx').length - printed;
+      if (remaining > 0) {
+        console.log(`${colors.magenta}│${colors.reset} ${colors.dim}  ... and ${remaining} more changes${colors.reset}`);
+      }
+    }
+
+    console.log(`${colors.magenta}└${'─'.repeat(width - 2)}┘${colors.reset}\n`);
   }
 
   async _promptChoice() {
@@ -236,12 +292,12 @@ export class DiffView {
       };
 
       rl.question(
-        `\n${colors.cyan}Options:${colors.reset}\n` +
-        `  ${colors.green}[a]${colors.reset} — Accept all (apply full diff)\n` +
-        `  ${colors.red}[r]${colors.reset} — Reject all\n` +
-        `  ${colors.yellow}[m]${colors.reset} — Manual edit (opens file in $EDITOR)\n` +
-        `  ${colors.dim}[s]${colors.reset} — Skip\n` +
-        `${colors.yellow}Choose [a/r/m/s]: ${colors.reset}`,
+        `\n${colors.cyan}Edit Options:${colors.reset}\n` +
+        `  ${colors.green}[a]${colors.reset} Accept   — Apply the complete diff\n` +
+        `  ${colors.red}[r]${colors.reset} Reject   — Discard these changes\n` +
+        `  ${colors.yellow}[m]${colors.reset} Manual   — Open file in $EDITOR to manually resolve\n` +
+        `  ${colors.dim}[s]${colors.reset} Skip     — Skip for now\n` +
+        `${colors.yellow}👉 Choose [a/r/m/s]: ${colors.reset}`,
         onAnswer
       );
 

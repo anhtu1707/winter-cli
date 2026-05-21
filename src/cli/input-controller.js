@@ -1,7 +1,8 @@
 import readline from 'readline';
 import { colors } from './snowflake-logo.js';
-import { drawInFixedArea, enableFixedPanel, moveToPromptRow, moveToScrollRegion, padVisible, renderBox, terminalWidth } from './terminal-ui.js';
+import { padVisible, renderBox, terminalWidth } from './terminal-ui.js';
 import { buildTuiSnapshot, renderInputPanel } from './tui.js';
+import { terminalManager } from './terminal-manager.js';
 
 export class WinterInputController {
   constructor(repl) {
@@ -20,17 +21,48 @@ export class WinterInputController {
       : '';
     
     const lines = [panel.top + queueTag, panel.status, panel.hint].filter(l => l && l.trim() !== '');
-    process.stdout.write('\n' + lines.join('\n') + '\n');
     
-    if (typeof repl.rl?.setPrompt === 'function') {
-      repl.rl.setPrompt(panel.prompt);
-    }
-    repl.rl?.prompt?.();
+    const redrawFn = () => {
+      // Don't redraw if it shouldn't be visible anymore
+      if (!terminalManager.isPromptVisible) return;
+      process.stdout.write('\n' + lines.join('\n') + '\n');
+      if (typeof repl.rl?.setPrompt === 'function') {
+        repl.rl.setPrompt(panel.prompt);
+      }
+      if (repl.slashMenu?.open) {
+        this.renderSlashMenu();
+      } else {
+        if (repl.running && !repl.readlineClosed) {
+          repl.rl?.prompt?.(true);
+        }
+      }
+    };
+
+    const getLinesCountFn = () => {
+      let count = lines.length + 2; // empty line + lines + prompt line
+      if (repl.slashMenu?.open && repl.slashMenu?.printedLines) {
+        count += repl.slashMenu.printedLines;
+      }
+      return count;
+    };
+
+    const onHideFn = () => {
+      if (repl.slashMenu) {
+        repl.slashMenu.printedLines = 0;
+      }
+    };
+
+    terminalManager.setPromptState(true, getLinesCountFn, redrawFn, onHideFn);
+    redrawFn();
   }
 
   closeInputBox() {
     const repl = this.repl;
     if (!repl.running || repl.readlineClosed) return;
+    
+    terminalManager.hidePrompt();
+    terminalManager.setPromptState(false);
+    
     const panel = this.buildInputPanel();
     process.stdout.write(`${panel.bottom}\n`);
   }
@@ -174,6 +206,7 @@ export class WinterInputController {
 
     readline.moveCursor(process.stdout, 0, -printedLines);
     readline.clearScreenDown(process.stdout);
+    repl.slashMenu.printedLines = 0;
   }
 
   handleSlashMenuKey(key = {}) {
@@ -247,23 +280,12 @@ export class WinterInputController {
 
     this.clearSlashMenuRender();
 
-    const ASCII_BOX = {
-      topLeft: '+',
-      topRight: '+',
-      bottomLeft: '+',
-      bottomRight: '+',
-      horizontal: '-',
-      vertical: '|',
-      teeLeft: '+',
-      teeRight: '+',
-    };
     const rendered = renderBox({
       title: 'Command Palette',
       width: terminalWidth(66, 110, 88),
       borderColor: colors.magenta,
       titleColor: colors.cyan,
       body,
-      boxChars: ASCII_BOX,
     });
 
     process.stdout.write(`\n${rendered}\n`);

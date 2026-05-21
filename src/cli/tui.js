@@ -176,6 +176,20 @@ export function renderAssistantPanel({ content = '', footer = '', colors, title 
 export function renderToolPanel({ toolName = 'Tool', summary = '', success = true, colors } = {}) {
   const c = colors || {};
   const status = success ? `${c.brightGreen}✓${c.reset}` : `${c.red}✖${c.reset}`;
-  const plainSummary = String(summary || '').replace(/\n/g, ' ');
-  return `${status} ${c.bright}${c.cyan}${toolName}${c.reset} ${c.dim}· ${plainSummary}${c.reset}`;
+  
+  if (!summary.includes('\n')) {
+    return `${status} ${c.bright}${c.cyan}${toolName}${c.reset} ${c.dim}· ${summary}${c.reset}`;
+  }
+
+  const lines = summary.split('\n');
+  const firstLine = lines.shift();
+  
+  const formattedRest = lines.map(line => {
+    if (line.startsWith('+')) return `    ${c.green}${line}${c.reset}`;
+    if (line.startsWith('-')) return `    ${c.red}${line}${c.reset}`;
+    if (line.startsWith('@@')) return `    ${c.cyan}${line}${c.reset}`;
+    return `    ${c.dim}${line}${c.reset}`;
+  }).join('\n');
+
+  return `${status} ${c.bright}${c.cyan}${toolName}${c.reset} ${c.dim}· ${firstLine}${c.reset}\n${formattedRest}`;
 }

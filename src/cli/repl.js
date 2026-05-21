@@ -16,6 +16,7 @@ import {
   renderStartupTui,
   renderStatusPanel,
 } from './tui.js';
+import { terminalManager } from './terminal-manager.js';
 import { WinterInputController } from './input-controller.js';
 import { ToolExecutor } from '../tools/executor.js';
 import { SessionManager } from '../session/manager.js';
@@ -125,6 +126,8 @@ export class WinterREPL {
     this.watchers = [];
     this.startupNotices = [];
     this._fixedPanel = Boolean(process.stdout.isTTY) && process.env.WINTER_FIXED_PANEL_TUI !== '0';
+    
+    terminalManager.install();
   }
 
   async initCodebaseSearch() {
@@ -654,22 +657,106 @@ export class WinterREPL {
     // Hiển thị prompt lần đầu tiên ngay khi khởi động xong.
     this.showInputPrompt();
 
-    this.rl.on('line', (line) => {
+    // Paste buffer: gom nhiều dòng paste nhanh thành 1 tin nhắn
+    this._multilineBuffer = [];
+    this._pasteBuffer = [];
+    this._pasteTimer = null;
+    this._isPasteChunk = false;
+    this._pasteChunkTimer = null;
+    const PASTE_DELAY = 80;
+
+    process.stdin.on('data', (chunk) => {
+      // If a large chunk or chunk with newlines arrives, it's definitely a paste.
+      if (chunk.length > 3 || chunk.includes('\n')) {
+        this._isPasteChunk = true;
+        if (this._pasteChunkTimer) clearTimeout(this._pasteChunkTimer);
+        this._pasteChunkTimer = setTimeout(() => {
+          this._isPasteChunk = false;
+        }, 150);
+      }
+    });
+
+    const flushPasteBuffer = () => {
+      this._pasteTimer = null;
+      if (this._pasteBuffer.length === 0) return;
+
+      const isSingleLineInput = this._pasteBuffer.length === 1 && !this._isPasteChunk;
+      const isJustEmptyEnter = this._pasteBuffer.length === 1 && this._pasteBuffer[0].trim() === '';
+
+      // Normal single-line submit
+      if (isSingleLineInput && this._multilineBuffer.length === 0) {
+        const line = this._pasteBuffer[0].trim();
+        this._pasteBuffer = [];
+        if (!line) {
+          if (this.running && !this.readlineClosed) {
+            readline.moveCursor(process.stdout, 0, -1);
+            readline.clearLine(process.stdout, 0);
+            this.rl.prompt(true);
+          }
+          return;
+        }
+        
+        // Command to enter multiline mode manually
+        if (line === '/multi' || line === '/m') {
+          this._multilineBuffer.push('');
+          console.log(`${colors.cyan}│ ${colors.dim}[ Đã bật chế độ gõ nhiều dòng. Nhấn Enter 2 lần (dòng trống) để gửi. ]${colors.reset}`);
+          if (this.running && !this.readlineClosed) this.rl.prompt(true);
+          return;
+        }
+
+        this.submitInputQueue(line);
+        return;
+      }
+
+      // We are in multiline/paste mode
+      this._multilineBuffer.push(...this._pasteBuffer);
+      this._pasteBuffer = [];
+
+      // If they pressed Enter on an empty line, submit the multiline buffer!
+      if (isJustEmptyEnter && this._multilineBuffer.length > 1) {
+        // Remove the trailing empty line
+        this._multilineBuffer.pop();
+        const combined = this._multilineBuffer.join('\n').trim();
+        this._multilineBuffer = [];
+        this._isPasteChunk = false;
+        
+        if (!combined) {
+          if (this.running && !this.readlineClosed) {
+            this.closeInputBox();
+            this.showInputPrompt();
+          }
+          return;
+        }
+        
+        this.submitInputQueue(combined);
+        return;
+      }
+
+      // Otherwise, we are still collecting! Wait for user to submit.
+      readline.clearLine(process.stdout, 0);
+      readline.cursorTo(process.stdout, 0);
+      const linesCount = this._multilineBuffer.length;
+      console.log(`${colors.cyan}│ ${colors.dim}[ Đang nhập nhiều dòng (${linesCount} dòng)... Nhấn Enter ở dòng trống để gửi ]${colors.reset}`);
+      if (this.running && !this.readlineClosed) this.rl.prompt(true);
+    };
+
+    this.submitInputQueue = (combined) => {
       this.inputQueue = this.inputQueue
         .then(async () => {
           this.closeInputBox();
-          const input = line.trim();
-          if (input) {
-            await this.handleInput(input);
-          } else {
-            if (this.running && !this.readlineClosed) this.showInputPrompt();
-          }
+          await this.handleInput(combined);
         })
         .catch((error) => {
           this.closeInputBox();
           console.log(`\n${colors.red}? Error: ${error.message}${colors.reset}\n`);
           if (this.running && !this.readlineClosed) this.showInputPrompt();
         });
+    };
+
+    this.rl.on('line', (line) => {
+      this._pasteBuffer.push(line);
+      if (this._pasteTimer) clearTimeout(this._pasteTimer);
+      this._pasteTimer = setTimeout(flushPasteBuffer, PASTE_DELAY);
     });
 
     this.rl.on('close', async () => {
@@ -936,9 +1023,12 @@ export class WinterREPL {
       const preview = input.length > 40 ? input.slice(0, 37) + '...' : input;
       console.log(`${colors.yellow}⧗${colors.reset} ${colors.bright}Queued #${pos}${colors.reset} ${colors.dim}› ${preview}${colors.reset}`);
       this.taskQueue.push(input);
+      if (!this.readlineClosed) this.showInputPrompt();
       return;
     }
-    await this.processInputTask(input);
+    this.processInputTask(input).catch(err => {
+      console.log(colors.red + '\nLỗi xử lý hàng đợi: ' + err.message + colors.reset);
+    });
   }
 
   async processInputTask(input) {
@@ -950,6 +1040,12 @@ export class WinterREPL {
       this.history.push(input);
       if (this.history.length > this.maxHistory) {
         this.history = this.history.slice(-this.maxHistory);
+      }
+
+      // Echo tin nhắn user để xác nhận đã nhận
+      if (!input.startsWith('/') && !input.startsWith('!')) {
+        const preview = input.length > 120 ? input.slice(0, 117) + '...' : input;
+        console.log(`\n${colors.bright}${colors.green}You${colors.reset} ${colors.dim}›${colors.reset} ${colors.white}${preview}${colors.reset}`);
       }
 
       if (input.startsWith('!')) {
@@ -1030,6 +1126,7 @@ export class WinterREPL {
       if (this.spinner) this.spinner.stop();
 
       if (this.taskQueue.length > 0) {
+        this.closeInputBox();
         const nextTask = this.taskQueue.shift();
         setTimeout(() => this.processInputTask(nextTask), 0);
       } else {
@@ -1748,22 +1845,11 @@ ${colors.reset}
       }
 
       if (chunk.content) {
-        if (!printed) {
-          if (this.spinner) this.spinner.stop();
-          if (!bufferToolModeContent) {
-            process.stdout.write(`\n${colors.white}`);
-            printed = true;
-          }
-        }
         content += chunk.content;
-        if (!bufferToolModeContent) {
-          process.stdout.write(chunk.content);
-        }
       }
     }
 
     if (this.spinner) this.spinner.stop();
-    if (printed) process.stdout.write(colors.reset);
 
     const inlineToolExtraction = this.extractInlineToolCalls(content);
     const rawToolCalls = [
@@ -1776,7 +1862,7 @@ ${colors.reset}
     const toolCalls = this.normalizeToolCalls(rawToolCalls);
     const visibleContent = inlineToolExtraction.content || content;
 
-    if (bufferToolModeContent && toolCalls.length === 0 && visibleContent) {
+    if (toolCalls.length === 0 && visibleContent) {
       if (options?.requireToolEvidence && this.responseNeedsToolEvidence(visibleContent)) {
         return {
           assistantMsg: { content: visibleContent },
@@ -1792,18 +1878,6 @@ ${colors.reset}
         finalContent: visibleContent,
         finishReason,
       };
-    }
-
-    if (toolCalls.length === 0 && visibleContent) {
-      console.log(`\n${colors.dim}${this.formatAnswerFooter(startedAt, totalUsage)}${colors.reset}\n`);
-      return {
-        assistantMsg: { content: visibleContent },
-        toolCalls,
-        finalContent: visibleContent,
-        finishReason,
-      };
-    } else if (printed && visibleContent) {
-      process.stdout.write('\n');
     }
 
     return {
@@ -1974,7 +2048,6 @@ ${colors.reset}
     const profile = executionProfile || this.selectExecutionProfile(messages, { enableTools: false });
 
     try {
-      process.stdout.write(`\n${colors.white}`);
       let isFirst = true;
       for await (const chunk of this.ai.streamRequest(messages, {
         provider: profile.provider,
@@ -1982,16 +2055,19 @@ ${colors.reset}
         enableTools: false,
         signal: this.currentAbortController?.signal,
       })) {
+        if (isFirst) {
+          isFirst = false;
+        }
         if (chunk.usage) this.addUsage(totalUsage, chunk.usage);
         if (chunk.content) {
           content += chunk.content;
-          process.stdout.write(chunk.content);
         }
       }
-      process.stdout.write(colors.reset);
+
+      if (this.spinner) this.spinner.stop();
 
       if (content) {
-        console.log(`\n${colors.dim}${this.formatAnswerFooter(startedAt, totalUsage)}${colors.reset}\n`);
+        this.printAssistantAnswer(content, startedAt, totalUsage);
         return content;
       }
     } catch (error) {

@@ -70,12 +70,11 @@ export function terminalWidth(min = 72, max = 120, fallback = 88) {
 
 export function supportsUnicodeUi(env = process.env, platform = process.platform) {
   if (env.WINTER_ASCII_UI === '1' || env.WINTER_ASCII_UI === 'true') return false;
-  if (env.WINTER_UNICODE_UI === '1' || env.WINTER_UNICODE_UI === 'true') return platform !== 'win32';
-  if (platform !== 'win32') return true;
-  return false;
+  return true;
 }
 
 export function getBoxChars() {
+  if (supportsUnicodeUi()) return UNICODE_BOX;
   return ASCII_BOX;
 }
 

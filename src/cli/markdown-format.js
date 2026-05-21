@@ -1,7 +1,7 @@
 import { highlight } from 'cli-highlight';
 
 import { colors } from './snowflake-logo.js';
-import { renderBox, terminalWidth, visibleWidth, wrapText, padVisible } from './terminal-ui.js';
+import { renderBox, terminalWidth, visibleWidth, wrapText, padVisible, getBoxChars } from './terminal-ui.js';
 
 export function formatMarkdown(text) {
   if (!text) return '';
@@ -98,18 +98,23 @@ function renderMarkdownTableBlock(tableLines) {
   const columnCount = Math.max(...rows.map(row => row.length), 0);
   if (columnCount === 0) return tableLines.join('\n');
 
-  const boxWidth = Math.max(60, Math.min(terminalWidth(60, 100, 84), 100));
-  const innerWidth = boxWidth - 4;
-  const separatorWidth = (columnCount - 1) * 3;
-  const availableWidth = Math.max(columnCount * 8, innerWidth - separatorWidth);
-
   const widestCells = Array.from({ length: columnCount }, (_, columnIndex) => {
     return Math.max(8, ...rows.map(row => visibleWidth(row[columnIndex] || '')));
   });
 
+  const separatorWidth = (columnCount - 1) * 3;
   const widestTotal = widestCells.reduce((sum, width) => sum + width, 0);
+  const requiredInnerWidth = widestTotal + separatorWidth;
+  
+  const maxAllowedWidth = terminalWidth(60, 160, 120);
+  const innerWidth = Math.min(requiredInnerWidth, maxAllowedWidth - 4);
+  const availableWidth = Math.max(columnCount * 8, innerWidth - separatorWidth);
+  const boxWidth = innerWidth + 4;
+
   const scale = widestTotal > availableWidth ? availableWidth / widestTotal : 1;
   const columnWidths = widestCells.map(width => Math.max(8, Math.floor(width * scale)));
+
+  const verticalChar = getBoxChars().vertical;
 
   const renderRow = (cells) => {
     const wrappedCells = cells.map((cell, index) => wrapText(cell || '', columnWidths[index]));
@@ -122,7 +127,7 @@ function renderMarkdownTableBlock(tableLines) {
         const cellLine = wrappedCells[columnIndex][lineIndex] || '';
         parts.push(padVisible(cellLine, columnWidths[columnIndex]));
       }
-      rendered.push(parts.join(' │ '));
+      rendered.push(parts.join(` ${colors.dim}${verticalChar}${colors.reset} `));
     }
 
     return rendered;
