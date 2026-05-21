@@ -18,6 +18,7 @@ export const SLASH_COMMANDS = [
   { cmd: '/compress', desc: 'Compress old conversation context' },
   { cmd: '/context', desc: 'Inspect what Winter sends to the model', usage: '/context [task]' },
   { cmd: '/scorecard', desc: 'Score Winter against Codebuff/Codex/Claude capability gates' },
+  { cmd: '/tui', desc: 'Show Winter TUI dashboard' },
   { cmd: '/plan', desc: 'Create/view plans' },
   { cmd: '/plans', desc: 'List active plans' },
   { cmd: '/tasks', desc: 'List tasks' },

@@ -186,6 +186,22 @@ test('ContextLoader getRequiredLocalResourceSummary summarizes mandatory resourc
   assert.match(summary, /Simplicity First/);
 });
 
+test('ContextLoader getRequiredLocalResourceSummary recognizes page-agent AGENTS.md alone', async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), 'winter-required-page-agent-'));
+  await mkdir(path.join(tmpDir, 'resources', 'local', 'page-agent'), { recursive: true });
+  await writeFile(
+    path.join(tmpDir, 'resources', 'local', 'page-agent', 'AGENTS.md'),
+    '# Page Agent\n\nMonorepo architecture and DOM pipeline.\n'
+  );
+
+  const loader = new ContextLoader({ projectPath: tmpDir });
+  const summary = await loader.getRequiredLocalResourceSummary();
+
+  assert.match(summary, /\[Required Local Resource Rules\]/);
+  assert.match(summary, /page-agent/);
+  assert.match(summary, /AGENTS\.md/);
+});
+
 test('ContextLoader compactText truncates long text', () => {
   const loader = new ContextLoader({ projectPath: '/test' });
   const short = 'hello';

@@ -14,6 +14,24 @@ test('Bash validates missing command instead of throwing', async () => {
   assert.equal(result.error, 'command is required');
 });
 
+test('Bash rejects npm run scripts that are not defined in package.json', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-missing-script-'));
+  await writeFile(path.join(root, 'package.json'), JSON.stringify({
+    scripts: {
+      test: 'node --test',
+      lint: 'eslint .',
+    },
+  }));
+  const tools = new ToolExecutor({ projectPath: root });
+
+  const result = await tools.execute('Bash', { command: 'npm run review' }, { cwd: root });
+
+  assert.equal(result.success, false);
+  assert.match(result.error, /review/);
+  assert.match(result.recovery, /npm run test/);
+  assert.match(result.recovery, /npm run lint/);
+});
+
 test('Read validates missing file path before execution', async () => {
   const tools = new ToolExecutor({ projectPath: process.cwd() });
   const result = await tools.execute('Read', {});
@@ -21,6 +39,22 @@ test('Read validates missing file path before execution', async () => {
   assert.equal(result.success, false);
   assert.match(result.error, /Missing required argument/);
   assert.match(result.recovery, /Read/);
+});
+
+test('Read missing file returns recovery guidance and nearby candidates', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-read-missing-'));
+  await mkdir(path.join(root, 'src', 'app', 'api', 'users'), { recursive: true });
+  await writeFile(path.join(root, 'src', 'app', 'api', 'users', 'route.ts'), 'export const GET = true;\n');
+  const tools = new ToolExecutor({ projectPath: root });
+
+  const result = await tools.execute('Read', { file_path: 'src/app/api/route.ts' }, { cwd: root });
+
+  assert.equal(result.success, false);
+  assert.equal(result.code, 'ENOENT');
+  assert.match(result.error, /File not found/);
+  assert.match(result.recovery, /Do not retry the same missing path/);
+  assert.match(result.recovery, /Glob or Grep/);
+  assert(result.suggestions.some(item => item.replace(/\\/g, '/').endsWith('src/app/api/users/route.ts')));
 });
 
 test('HtmlEffectiveness validates missing input/output paths', async () => {

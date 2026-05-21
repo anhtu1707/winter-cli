@@ -1,6 +1,6 @@
 import { Spinner } from '../cli/spinner.js';
 import { colors } from '../cli/snowflake-logo.js';
-import { renderBox, terminalWidth, wrapText } from '../cli/terminal-ui.js';
+import { renderToolPanel } from '../cli/tui.js';
 import { getMutatingToolNames, recordToolCallAdapterStats } from '../cli/tool-runtime.js';
 import { buildSmallModelAmplification } from '../ai/small-model-amplifier.js';
 
@@ -38,6 +38,9 @@ export class AgentRuntime {
       depth,
     });
     const maxToolTurns = amplifier.maxToolTurns || 8;
+    // Keep self-critique as prompt discipline only. A second runtime model turn
+    // duplicates the final answer because the first answer is already rendered.
+    amplifier.enforceSelfCritique = false;
     let forceTextToolFallback = false;
 
     try {
@@ -116,7 +119,6 @@ export class AgentRuntime {
           }
         }
 
-        const BOX_WIDTH = terminalWidth(76, 116, 92);
         messages.push({
           role: 'assistant',
           content: assistantMsg.content || '',
@@ -189,20 +191,12 @@ export class AgentRuntime {
           const summary = repl.formatToolResultForConsole(canonicalToolName, result);
           if (summary) {
             toolSummaries.push(`${canonicalToolName}: ${summary}`);
-            const statusIcon = result.success === false
-              ? `${colors.red}${repl.useUnicodeUi ? '✖' : 'x'}${colors.reset}`
-              : `${colors.green}${repl.useUnicodeUi ? '✓' : 'ok'}${colors.reset}`;
-            const toolLine = `${icon} ${colors.cyan}${colors.bright}${toolName}${colors.reset}`;
-            const summaryLines = summary.split('\n').flatMap(line => wrapText(line, BOX_WIDTH - 8));
-            console.log(renderBox({
-              title: 'AGENT TOOLS EXECUTION',
-              width: BOX_WIDTH,
-              borderColor: colors.magenta,
-              titleColor: colors.bright,
-              body: [
-                toolLine,
-                ...summaryLines.map((line, index) => index === 0 ? `${statusIcon} ${colors.dim}${line}${colors.reset}` : `${colors.dim}${line}${colors.reset}`),
-              ],
+            console.log(renderToolPanel({
+              toolName: `${icon} ${toolName}`,
+              summary,
+              success: result.success !== false,
+              colors,
+              title: 'Agent Tools',
             }));
           }
         }

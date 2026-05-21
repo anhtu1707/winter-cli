@@ -9,9 +9,9 @@ export function buildSmallModelAmplification({ modelTier = '', workflowProfile =
   const hint = [
     '[Winter Strength Amplifier]',
     '- Every model, including tiny/local/free models, must run at Winter maximum capability.',
-    '- Mandatory loop: PLAN (requirements + files + risks) -> TOOL ACTIONS -> VERIFY -> SELF-CHECK -> FINAL.',
+    '- Mandatory internal loop: PLAN (requirements + files + risks) -> TOOL ACTIONS -> VERIFY -> PRIVATE SELF-CHECK -> FINAL.',
     '- Do not skip verification. If verification fails, iterate until max loops.',
-    '- Before final answer, run a private self-critique: missing edge cases, missing tests, over-claims, and incorrect assumptions.',
+    '- Before final answer, run a private self-critique silently; do not print the self-check or an improved-answer preface.',
     '- Prefer concrete evidence from tool outputs over reasoning guesses.',
     '- Use CodeGraph/codebase index context before broad file reads when available.',
   ].join('\n');

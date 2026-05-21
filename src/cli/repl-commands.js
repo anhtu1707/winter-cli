@@ -354,6 +354,9 @@ export async function handleSlashCommand(repl, input) {
     case '/scorecard':
       await repl.showCapabilityScorecard();
       return;
+    case '/tui':
+      repl.showTuiDashboard();
+      return;
 
     // Git Auto-Pilot
     case '/commit':

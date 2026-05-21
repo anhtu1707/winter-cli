@@ -6,7 +6,7 @@
 import readline from 'readline';
 import { promises as fs, watch as fsWatch } from 'fs';
 import { homedir } from 'os';
-import { colors, applyColorTheme, welcomeBanner } from './snowflake-logo.js';
+import { colors, applyColorTheme } from './snowflake-logo.js';
 import { renderBox, supportsUnicodeUi, terminalWidth, stripAnsi, wrapText, padVisible } from './terminal-ui.js';
 import {
   buildTuiSnapshot,
@@ -38,7 +38,7 @@ import {
   buildPromptToolResultWithTokenJuice,
 } from './tool-runtime.js';
 import { TokenJuice } from '../context/token-juice.js';
-import { classifyModelTier, getModelBudgetMultiplier } from '../ai/model-capabilities.js';
+import { classifyModelTier } from '../ai/model-capabilities.js';
 import {
   addUsage as mergeUsage,
   buildToolCallSignature as buildToolCallSignatureText,
@@ -124,7 +124,6 @@ export class WinterREPL {
     this.inputController = new WinterInputController(this);
     this.watchers = [];
     this.startupNotices = [];
-    this._fixedPanel = Boolean(process.stdout.isTTY) && process.env.WINTER_FIXED_PANEL_TUI !== '0';
   }
 
   async initCodebaseSearch() {
@@ -260,7 +259,6 @@ export class WinterREPL {
 
   async buildCodebaseContext(task = '') {
     try {
-      const modelTier = this.getActiveModelTier();
       const stats = await this.ensureCodebaseIndex({ verbose: false });
       if (!stats.totalChunks) return '';
 
@@ -299,7 +297,7 @@ export class WinterREPL {
         }
       }
 
-      return this.compactText(lines.join('\n'), this.getCodebaseContextBudget(modelTier), 'codebase context');
+      return this.compactText(lines.join('\n'), 4200, 'codebase context');
     } catch (error) {
       return `[Codebase Index]\nUnavailable: ${error.message}`;
     }
@@ -347,22 +345,18 @@ export class WinterREPL {
       toolName,
       result,
       compact: this.shouldUseCompactPrompt(),
-      modelTier: this.getActiveModelTier(),
       compactText: (text, maxChars, label) => this.compactText(text, maxChars, label),
       summarizeToolResult: value => this.tools?.summarizeToolResult?.(value) || { ...value },
     });
   }
 
   async buildPromptToolResultForModel(toolName, result) {
-    const modelTier = this.getActiveModelTier();
-    const tokenJuice = this.getTokenJuiceForModelTier(modelTier);
     return buildPromptToolResultWithTokenJuice({
       toolName,
       result,
       projectPath: this.projectPath,
-      tokenJuice,
+      tokenJuice: this.tokenJuice,
       compact: this.shouldUseCompactPrompt(),
-      modelTier,
       compactText: (text, maxChars, label) => this.compactText(text, maxChars, label),
       summarizeToolResult: value => this.tools?.summarizeToolResult?.(value) || { ...value },
     });
@@ -704,34 +698,12 @@ export class WinterREPL {
     return this.inputController.closeInputBox();
   }
 
-  closeSlashMenu() {
-    return this.inputController.closeSlashMenu();
-  }
-
-  handleSlashMenuKey(key = {}) {
-    return this.inputController.handleSlashMenuKey(key);
-  }
-
-  handleDirectClipboardPaste() {
-    return this.inputController.handleDirectClipboardPaste();
-  }
-
   buildInputPanel() {
     return this.inputController.buildInputPanel();
   }
 
   showStatus() {
-    const snapshot = buildTuiSnapshot(this);
-    if (process.stdout.isTTY) {
-      console.log(`\n${welcomeBanner(this.version, {
-        project: snapshot.projectPath,
-        session: snapshot.sessionShort,
-        provider: snapshot.provider,
-        model: snapshot.model,
-      })}\n`);
-      return;
-    }
-    console.log(`\n${renderConversationStartup(snapshot, { colors })}\n`);
+    console.log(`\n${renderConversationStartup(buildTuiSnapshot(this), { colors })}\n`);
   }
 
   showTuiDashboard() {
@@ -933,8 +905,7 @@ export class WinterREPL {
   async handleInput(input) {
     if (this.isProcessing) {
       const pos = this.taskQueue.length + 1;
-      const preview = input.length > 40 ? input.slice(0, 37) + '...' : input;
-      console.log(`${colors.yellow}⧗${colors.reset} ${colors.bright}Queued #${pos}${colors.reset} ${colors.dim}› ${preview}${colors.reset}`);
+      console.log(`${colors.magenta}•${colors.reset} ${colors.dim}Đã xếp hàng chờ (vị trí #${pos})${colors.reset}`);
       this.taskQueue.push(input);
       return;
     }
@@ -1475,42 +1446,13 @@ ${colors.reset}
   }
 
   getActiveModelTier() {
-    if (typeof this.ai?._modelTier === 'string' && this.ai._modelTier) {
-      return this.ai._modelTier;
-    }
     const providerName = this.ai?.getActiveProvider?.();
     const model = this.ai?.providers?.[providerName]?.model || '';
     return classifyModelTier(model, providerName);
   }
 
-  getBudgetScale(modelTier = this.getActiveModelTier()) {
-    return getModelBudgetMultiplier(modelTier);
-  }
-
-  getProjectContextBudget(modelTier = this.getActiveModelTier()) {
-    return Math.round(6000 * this.getBudgetScale(modelTier));
-  }
-
-  getCodebaseContextBudget(modelTier = this.getActiveModelTier()) {
-    return Math.round(4200 * this.getBudgetScale(modelTier));
-  }
-
-  getTokenJuiceInlineBudget(modelTier = this.getActiveModelTier()) {
-    return Math.max(800, Math.round(1400 * this.getBudgetScale(modelTier)));
-  }
-
-  getTokenJuiceForModelTier(modelTier = this.getActiveModelTier()) {
-    const tokenJuice = new TokenJuice({
-      projectPath: this.projectPath,
-      inlineBudgetTokens: this.getTokenJuiceInlineBudget(modelTier),
-    });
-    this.tokenJuice = tokenJuice;
-    return tokenJuice;
-  }
-
   shouldUseCompactPrompt() {
-    const tier = this.getActiveModelTier();
-    return tier === 'tiny' || tier === 'small';
+    return true;
   }
 
   selectExecutionProfile(messages = [], options = {}) {
@@ -1632,13 +1574,6 @@ ${colors.reset}
     return error?.status === 429 || /\b429\b|rate[_ -]?limit|tokens per minute|\bTPM\b/i.test(message);
   }
 
-  isTimeoutError(error) {
-    const message = String(error?.message || error || '');
-    return error?.name === 'TimeoutError'
-      || error?.code === 'ETIMEDOUT'
-      || /timed out|timeout|request aborted/i.test(message);
-  }
-
   cancelCurrentTask() {
     if (this.isCancelled) return;
     this.isCancelled = true;
@@ -1658,7 +1593,6 @@ ${colors.reset}
       } catch (error) {
         if (this.isAbortError(error)) throw new Error('AbortError');
         if (this.isRateLimitError(error)) throw error;
-        if (this.isTimeoutError(error)) throw error;
         console.log(`${colors.dim}Streaming failed, retrying normal response: ${error.message}${colors.reset}`);
       }
     }
@@ -1822,6 +1756,198 @@ ${colors.reset}
     process.stdout.write(colors.reset);
   }
 
+  installSlashSuggestions() {
+    if (!process.stdin.isTTY) return;
+
+    readline.emitKeypressEvents(process.stdin, this.rl);
+
+    process.stdin.on('keypress', (str, key = {}) => {
+      if (key.ctrl && key.name === 'v') {
+        void this.handleDirectClipboardPaste();
+        return;
+      }
+      if (key.ctrl || key.meta) return;
+
+      if (typeof str === 'string' && str.length > 1) {
+        return;
+      }
+
+      if (this.slashMenu.open && this.handleSlashMenuKey(key)) {
+        return;
+      }
+
+      if (key.name === 'escape' && this.isProcessing) {
+        this.cancelCurrentTask();
+        return;
+      }
+
+      queueMicrotask(() => {
+        const line = this.rl?.line || '';
+        if (!line.startsWith('/')) {
+          this.closeSlashMenu();
+          return;
+        }
+
+        this.openSlashMenu(line);
+      });
+    });
+  }
+
+  async handleDirectClipboardPaste() {
+    if (this._handlingDirectClipboardPaste || this.readlineClosed || !this.running) return false;
+    this._handlingDirectClipboardPaste = true;
+    try {
+      const image = await this.getClipboardImage();
+      if (!image) return false;
+
+      const prompt = (this.rl?.line || '').trim() || 'Analyze this pasted clipboard image.';
+      this.closeSlashMenu();
+      if (this.rl?.write) {
+        this.rl.write(null, { ctrl: true, name: 'u' });
+      }
+
+      this.inputQueue = this.inputQueue
+        .then(async () => {
+          this.closeInputBox();
+          await this.processPastedImageTask(prompt, image);
+        })
+        .catch((error) => {
+          this.closeInputBox();
+          console.log(`\n${colors.red}✖ Paste image error: ${error.message}${colors.reset}\n`);
+          if (this.running && !this.readlineClosed) this.showInputPrompt();
+        });
+      return true;
+    } finally {
+      this._handlingDirectClipboardPaste = false;
+    }
+  }
+
+  async processPastedImageTask(prompt, image) {
+    this.isProcessing = true;
+    this.isCancelled = false;
+    this.currentAbortController = new AbortController();
+    try {
+      await this.chat(prompt, [image]);
+    } finally {
+      this.isProcessing = false;
+      this.currentAbortController = null;
+      if (this.taskQueue.length > 0) {
+        const nextTask = this.taskQueue.shift();
+        setTimeout(() => this.processInputTask(nextTask), 0);
+      } else if (!this.readlineClosed) {
+        this.showInputPrompt();
+      }
+    }
+  }
+
+  openSlashMenu(line) {
+    const matches = this.getSlashSuggestions(line);
+    if (matches.length === 0) {
+      this.closeSlashMenu();
+      return;
+    }
+    if (this.slashMenu.open && this.slashMenu.line === line) return;
+
+    this.slashMenu = { open: true, line, items: matches, selected: 0, printedLines: this.slashMenu?.printedLines || 0 };
+    this.renderSlashMenu();
+  }
+
+  closeSlashMenu() {
+    if (this.slashMenu && this.slashMenu.printedLines) {
+      readline.moveCursor(process.stdout, 0, -this.slashMenu.printedLines);
+      readline.clearScreenDown(process.stdout);
+    }
+    this.slashMenu = { open: false, line: '', items: [], selected: 0, printedLines: 0 };
+  }
+
+  handleSlashMenuKey(key = {}) {
+    if (key.name === 'up') {
+      this.moveSlashSelection(-1);
+      return true;
+    }
+    if (key.name === 'down') {
+      this.moveSlashSelection(1);
+      return true;
+    }
+    if (key.name === 'tab') {
+      this.acceptSlashSelection();
+      return true;
+    }
+    if (key.name === 'escape') {
+      this.closeSlashMenu();
+      this.rl.prompt(true);
+      return true;
+    }
+    return false;
+  }
+
+  moveSlashSelection(delta) {
+    if (!this.slashMenu.items.length) return;
+    const count = this.slashMenu.items.length;
+    this.slashMenu.selected = (this.slashMenu.selected + delta + count) % count;
+    this.renderSlashMenu();
+  }
+
+  acceptSlashSelection() {
+    const item = this.slashMenu.items[this.slashMenu.selected];
+    if (!item) return;
+
+    const currentLine = String(this.rl?.line ?? this.slashMenu.line ?? '');
+    const slashPrefixMatch = currentLine.match(/^\s*(\/\S*)(.*)$/);
+    const prefix = slashPrefixMatch ? slashPrefixMatch[1] : currentLine.trim();
+    const suffixText = slashPrefixMatch ? slashPrefixMatch[2] : '';
+    const needsSpace = item.usage && suffixText && !/^\s/.test(suffixText);
+    const replacement = `${item.cmd}${needsSpace ? ' ' : ''}${suffixText}`.trimEnd();
+
+    this.rl.write(null, { ctrl: true, name: 'u' });
+    this.rl.write(replacement || prefix || item.cmd);
+    this.closeSlashMenu();
+    this.rl.prompt(true);
+  }
+
+  renderSlashMenu() {
+    const matches = this.slashMenu.items;
+    if (!matches.length) return;
+
+    if (this.slashMenu.printedLines) {
+      readline.moveCursor(process.stdout, 0, -this.slashMenu.printedLines);
+    }
+
+    process.stdout.write('\n');
+    readline.clearLine(process.stdout, 1);
+    process.stdout.write(`${colors.dim}Commands${colors.reset}\n`);
+    
+    const maxDisplay = 5;
+    const displayedMatches = matches.slice(0, maxDisplay);
+
+    displayedMatches.forEach((item, index) => {
+      readline.clearLine(process.stdout, 1);
+      const usage = item.usage ? ` ${colors.dim}${item.usage}${colors.reset}` : '';
+      const pointer = index === this.slashMenu.selected ? `${colors.green}>${colors.reset}` : ' ';
+      process.stdout.write(`${pointer} ${colors.cyan}${item.cmd}${colors.reset} ${colors.dim}${item.desc}${colors.reset}${usage}\n`);
+    });
+
+    if (matches.length > maxDisplay) {
+      readline.clearLine(process.stdout, 1);
+      process.stdout.write(`  ${colors.dim}... và ${matches.length - maxDisplay} lệnh khác (gõ tiếp để lọc)${colors.reset}\n`);
+    }
+
+    readline.clearLine(process.stdout, 1);
+    process.stdout.write(`${colors.dim}↑/↓ chọn · Enter/Tab dùng · Esc đóng${colors.reset}\n`);
+
+    // Xóa các dòng thừa nếu số lượng dòng mới ít hơn số lượng dòng cũ.
+    const currentLines = Math.min(matches.length, maxDisplay) + 3 + (matches.length > maxDisplay ? 1 : 0);
+    if (this.slashMenu.printedLines > currentLines) {
+      for (let i = 0; i < this.slashMenu.printedLines - currentLines; i++) {
+        readline.clearLine(process.stdout, 1);
+        process.stdout.write('\n');
+      }
+      readline.moveCursor(process.stdout, 0, -(this.slashMenu.printedLines - currentLines));
+    }
+
+    this.slashMenu.printedLines = currentLines;
+    this.rl.prompt(true);
+  }
 
   getSlashSuggestions(line) {
     const query = String(line || '').trim();
@@ -1998,7 +2124,6 @@ ${colors.reset}
       process.stdout.write(colors.reset);
       if (this.isAbortError(error)) throw new Error('AbortError');
       if (this.isRateLimitError(error)) throw error;
-      if (this.isTimeoutError(error)) throw error;
       console.log(`${colors.dim}Streaming failed, retrying normal response: ${error.message}${colors.reset}`);
     }
 
@@ -2073,29 +2198,16 @@ ${colors.reset}
   }
 
   async promptToolPermission(commandText) {
-    const c = colors;
-    const width = terminalWidth(68, 100, 80);
-    const body = [
-      `${c.yellow}${this.useUnicodeUi ? '⚠' : '!'}  AI wants to run${c.reset}`,
-      `${c.bright}${c.white}${commandText}${c.reset}`,
-      '',
-      `${c.cyan}1.${c.reset} Allow once`,
-      `${c.cyan}2.${c.reset} Allow for session`,
-      `${c.cyan}3.${c.reset} Deny`,
-    ];
-
-    console.log(renderBox({
-      title: 'Tool Permission',
-      width,
-      borderColor: c.magenta,
-      titleColor: c.yellow,
-      body,
-      boxChars: { topLeft: '+', topRight: '+', bottomLeft: '+', bottomRight: '+', horizontal: '-', vertical: '|', teeLeft: '+', teeRight: '+' },
-    }));
+    const side = this.useUnicodeUi ? '│' : '|';
+    const warn = this.useUnicodeUi ? '!' : '!';
+    process.stdout.write(`${colors.magenta}${side}${colors.reset}   ${colors.yellow}${warn}  AI muốn chạy: ${colors.bright}${commandText}${colors.reset}\n`);
+    process.stdout.write(`${colors.magenta}${side}${colors.reset}   ${colors.cyan}1.${colors.reset} Cho phép\n`);
+    process.stdout.write(`${colors.magenta}${side}${colors.reset}   ${colors.cyan}2.${colors.reset} Cho phép trong phiên\n`);
+    process.stdout.write(`${colors.magenta}${side}${colors.reset}   ${colors.cyan}3.${colors.reset} Không cho phép\n`);
 
     while (true) {
       const answer = await new Promise(resolve => {
-        this.rl.question(`${c.yellow}Choice [1/2/3]: ${c.reset}`, resolve);
+        this.rl.question(`${colors.magenta}${side}${colors.reset}   ${colors.yellow}Chọn [1/2/3]: ${colors.reset}`, resolve);
       });
 
       const choice = String(answer || '').trim().toLowerCase();
@@ -2109,7 +2221,7 @@ ${colors.reset}
         return false;
       }
 
-      console.log(`${c.dim}Please choose 1, 2, or 3.${c.reset}`);
+      process.stdout.write(`${colors.magenta}${side}${colors.reset}   ${colors.dim}Vui lòng chọn 1, 2 hoặc 3.${colors.reset}\n`);
     }
   }
 
@@ -2722,7 +2834,6 @@ Do NOT stop until all errors are resolved.`;
   }
 
   async getProjectContext(task = '') {
-    const modelTier = this.getActiveModelTier();
     const context = [];
     const requiredLocalResources = await this.getRequiredLocalResourceSummary();
     if (requiredLocalResources) {
@@ -2789,7 +2900,7 @@ Do NOT stop until all errors are resolved.`;
       // Not a git repo or git not installed
     }
 
-    return this.compactText(context.join('\n\n') || 'No project context found.', this.getProjectContextBudget(modelTier), 'project context');
+    return this.compactText(context.join('\n\n') || 'No project context found.', 14000, 'project context');
   }
 
   async getLocalResourceContext() {
@@ -2891,7 +3002,7 @@ Do NOT stop until all errors are resolved.`;
     this.promptBuilder.tools = this.tools;
     this.promptBuilder.sessionPermissionGrants = this.sessionPermissionGrants;
     return this.promptBuilder.buildSystemPrompt(context, {
-      modelTier: this.getActiveModelTier(),
+      projectContextBudget: 5200,
     });
   }
 

@@ -172,6 +172,21 @@ export function getReasoningBump(tier) {
 }
 
 /**
+ * Get a budget multiplier for prompt/context sizing.
+ * Bigger models can safely absorb more context and larger tool outputs.
+ */
+export function getModelBudgetMultiplier(tier) {
+  switch (tier) {
+    case MODEL_TIERS.TINY: return 0.5;
+    case MODEL_TIERS.SMALL: return 0.75;
+    case MODEL_TIERS.MEDIUM: return 1;
+    case MODEL_TIERS.LARGE: return 2;
+    case MODEL_TIERS.FLAGSHIP: return 4;
+    default: return 1;
+  }
+}
+
+/**
  * Build a short string describing model capability for system prompt injection.
  */
 export function getModelCapabilityLabel(tier) {

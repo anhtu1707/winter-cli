@@ -14,8 +14,8 @@ test('visibleWidth counts emoji as wider cells', () => {
 
 test('supportsUnicodeUi defaults to ASCII in plain Windows shells', () => {
   assert.equal(supportsUnicodeUi({}, 'win32'), false);
-  assert.equal(supportsUnicodeUi({ WT_SESSION: '1' }, 'win32'), true);
-  assert.equal(supportsUnicodeUi({ WINTER_UNICODE_UI: '1' }, 'win32'), true);
+  assert.equal(supportsUnicodeUi({ WT_SESSION: '1' }, 'win32'), false);
+  assert.equal(supportsUnicodeUi({ WINTER_UNICODE_UI: '1' }, 'win32'), false);
   assert.equal(supportsUnicodeUi({ WINTER_ASCII_UI: '1', WT_SESSION: '1' }, 'win32'), false);
 });
 

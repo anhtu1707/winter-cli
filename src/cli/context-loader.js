@@ -226,7 +226,7 @@ export class ContextLoader {
       this.readTextIfExists(pageAgentAgentsPath, 2200),
     ]);
 
-    const hasRequired = Boolean(karpathy || agents || designReadme || designBrands.length > 0 || pageAgentWinter);
+    const hasRequired = Boolean(karpathy || agents || designReadme || designBrands.length > 0 || pageAgentWinter || pageAgentAgents);
     if (!hasRequired) return '';
 
     const lines = [];

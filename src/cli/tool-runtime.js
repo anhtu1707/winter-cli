@@ -1,4 +1,5 @@
 import { TokenJuice } from '../context/token-juice.js';
+import { getModelBudgetMultiplier } from '../ai/model-capabilities.js';
 
 export function getMutatingToolNames() {
   return new Set([
@@ -18,7 +19,8 @@ export function getMutatingToolNames() {
   ]);
 }
 
-export function getToolResultPromptBudget(toolName, compact = false) {
+export function getToolResultPromptBudget(toolName, compact = false, modelTier = '') {
+  const scale = getModelBudgetMultiplier(modelTier);
   const budgets = {
     Read: compact ? 2800 : 5000,
     Grep: compact ? 2200 : 4200,
@@ -29,19 +31,20 @@ export function getToolResultPromptBudget(toolName, compact = false) {
     BrowserDebug: compact ? 2200 : 4200,
     NotebookRead: compact ? 2600 : 5000,
   };
-  return budgets[toolName] || (compact ? 1800 : 3200);
+  return Math.max(400, Math.round((budgets[toolName] || (compact ? 1800 : 3200)) * scale));
 }
 
 export function buildPromptToolResult({
   toolName,
   result,
   compact = false,
+  modelTier = '',
   compactText = (value, maxChars) => String(value || '').slice(0, maxChars),
   summarizeToolResult = value => ({ ...value }),
 } = {}) {
   if (!result || typeof result !== 'object') return result;
 
-  const budget = getToolResultPromptBudget(toolName, compact);
+  const budget = getToolResultPromptBudget(toolName, compact, modelTier);
   const copy = summarizeToolResult(result);
   const preserveKeys = ['content', 'stdout', 'stderr', 'diff', 'matches', 'files', 'cells'];
   let remaining = budget;
@@ -78,6 +81,7 @@ export async function buildPromptToolResultWithTokenJuice({
   projectPath = process.cwd(),
   tokenJuice,
   compact = false,
+  modelTier = '',
   compactText = (value, maxChars) => String(value || '').slice(0, maxChars),
   summarizeToolResult = value => ({ ...value }),
 } = {}) {
@@ -85,6 +89,7 @@ export async function buildPromptToolResultWithTokenJuice({
     toolName,
     result,
     compact,
+    modelTier,
     compactText,
     summarizeToolResult,
   });

@@ -23,6 +23,7 @@ const COMMANDS = new Set([
   'autopilot', 'plan',
   'provider', 'providers', 'model', 'models', 'ecc', 'page-agent', 'pageagent',
   'resources', 'htmlfx', 'memory-vault', 'doctor', 'context', 'scorecard',
+  'tui',
 ]);
 
 function isInteractiveRequest(args) {

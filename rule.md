@@ -12,6 +12,8 @@ File này là contract vận hành cho Winter trong project này.
 ## Project Instruction Files
 - [winter.md](./winter.md)
 - [CLAUDE.md](./CLAUDE.md)
+- [design.md](./design.md)
+- [skill.md](./skill.md)
 
 ## Mandatory Local Resources
 - Karpathy tools: `resources\local\karpathy-tools\CLAUDE.md`

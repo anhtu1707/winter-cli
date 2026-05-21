@@ -63,26 +63,52 @@ export function serializeToolResultToMarkdown(toolName, result = {}) {
 export function extractKeyLines(text = '', limit = 18) {
   const patterns = /(error|failed|exception|warning|todo|fixme|export |import |class |function |const |let |var |def |interface |type |=>)/i;
   const selected = [];
-  for (const line of String(text).split(/\r?\n/)) {
-    if (patterns.test(line)) selected.push(line.trim());
+  const lines = String(text).split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (patterns.test(line)) selected.push(`L${index + 1}: ${line.trim()}`);
     if (selected.length >= limit) break;
   }
   return selected;
 }
 
-export function buildCompressedPreview(toolName, result, markdown, links = []) {
+function buildExcerpts(text = '', maxChars = 700) {
+  const value = String(text || '').trim();
+  if (!value) return [];
+  if (value.length <= maxChars) return [value];
+  const head = value.slice(0, Math.floor(maxChars * 0.58)).trimEnd();
+  const tail = value.slice(-Math.floor(maxChars * 0.32)).trimStart();
+  return [
+    `${head}\n[TokenJuice middle omitted from inline preview; full text is in memory]\n${tail}`,
+  ];
+}
+
+function buildChunkMap(saved) {
+  if (!saved?.files?.length) return [];
+  return saved.files.map(file => {
+    const label = `part ${file.part}/${saved.parts}`;
+    return `- ${label}: ${file.wikiLink} (~${file.tokensEst} tokens)`;
+  });
+}
+
+export function buildCompressedPreview(toolName, result, markdown, savedOrLinks = []) {
+  const links = Array.isArray(savedOrLinks) ? savedOrLinks : (savedOrLinks?.links || []);
   const source = [result?.error, result?.content, result?.stdout, result?.stderr, result?.diff, result?.message]
     .filter(Boolean)
     .join('\n');
   const keyLines = extractKeyLines(source);
-  const preview = compactText(source || markdown, 1800);
+  const excerpts = buildExcerpts(source || markdown);
+  const chunkMap = Array.isArray(savedOrLinks) ? [] : buildChunkMap(savedOrLinks);
   const lines = [
-    `TokenJuice compressed a large ${toolName || 'tool'} result before model context.`,
-    links.length ? `Full markdown chunks: ${links.join(', ')}` : '',
-    keyLines.length ? 'Key lines:' : '',
+    `TokenJuice losslessly stored a large ${toolName || 'tool'} result before model context.`,
+    links.length ? `Full detail chunks: ${links.join(', ')}` : '',
+    chunkMap.length ? 'Chunk map for exact detail retrieval:' : '',
+    ...chunkMap,
+    'Instruction: use Read on the memory file behind a chunk link when exact omitted lines are needed.',
+    keyLines.length ? 'Key lines with original line numbers:' : '',
     ...keyLines.map(line => `- ${line}`),
-    keyLines.length ? '' : 'Preview:',
-    keyLines.length ? compactText(preview, 900) : preview,
+    excerpts.length ? 'Representative excerpts:' : '',
+    ...excerpts.map(excerpt => compactText(excerpt, 900)),
   ].filter(Boolean);
   return lines.join('\n');
 }
@@ -129,7 +155,7 @@ export class TokenJuice {
           source: result.path || result.url || result.command || '',
         },
       });
-      const preview = buildCompressedPreview(toolName, result, markdown, saved.links);
+      const preview = buildCompressedPreview(toolName, result, markdown, saved);
       const compressed = {
         ...basePromptResult,
         content: preview,
@@ -143,6 +169,7 @@ export class TokenJuice {
           memoryRoot: saved.rootDir,
           memoryLinks: saved.links,
           memoryFiles: saved.files.map(file => file.relativePath),
+          detailRetrieval: 'Read the listed memoryFiles for exact omitted content.',
           parts: saved.parts,
         },
       };

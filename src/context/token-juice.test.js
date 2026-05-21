@@ -48,9 +48,13 @@ test('TokenJuice stores large tool output in wiki memory and returns compact pro
   assert.equal(result.tokenJuice.compressed, true);
   assert(result.tokenJuice.originalTokens > result.tokenJuice.inlineTokens);
   assert(result.tokenJuice.memoryLinks.length > 1);
-  assert.match(result.content, /TokenJuice compressed/);
-  assert.match(result.content, /Full markdown chunks/);
-  assert.match(result.content, /import fs from/);
+  assert.match(result.content, /TokenJuice losslessly stored/);
+  assert.match(result.content, /Full detail chunks/);
+  assert.match(result.content, /Chunk map/);
+  assert.match(result.content, /Read on the memory file/);
+  assert.match(result.content, /L1: import fs from/);
+  assert.match(result.content, /Representative excerpts/);
+  assert.equal(result.tokenJuice.detailRetrieval, 'Read the listed memoryFiles for exact omitted content.');
 
   const stored = await fs.readFile(path.join(projectPath, '.winter', 'memory', result.tokenJuice.memoryFiles[0]), 'utf8');
   assert.match(stored, /# Read src\/large\.js/);

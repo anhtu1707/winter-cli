@@ -471,7 +471,7 @@ export class ToolExecutor {
     const cwd = context.cwd || this.projectPath;
     const resolvedPath = (p) => this.resolveInputPath(p, cwd);
 
-    const preflight = this.preflightValidateToolArgs(toolName, input, { cwd });
+    const preflight = await this.preflightValidateToolArgs(toolName, input, { cwd });
     if (preflight?.success === false) {
       return preflight;
     }
@@ -568,7 +568,7 @@ export class ToolExecutor {
     }
   }
 
-  preflightValidateToolArgs(toolName, input, { cwd } = {}) {
+  async preflightValidateToolArgs(toolName, input, { cwd } = {}) {
     const args = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
     const pick = (...keys) => {
       for (const key of keys) {
@@ -618,6 +618,16 @@ export class ToolExecutor {
       const cmd = pick('command', 'cmd', 'script', 'code', 'input');
       if (!cmd) {
         return { success: false, error: 'command is required', recovery: 'Example: Bash {"command":"npm test"}' };
+      }
+      const missingScript = await this.findMissingNpmScript(cmd, cwd);
+      if (missingScript) {
+        return {
+          success: false,
+          error: `npm script "${missingScript.script}" does not exist in package.json`,
+          recovery: missingScript.available.length
+            ? `Use an existing script: ${missingScript.available.map(name => `npm run ${name}`).join(', ')}`
+            : 'No package scripts are defined. Inspect package.json before running npm scripts.',
+        };
       }
       const next = { command: cmd };
       if (typeof args.timeout !== 'undefined') next.timeout = args.timeout;
@@ -704,6 +714,21 @@ export class ToolExecutor {
 
     // Default: allow tool implementation to validate
     return { success: true };
+  }
+
+  async findMissingNpmScript(command, cwd) {
+    const match = String(command || '').trim().match(/^(?:npm|pnpm|yarn|bun)\s+run\s+([A-Za-z0-9:_-]+)(?:\s|$)/i);
+    if (!match) return null;
+    const script = match[1];
+    try {
+      const packageJsonPath = path.join(cwd || this.projectPath, 'package.json');
+      const pkg = JSON.parse(await fs.readFile(packageJsonPath, 'utf8'));
+      const scripts = pkg.scripts && typeof pkg.scripts === 'object' ? pkg.scripts : {};
+      if (Object.prototype.hasOwnProperty.call(scripts, script)) return null;
+      return { script, available: Object.keys(scripts).sort() };
+    } catch {
+      return null;
+    }
   }
 
   redactToolInput(input) {
@@ -1012,8 +1037,58 @@ export class ToolExecutor {
         size: content.length
       };
     } catch (error) {
-      return { success: false, error: error.message, path: filePath };
+      if (error?.code === 'ENOENT') {
+        const suggestions = await this.findNearbyPathSuggestions(filePath);
+        return {
+          success: false,
+          error: `File not found: ${filePath}`,
+          code: 'ENOENT',
+          path: filePath,
+          suggestions,
+          recovery: [
+            'Do not retry the same missing path.',
+            'Use Glob or Grep to discover the real file path before reading again.',
+            suggestions.length ? `Nearby candidates: ${suggestions.join(', ')}` : `Search from project root: ${this.projectPath}`,
+          ].join(' '),
+        };
+      }
+      return { success: false, error: error.message, code: error?.code, path: filePath };
     }
+  }
+
+  async findNearbyPathSuggestions(filePath, limit = 8) {
+    if (!filePath) return [];
+    const targetName = path.basename(filePath).toLowerCase();
+    const targetStem = targetName.replace(/\.[^.]+$/, '');
+    if (!targetName) return [];
+
+    const candidates = [];
+    const ignored = new Set(['node_modules', '.git', 'dist', 'build', '.winter', '.claude', 'VSCode-win32-x64', 'vscode-main']);
+    const walk = async (dir, depth = 0) => {
+      if (depth > 5 || candidates.length >= limit * 4) return;
+      let entries = [];
+      try {
+        entries = await fs.readdir(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+
+      for (const entry of entries) {
+        if (ignored.has(entry.name)) continue;
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await walk(fullPath, depth + 1);
+          continue;
+        }
+        const name = entry.name.toLowerCase();
+        if (name === targetName || name.includes(targetStem) || targetStem.includes(name.replace(/\.[^.]+$/, ''))) {
+          candidates.push(path.relative(this.projectPath, fullPath) || fullPath);
+        }
+      }
+    };
+
+    await walk(this.projectPath);
+    return [...new Set(candidates)].slice(0, limit);
   }
 
   async backupFile(filePath) {

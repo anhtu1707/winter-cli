@@ -70,13 +70,13 @@ export function terminalWidth(min = 72, max = 120, fallback = 88) {
 
 export function supportsUnicodeUi(env = process.env, platform = process.platform) {
   if (env.WINTER_ASCII_UI === '1' || env.WINTER_ASCII_UI === 'true') return false;
-  if (env.WINTER_UNICODE_UI === '1' || env.WINTER_UNICODE_UI === 'true') return true;
+  if (env.WINTER_UNICODE_UI === '1' || env.WINTER_UNICODE_UI === 'true') return platform !== 'win32';
   if (platform !== 'win32') return true;
-  return Boolean(env.WT_SESSION || env.TERM_PROGRAM || env.TERM || env.ConEmuANSI === 'ON');
+  return false;
 }
 
 export function getBoxChars() {
-  return supportsUnicodeUi() ? UNICODE_BOX : ASCII_BOX;
+  return ASCII_BOX;
 }
 
 export function padVisible(text, width, fill = ' ') {
@@ -208,3 +208,57 @@ export function renderKeyValueRows(rows, width, colors) {
     return `${colors.border}${boxChars.vertical}${colors.reset} ${leftText}${colors.spacer}${rightText} ${colors.border}${boxChars.vertical}${colors.reset}`;
   });
 }
+
+
+
+export const PANEL_HEIGHT = 5;
+
+let _fixedEnabled = false;
+
+export function enableFixedPanel() {
+  if (!process.stdout.isTTY) return false;
+  _fixedEnabled = true;
+  const rows = process.stdout.rows || 24;
+  const scrollBottom = Math.max(1, rows - PANEL_HEIGHT);
+  process.stdout.write("\x1b[1;" + scrollBottom + "r");
+  return true;
+}
+
+export function disableFixedPanel() {
+  _fixedEnabled = false;
+  process.stdout.write("\x1b[r");
+}
+
+export function refreshFixedPanel() {
+  if (!_fixedEnabled || !process.stdout.isTTY) return;
+  const rows = process.stdout.rows || 24;
+  const scrollBottom = Math.max(1, rows - PANEL_HEIGHT);
+  process.stdout.write("\x1b[1;" + scrollBottom + "r");
+}
+
+export function drawInFixedArea(content) {
+  if (!_fixedEnabled || !process.stdout.isTTY) return;
+  const rows = process.stdout.rows || 24;
+  const startRow = Math.max(1, rows - PANEL_HEIGHT + 1);
+  process.stdout.write("\x1b7");
+  process.stdout.write("\x1b[" + startRow + ";1H");
+  process.stdout.write("\x1b[J");
+  process.stdout.write(String(content ?? ""));
+  process.stdout.write("\x1b8");
+}
+
+export function moveToScrollRegion() {
+  if (!process.stdout.isTTY) return;
+  const rows = process.stdout.rows || 24;
+  const scrollBottom = Math.max(1, rows - PANEL_HEIGHT);
+  process.stdout.write("\x1b[" + scrollBottom + ";1H");
+}
+
+export function moveToPromptRow() {
+  if (!process.stdout.isTTY) return;
+  const rows = process.stdout.rows || 24;
+  // Position prompt at last scrollable row (just above the fixed panel)
+  const promptRow = Math.max(1, rows - PANEL_HEIGHT - 1);
+  process.stdout.write("\x1b[" + promptRow + ";1H");
+}
+

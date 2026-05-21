@@ -1,4 +1,5 @@
 import { formatRuntimeEnvironmentSummary, getRuntimeEnvironment } from './runtime-env.js';
+import { getModelBudgetMultiplier } from '../ai/model-capabilities.js';
 
 /**
  * PromptBuilder — Builds system prompts for Winter CLI agents.
@@ -49,26 +50,32 @@ export class PromptBuilder {
     const sessionContext = this.session?.getContext?.() || {};
     const environmentSummary = this.tools?.getRuntimeEnvironmentSummary?.() || this._defaultEnvironmentSummary();
     const requiredLocalResources = this.getRequiredLocalResources();
-    const projectContextBudget = options.projectContextBudget || 3200;
-    const compactSystemPrompt = options.compactSystemPrompt || projectContextBudget <= 1600;
+    const scale = getModelBudgetMultiplier(options.modelTier);
+    const projectContextBudget = options.projectContextBudget || Math.round(3200 * scale);
+    const compactSystemPrompt = options.compactSystemPrompt ?? (scale <= 0.75);
+    const memoryBudget = Math.round(1200 * scale);
+    const planBudget = Math.round(1200 * scale);
+    const requiredResourcesBudget = Math.round((compactSystemPrompt ? 1200 : 1600) * scale);
+    const workflowBudget = Math.round(900 * scale);
+    const blueprintBudget = Math.round(700 * scale);
 
     const memoryStr = memories.length > 0
-      ? this._formatMemories(memories)
+      ? this._formatMemories(memories, { maxTotalChars: memoryBudget })
       : '';
     const requiredResourcesStr = requiredLocalResources
-      ? `\n## Required Local Resource Rules\n${this._compactText(requiredLocalResources, 1800, 'required local resources')}`
+      ? `\n## Required Local Resource Rules\n${this._compactText(requiredLocalResources, requiredResourcesBudget, 'required local resources')}`
       : '';
     const plansStr = plans.length > 0
-      ? this._formatPlans(plans)
+      ? this._formatPlans(plans, { maxTotalChars: planBudget })
       : '';
     const skillsStr = Array.isArray(sessionContext.activeSkills) && sessionContext.activeSkills.length > 0
       ? `\n## Auto-applied Skills\n${sessionContext.activeSkills.slice(0, 12).map(skill => `- ${skill}`).join('\n')}${sessionContext.activeSkills.length > 12 ? '\n- ...' : ''}`
       : '';
     const workflowStr = sessionContext.workflowHints
-      ? `\n## Workflow Auto-Selection\n${this._compactText(sessionContext.workflowHints, 900, 'workflow hints')}`
+      ? `\n## Workflow Auto-Selection\n${this._compactText(sessionContext.workflowHints, workflowBudget, 'workflow hints')}`
       : '';
     const blueprintStr = sessionContext.workflowBlueprint
-      ? `\n## Profile Blueprint\n${this._compactText(sessionContext.workflowBlueprint, 700, 'workflow blueprint')}`
+      ? `\n## Profile Blueprint\n${this._compactText(sessionContext.workflowBlueprint, blueprintBudget, 'workflow blueprint')}`
       : '';
     const startupPlanStr = sessionContext.bootstrapPlan?.title
       ? `\n## Startup Plan\n- ${sessionContext.bootstrapPlan.title}: ${sessionContext.bootstrapPlan.description}`
@@ -164,12 +171,14 @@ export class PromptBuilder {
     const plans = this.session?.getPlans?.() || [];
     const sessionContext = this.session?.getContext?.() || {};
     const requiredLocalResources = this.getRequiredLocalResources();
+    const scale = getModelBudgetMultiplier(this.ai?._modelTier || '');
+    const projectContextBudget = Math.round(3200 * (scale || 1));
 
-    const memoryStr = memories.length > 0 ? this._formatMemories(memories, { maxTotalChars: 900 }) : '';
+    const memoryStr = memories.length > 0 ? this._formatMemories(memories, { maxTotalChars: Math.round(900 * (scale || 1)) }) : '';
     const requiredResourcesStr = requiredLocalResources
-      ? `\n## Required Local Resource Rules\n${this._compactText(requiredLocalResources, 1600, 'required local resources')}`
+      ? `\n## Required Local Resource Rules\n${this._compactText(requiredLocalResources, Math.round(1600 * (scale || 1)), 'required local resources')}`
       : '';
-    const plansStr = plans.length > 0 ? this._formatPlans(plans, { maxTotalChars: 900 }) : '';
+    const plansStr = plans.length > 0 ? this._formatPlans(plans, { maxTotalChars: Math.round(900 * (scale || 1)) }) : '';
     const skillsStr = Array.isArray(sessionContext.activeSkills) && sessionContext.activeSkills.length > 0
       ? `\n## Auto-applied Skills\n${sessionContext.activeSkills.slice(0, 12).map(skill => `- ${skill}`).join('\n')}${sessionContext.activeSkills.length > 12 ? '\n- ...' : ''}`
       : '';
@@ -217,7 +226,7 @@ export class PromptBuilder {
       `Working directory: ${this.projectPath}`,
       `Current session: ${this.session?.getSessionId?.()?.substring(0, 8) || 'unknown'}`,
       `${requiredResourcesStr}${memoryStr}${plansStr}${skillsStr}${startupPlanStr}`,
-      context ? `\n## Project Context\n${this._compactText(context, 3200, 'project context')}` : '',
+      context ? `\n## Project Context\n${this._compactText(context, projectContextBudget, 'project context')}` : '',
     ].join('\n');
   }
 

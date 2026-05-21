@@ -1,6 +1,7 @@
 import readline from 'readline';
 import { colors } from './snowflake-logo.js';
-import { padVisible, renderBox, terminalWidth, visibleWidth } from './terminal-ui.js';
+import { drawInFixedArea, enableFixedPanel, moveToPromptRow, moveToScrollRegion, padVisible, renderBox, terminalWidth } from './terminal-ui.js';
+import { buildTuiSnapshot, renderInputPanel } from './tui.js';
 
 export class WinterInputController {
   constructor(repl) {
@@ -11,9 +12,20 @@ export class WinterInputController {
     const repl = this.repl;
     if (!repl.running || repl.readlineClosed) return;
     const panel = this.buildInputPanel();
-    process.stdout.write(`\n${panel.top}\n${panel.status}\n${panel.hint}\n`);
-    repl.rl.setPrompt(panel.prompt);
-    repl.rl.prompt();
+    
+    // Queue indicator
+    const queueCount = repl.taskQueue?.length || 0;
+    const queueTag = queueCount > 0
+      ? `  ${colors.yellow}⧗ ${queueCount} pending${colors.reset}`
+      : '';
+    
+    const lines = [panel.top + queueTag, panel.status, panel.hint].filter(l => l && l.trim() !== '');
+    process.stdout.write('\n' + lines.join('\n') + '\n');
+    
+    if (typeof repl.rl?.setPrompt === 'function') {
+      repl.rl.setPrompt(panel.prompt);
+    }
+    repl.rl?.prompt?.();
   }
 
   closeInputBox() {
@@ -25,38 +37,10 @@ export class WinterInputController {
 
   buildInputPanel() {
     const repl = this.repl;
-    const width = Math.max(64, terminalWidth(66, 124) - 2);
-    const box = repl.useUnicodeUi
-      ? { topLeft: '╭', topRight: '╮', bottomLeft: '╰', bottomRight: '╯', horizontal: '─', vertical: '│' }
-      : { topLeft: '+', topRight: '+', bottomLeft: '+', bottomRight: '+', horizontal: '-', vertical: '|' };
-    const provider = repl.ai?.getActiveProvider?.() || 'provider';
-    const model = repl.ai?.providers?.[provider]?.model || 'model';
-    const sessionId = repl.session?.getSessionId?.()?.slice(0, 8) || 'session';
-    const projectName = repl.projectPath ? repl.projectPath.split(/[\\/]/).filter(Boolean).pop() : 'project';
-    const queueText = repl.taskQueue?.length > 0 ? `queue:${repl.taskQueue.length}` : 'ready';
-    const title = ' Winter CLI ';
-    const titleWidth = visibleWidth(title);
-    const topFill = Math.max(0, width - titleWidth);
-    const leftFill = Math.floor(topFill / 2);
-    const rightFill = topFill - leftFill;
-    const statusText = [
-      `model ${provider}/${model}`,
-      `project ${projectName}`,
-      `session ${sessionId}`,
-      queueText,
-    ].join('  ');
-    const hintText = '@file  @Agent task  !cmd  Ctrl+V image  /context  /doctor full';
-    const hintInnerWidth = Math.max(20, width - 2);
-    const status = `${colors.magenta}${box.vertical}${colors.reset} ${colors.dim}${padVisible(statusText, hintInnerWidth)}${colors.reset} ${colors.magenta}${box.vertical}${colors.reset}`;
-    const hint = `${colors.magenta}${box.vertical}${colors.reset} ${colors.dim}${padVisible(hintText, hintInnerWidth)}${colors.reset} ${colors.magenta}${box.vertical}${colors.reset}`;
-    const prompt = `${colors.magenta}${box.vertical}${colors.reset} ${colors.bright}${colors.cyan}winter${colors.reset}${colors.dim} > ${colors.reset}`;
-    return {
-      top: `${colors.magenta}${box.topLeft}${box.horizontal.repeat(leftFill)}${title}${box.horizontal.repeat(rightFill)}${box.topRight}${colors.reset}`,
-      status,
-      hint,
-      prompt,
-      bottom: `${colors.magenta}${box.bottomLeft}${box.horizontal.repeat(width)}${box.bottomRight}${colors.reset}`,
-    };
+    return renderInputPanel(buildTuiSnapshot(repl), {
+      colors,
+      width: terminalWidth(66, 124),
+    });
   }
 
   installSlashSuggestions() {
@@ -80,10 +64,24 @@ export class WinterInputController {
         return;
       }
 
-      if (key.name === 'escape' && repl.isProcessing) {
-        repl.isCancelled = true;
-        if (repl.spinner) repl.spinner.stop();
-        console.log(`\n${colors.red}[ Đã nhận lệnh HỦY... AI sẽ kết thúc ở thao tác tiếp theo ]${colors.reset}`);
+      if (key.name === 'escape') {
+        if (repl.isProcessing) {
+          // Cancel current AI turn
+          repl.isCancelled = true;
+          if (repl.spinner) repl.spinner.stop();
+          console.log(`\n${colors.red}[ Đã nhận lệnh HỦY... AI sẽ kết thúc ở thao tác tiếp theo ]${colors.reset}`);
+        } else {
+          // Double-ESC to end session
+          const now = Date.now();
+          if (this._lastEscTime && (now - this._lastEscTime) < 500) {
+            console.log(`\n\n${colors.cyan}Cảm ơn đã sử dụng Winter!${colors.reset}`);
+            console.log(`${colors.yellow}Tiếp tục phiên làm việc:${colors.reset}`);
+            console.log(`${colors.bright}${colors.green}winter --session ${repl.session?.getSessionId?.() || ''}${colors.reset}\n`);
+            process.exit(0);
+          }
+          this._lastEscTime = now;
+          console.log(`${colors.dim}Press ESC again to end session${colors.reset}`);
+        }
         return;
       }
 
@@ -116,13 +114,13 @@ export class WinterInputController {
 
       repl.inputQueue = repl.inputQueue
         .then(async () => {
-          this.closeInputBox();
+          repl.closeInputBox?.();
           await this.processPastedImageTask(prompt, image);
         })
         .catch((error) => {
-          this.closeInputBox();
+          repl.closeInputBox?.();
           console.log(`\n${colors.red}✖ Paste image error: ${error.message}${colors.reset}\n`);
-          if (repl.running && !repl.readlineClosed) this.showInputPrompt();
+          if (repl.running && !repl.readlineClosed) repl.showInputPrompt?.();
         });
       return true;
     } finally {
@@ -134,15 +132,17 @@ export class WinterInputController {
     const repl = this.repl;
     repl.isProcessing = true;
     repl.isCancelled = false;
+    repl.currentAbortController = new AbortController();
     try {
       await repl.chat(prompt, [image]);
     } finally {
       repl.isProcessing = false;
+      repl.currentAbortController = null;
       if (repl.taskQueue.length > 0) {
         const nextTask = repl.taskQueue.shift();
         setTimeout(() => repl.processInputTask(nextTask), 0);
       } else if (!repl.readlineClosed) {
-        this.showInputPrompt();
+        repl.showInputPrompt?.();
       }
     }
   }
@@ -247,12 +247,23 @@ export class WinterInputController {
 
     this.clearSlashMenuRender();
 
+    const ASCII_BOX = {
+      topLeft: '+',
+      topRight: '+',
+      bottomLeft: '+',
+      bottomRight: '+',
+      horizontal: '-',
+      vertical: '|',
+      teeLeft: '+',
+      teeRight: '+',
+    };
     const rendered = renderBox({
       title: 'Command Palette',
       width: terminalWidth(66, 110, 88),
       borderColor: colors.magenta,
       titleColor: colors.cyan,
       body,
+      boxChars: ASCII_BOX,
     });
 
     process.stdout.write(`\n${rendered}\n`);

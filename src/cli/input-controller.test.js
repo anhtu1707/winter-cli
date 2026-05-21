@@ -37,11 +37,11 @@ test('WinterInputController builds stable bottom input panel', () => {
   const input = new WinterInputController(repl);
   const panel = input.buildInputPanel();
 
-  assert.match(panel.top, /Winter/);
-  assert.match(panel.hint, /Ctrl\+V/);
+  assert.match(panel.top, /WINTER/);
+  assert.match(panel.hint, /\^V img/);
   assert.match(panel.hint, /@file/);
   assert.match(panel.status, /model/);
-  assert.match(panel.hint, /\/doctor full/);
+  assert.match(panel.hint, /\/context/);
   assert.match(panel.prompt, /winter/);
   assert.match(panel.bottom, /^\x1b\[[0-9;]*m\+/);
 });

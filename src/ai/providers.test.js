@@ -56,6 +56,92 @@ test('streamRequest parses OpenAI-compatible SSE chunks with usage', async () =>
   }
 });
 
+test('sendRequestToProvider aborts stalled provider requests', async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async (_url, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener('abort', () => {
+      reject(new DOMException('The operation was aborted.', 'AbortError'));
+    });
+  });
+
+  try {
+    const ai = new AIProviderManager({
+      async load() {
+        return {
+          defaultProvider: 'custom',
+          custom: {
+            baseURL: 'http://custom.test/v1',
+            apiKey: 'not-required',
+            model: 'custom-model',
+          },
+        };
+      },
+    });
+    ai.loadAuthToken = async () => null;
+    await assert.rejects(
+      () => ai.sendRequestToProvider(
+        { name: 'Custom API', baseURL: 'http://custom.test/v1', apiKey: 'not-required', model: 'custom-model' },
+        [{ role: 'user', content: 'hello' }],
+        { timeoutMs: 5 },
+      ),
+      /timed out after 1s/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('streamRequestToProvider passes an abort signal to streaming fetch', async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+  let signalSeen = false;
+
+  globalThis.fetch = async (_url, options) => {
+    signalSeen = Boolean(options.signal);
+    return {
+      ok: true,
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"ok"}}]}\n\n'));
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+          controller.close();
+        },
+      }),
+    };
+  };
+
+  try {
+    const ai = new AIProviderManager({
+      async load() {
+        return {
+          defaultProvider: 'custom',
+          custom: {
+            baseURL: 'http://custom.test/v1',
+            apiKey: 'not-required',
+            model: 'custom-model',
+          },
+        };
+      },
+    });
+    ai.loadAuthToken = async () => null;
+
+    const chunks = [];
+    for await (const chunk of ai.streamRequestToProvider(
+      { name: 'Custom API', baseURL: 'http://custom.test/v1', apiKey: 'not-required', model: 'custom-model' },
+      [{ role: 'user', content: 'hello' }],
+      { timeoutMs: 1000 },
+    )) {
+      chunks.push(chunk);
+    }
+
+    assert.equal(signalSeen, true);
+    assert.equal(chunks.map(chunk => chunk.content).join(''), 'ok');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('callAllProviders calls every ready configured provider', async () => {
   const originalFetch = globalThis.fetch;
   const calls = [];

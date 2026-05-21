@@ -19,6 +19,7 @@ test('slash suggestions include provider, model, and bundled resources', () => {
   assert(commands.includes('/history'));
   assert(commands.includes('/new'));
   assert(commands.includes('/theme:toggle'));
+  assert(commands.includes('/tui'));
   assert(commands.includes('/context'));
   assert(commands.includes('/scorecard'));
 });
@@ -52,6 +53,22 @@ test('Freebuff-style input shortcuts route bang commands and agent mentions', as
   assert.deepEqual(mention, { agentId: 'debug', task: 'fix failing test' });
 });
 
+test('submitted input closes any open slash menu before task handling', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  repl.readlineClosed = true;
+  let closed = 0;
+  const handledCommands = [];
+  repl.closeSlashMenu = () => {
+    closed++;
+  };
+  repl.handleSlashCommand = async input => handledCommands.push(input);
+
+  await repl.processInputTask('!npm test');
+
+  assert.equal(closed > 0, true);
+  assert.deepEqual(handledCommands, ['/bash npm test']);
+});
+
 test('codebase index auto-loads into project context and slash search remains callable', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'winter-codebase-'));
   await writeFile(path.join(root, 'package.json'), JSON.stringify({ type: 'module' }), 'utf8');
@@ -68,6 +85,28 @@ test('codebase index auto-loads into project context and slash search remains ca
   assert.match(context, /\[Codebase Index\]/);
   assert.match(context, /feature\.js/);
   assert.match(context, /featureFlag/);
+});
+
+test('startup codebase warmup is silent so it does not corrupt the prompt', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  const logs = [];
+  const originalLog = console.log;
+  repl.codebaseSearcher = {
+    indexer: {
+      getStats: () => ({ totalFiles: 0, totalChunks: 0 }),
+    },
+    reindex: async () => ({ totalFiles: 1, totalChunks: 1 }),
+  };
+  repl.initCodebaseSearch = async () => {};
+
+  console.log = (...args) => logs.push(args.join(' '));
+  try {
+    await repl.ensureCodebaseIndex({ verbose: false });
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert.equal(logs.join('\n').includes('Indexing codebase'), false);
 });
 
 test('context diagnostics and scorecard expose model-visible project state', async () => {
@@ -151,12 +190,15 @@ test('input panel renders as append-only bottom sidebar', () => {
   }
 
   const output = writes.join('');
-  assert.match(output, /Winter/);
-  assert.match(output, /@file/);
-  assert.match(output, /!cmd/);
-  assert.match(output, /Ctrl\+V/);
   assert.match(promptText, /winter/);
   assert.equal(promptCount, 1);
+  assert.ok(output.length > 5, 'input panel output should include border box');
+  assert.match(output, /WINTER/);
+  assert.notEqual(output, '\n');
+  const panel = repl.buildInputPanel();
+  assert.match(panel.hint, /@file/);
+  assert.match(panel.hint, /!cmd/);
+  assert.match(panel.hint, /\^V img/);
   assert.doesNotMatch(output, /\x1b\[[0-9;]*A/);
   assert.doesNotMatch(output, /\x1b\[[0-9;]*G/);
 });
@@ -174,15 +216,16 @@ test('direct Ctrl+V clipboard image sends image without requiring a file path', 
   };
   repl.closeInputBox = () => {};
   repl.showInputPrompt = () => {};
-  repl.closeSlashMenu = () => {};
   repl.rl = {
     line: 'phân tích lỗi UI này',
+    setPrompt() {},
+    prompt() {},
     write(value, options) {
       writes.push({ value, options });
     },
   };
 
-  const handled = await repl.handleDirectClipboardPaste();
+  const handled = await repl.inputController.handleDirectClipboardPaste();
   await repl.inputQueue;
 
   assert.equal(handled, true);
@@ -517,6 +560,30 @@ test('system prompt compresses oversized memories and project context', () => {
   assert.match(prompt, /project context truncated/i);
 });
 
+test('system prompt expands for flagship models instead of staying compact', () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  repl.ai = {
+    _modelTier: 'flagship',
+    getActiveProvider: () => 'openai',
+    providers: {
+      openai: { model: 'gpt-4o' },
+    },
+  };
+  repl.session = {
+    getSessionId: () => 'test-session',
+    getMemory: () => Array.from({ length: 10 }, (_, index) => ({ text: `Memory ${index + 1}: ${'x'.repeat(600)}` })),
+    getPlans: () => [{ status: 'pending', title: 'Huge plan', description: 'y'.repeat(1200) }],
+    getContext: () => ({ activeSkills: ['coding', 'debug'], bootstrapPlan: { title: 'Bootstrap', description: 'Inspect everything' } }),
+  };
+
+  const prompt = repl.getSystemPrompt('Project context ' + 'z'.repeat(24000));
+
+  assert(prompt.length > 14000);
+  assert.match(prompt, /## Core Principles/);
+  assert.match(prompt, /## Tool Usage/);
+  assert.match(prompt, /## Project Context/);
+});
+
 test('buildPromptToolResult caps large tool outputs before final answer prompt', () => {
   const repl = new WinterREPL({ projectPath: process.cwd() });
   repl.tools = {
@@ -536,6 +603,33 @@ test('buildPromptToolResult caps large tool outputs before final answer prompt',
   assert.equal(result.lines, 1000);
   assert(result.content.length < 6000);
   assert.match(result.content, /truncated/i);
+});
+
+test('buildPromptToolResult preserves more tool output for flagship models', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  repl.ai = {
+    _modelTier: 'flagship',
+    getActiveProvider: () => 'openai',
+    providers: {
+      openai: { model: 'gpt-4o' },
+    },
+  };
+  repl.tools = {
+    summarizeToolResult: result => ({ success: result.success, path: result.path }),
+  };
+
+  const result = await repl.buildPromptToolResultForModel('Read', {
+    success: true,
+    path: 'big-file.js',
+    content: 'x'.repeat(20000),
+    lines: 1000,
+    size: 20000,
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.path, 'big-file.js');
+  assert.notEqual(result.tokenJuice?.compressed, true);
+  assert(result.content.length > 12000);
 });
 
 test('compactStartupMemories removes full startup resource dumps and keeps path summaries', async () => {
@@ -684,6 +778,62 @@ test('runConversation streams direct assistant answers', async () => {
   }
 });
 
+test('cancelCurrentTask aborts an active streamed provider request', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  const originalWrite = process.stdout.write;
+  const originalLog = console.log;
+  const writes = [];
+  let signalSeen = false;
+
+  repl.currentAbortController = new AbortController();
+  repl.isProcessing = true;
+  repl.ai = {
+    tools: [],
+    providers: { custom: { model: 'slow-model' } },
+    getActiveProvider: () => 'custom',
+    setTools(tools) {
+      this.tools = tools;
+    },
+    async *streamRequest(_messages, options = {}) {
+      signalSeen = Boolean(options.signal);
+      await new Promise((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted.', 'AbortError'));
+        }, { once: true });
+      });
+    },
+  };
+  repl.tools = {
+    normalizeToolName: name => name,
+    async execute() {
+      return { success: true };
+    },
+  };
+
+  process.stdout.write = chunk => {
+    writes.push(String(chunk));
+    return true;
+  };
+  console.log = (...args) => {
+    writes.push(args.join(' '));
+  };
+
+  try {
+    const promise = repl.runConversation([{ role: 'user', content: 'slow answer' }], 'Test', [{ name: 'Read' }]);
+    setTimeout(() => repl.cancelCurrentTask(), 1);
+
+    await assert.rejects(promise, /AbortError/);
+    assert.equal(signalSeen, true);
+    assert.equal(repl.currentAbortController.signal.aborted, true);
+    assert.match(writes.join('\n'), /Đã hủy công việc hiện tại/);
+  } finally {
+    process.stdout.write = originalWrite;
+    console.log = originalLog;
+    repl.isProcessing = false;
+    repl.currentAbortController = null;
+  }
+});
+
 test('runConversation blocks action completion claims without tool evidence and retries', async () => {
   const repl = new WinterREPL({ projectPath: process.cwd() });
 
@@ -806,6 +956,91 @@ test('runConversation executes streamed tool calls then streams final answer', a
 
   assert.equal(answer.finalContent, 'Done');
   assert.deepEqual(executed, [{ name: 'Read', args: { file_path: 'README.md' } }]);
+});
+
+test('runConversation does not print a second self-critique answer for short chat replies', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  let streamCount = 0;
+  const writes = [];
+  const originalWrite = process.stdout.write;
+
+  repl.ai = {
+    tools: [],
+    providers: { custom: { model: 'short-chat-model' } },
+    getActiveProvider: () => 'custom',
+    setTools(tools) {
+      this.tools = tools;
+    },
+    async *streamRequest() {
+      streamCount++;
+      yield { content: 'Rồi nè.' };
+    },
+  };
+  repl.tools = {
+    normalizeToolName: name => name,
+    async execute() {
+      throw new Error('should not execute tools');
+    },
+  };
+
+  process.stdout.write = (chunk) => {
+    writes.push(String(chunk));
+    return true;
+  };
+
+  try {
+    const answer = await repl.runConversation([{ role: 'user', content: 'alo' }], 'Test', [{ name: 'Read' }]);
+
+    assert.equal(answer.finalContent, 'Rồi nè.');
+    assert.equal(streamCount, 1);
+    assert.equal(writes.join('').match(/Rồi nè\./g)?.length, 1);
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+});
+
+test('requestAssistantTurn does not retry normal response after stream rate limit', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  let sendCalled = false;
+
+  repl.ai = {
+    async *streamRequest() {
+      const error = new Error('Custom API stream error (429): rate limit reached on tokens per minute');
+      error.status = 429;
+      throw error;
+    },
+    async sendRequest() {
+      sendCalled = true;
+      return { choices: [{ message: { content: 'should not happen' } }] };
+    },
+  };
+
+  await assert.rejects(
+    () => repl.requestAssistantTurn([{ role: 'user', content: 'alo' }], {}, Date.now(), {}),
+    /429|rate limit/i
+  );
+  assert.equal(sendCalled, false);
+});
+
+test('requestAssistantTurn does not retry normal response after stream timeout', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  let sendCalled = false;
+
+  repl.ai = {
+    async *streamRequest() {
+      throw new Error('Custom API stream timed out after 120s');
+    },
+    async sendRequest() {
+      sendCalled = true;
+      return { choices: [{ message: { content: 'should not happen' } }] };
+    },
+  };
+
+  await assert.rejects(
+    () => repl.requestAssistantTurn([{ role: 'user', content: 'alo' }], {}, Date.now(), {}),
+    /timed out|timeout/i
+  );
+  assert.equal(sendCalled, false);
 });
 
 test('runConversation executes legacy function_call responses', async () => {

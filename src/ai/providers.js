@@ -25,9 +25,62 @@ const RESERVED_CONFIG_SECTIONS = new Set([
   'ui',
 ]);
 
+const DEFAULT_REQUEST_TIMEOUT_MS = 120000;
+
 function isAuthError(error) {
   const msg = String(error?.message || error || '');
   return /\b(401|403)\b/.test(msg) || /authentication_error|invalid_api_key|unauthorized|auth\s*failed/i.test(msg);
+}
+
+function isRateLimitError(error) {
+  const msg = String(error?.message || error || '');
+  return error?.status === 429 || /\b429\b|rate[_ -]?limit|tokens per minute|\bTPM\b/i.test(msg);
+}
+
+function getRequestTimeoutMs(options = {}) {
+  const raw = options.timeoutMs ?? process.env.WINTER_REQUEST_TIMEOUT_MS;
+  const value = Number(raw);
+  if (Number.isFinite(value) && value > 0) return value;
+  return DEFAULT_REQUEST_TIMEOUT_MS;
+}
+
+function createTimeoutSignal(timeoutMs, externalSignal = null) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const onAbort = () => {
+    controller.abort(externalSignal?.reason || new DOMException('The operation was aborted.', 'AbortError'));
+  };
+  if (externalSignal?.aborted) {
+    onAbort();
+  } else if (externalSignal) {
+    externalSignal.addEventListener('abort', onAbort, { once: true });
+  }
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new Error(`Winter request timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
+  if (typeof timer.unref === 'function') timer.unref();
+  return {
+    signal: controller.signal,
+    timedOut: () => timedOut,
+    cleanup: () => {
+      clearTimeout(timer);
+      if (externalSignal) externalSignal.removeEventListener('abort', onAbort);
+    },
+  };
+}
+
+function normalizeFetchError(error, provider, timeoutMs, stream = false, timedOut = false) {
+  if (timedOut || /timed out/i.test(String(error?.message || ''))) {
+    const label = stream ? 'stream' : 'request';
+    return new Error(`${provider?.name || 'Provider'} ${label} timed out after ${Math.ceil(timeoutMs / 1000)}s`);
+  }
+  if (error?.name === 'AbortError' || /abort/i.test(String(error?.message || ''))) {
+    const abortError = new Error('AbortError');
+    abortError.name = 'AbortError';
+    return abortError;
+  }
+  return error;
 }
 
 export class AIProviderManager {
@@ -365,7 +418,7 @@ export class AIProviderManager {
         model: routingModel,
         reasoning: routingReasoning,
         reasoningLevel: options.reasoningLevel || executionProfile.reasoningLevel,
-      }), { maxAttempts: 3, baseDelayMs: 150 });
+      }), { maxAttempts: 3, baseDelayMs: 150, retryable: error => !isRateLimitError(error) && !/\b(400|404)\b/.test(String(error?.message || error || '')) });
     } catch (error) {
       if (isAuthError(error) && routedProvider !== defaultProvider && defaultProvider) {
         if (!this._fallbackWarned) {
@@ -377,7 +430,7 @@ export class AIProviderManager {
           model: options.model || defaultProvider.model,
           reasoning: routingReasoning,
           reasoningLevel: options.reasoningLevel || executionProfile.reasoningLevel,
-        }), { maxAttempts: 1, baseDelayMs: 0 });
+        }), { maxAttempts: 1, baseDelayMs: 0, retryable: error => !isRateLimitError(error) && !/\b(400|404)\b/.test(String(error?.message || error || '')) });
       }
       throw error;
     }
@@ -426,6 +479,7 @@ export class AIProviderManager {
     if (!provider) {
       throw new Error('No active provider is configured');
     }
+    const timeoutMs = getRequestTimeoutMs(options);
 
     const body = {
       model: options.model || provider.model,
@@ -459,15 +513,26 @@ export class AIProviderManager {
       headers['Authorization'] = `Bearer ${provider.apiKey}`;
     }
 
-    const response = await fetch(`${provider.baseURL}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-    });
+    const timeout = createTimeoutSignal(timeoutMs, options.signal || options.abortSignal);
+    let response;
+    try {
+      response = await fetch(`${provider.baseURL}/chat/completions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: timeout.signal,
+      });
+    } catch (error) {
+      throw normalizeFetchError(error, provider, timeoutMs, false, timeout.timedOut());
+    } finally {
+      timeout.cleanup();
+    }
 
     if (!response.ok) {
       const error = await response.text();
-      throw new Error(`${provider.name} error (${response.status}): ${error}`);
+      const requestError = new Error(`${provider.name} error (${response.status}): ${error}`);
+      requestError.status = response.status;
+      throw requestError;
     }
 
     return await response.json();
@@ -477,6 +542,7 @@ export class AIProviderManager {
     if (!provider) {
       throw new Error('No active provider is configured');
     }
+    const timeoutMs = getRequestTimeoutMs(options);
 
     const body = {
       model: options.model || provider.model,
@@ -515,67 +581,78 @@ export class AIProviderManager {
       headers['Authorization'] = `Bearer ${provider.apiKey}`;
     }
 
-    const response = await fetch(`${provider.baseURL}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-    });
+    const timeout = createTimeoutSignal(timeoutMs, options.signal || options.abortSignal);
+    let response;
+    try {
+      response = await fetch(`${provider.baseURL}/chat/completions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: timeout.signal,
+      });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`${provider.name} stream error (${response.status}): ${error}`);
-    }
-
-    if (!response.body) {
-      throw new Error(`${provider.name} did not return a stream body`);
-    }
-
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    for await (const chunk of response.body) {
-      buffer += decoder.decode(chunk, { stream: true });
-      const lines = buffer.split(/\r?\n/);
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith('data:')) continue;
-
-        const payload = trimmed.slice(5).trim();
-        if (!payload || payload === '[DONE]') continue;
-
-        let data;
-        try {
-          data = JSON.parse(payload);
-        } catch {
-          continue;
-        }
-
-        const choice = data.choices?.[0] || {};
-        const content = choice.delta?.content ?? choice.message?.content ?? choice.text ?? '';
-        yield {
-          content,
-          usage: data.usage,
-          raw: data,
-        };
+      if (!response.ok) {
+        const error = await response.text();
+        const streamError = new Error(`${provider.name} stream error (${response.status}): ${error}`);
+        streamError.status = response.status;
+        throw streamError;
       }
-    }
 
-    const tail = buffer.trim();
-    if (tail.startsWith('data:')) {
-      const payload = tail.slice(5).trim();
-      if (payload && payload !== '[DONE]') {
-        try {
-          const data = JSON.parse(payload);
+      if (!response.body) {
+        throw new Error(`${provider.name} did not return a stream body`);
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      for await (const chunk of response.body) {
+        buffer += decoder.decode(chunk, { stream: true });
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data:')) continue;
+
+          const payload = trimmed.slice(5).trim();
+          if (!payload || payload === '[DONE]') continue;
+
+          let data;
+          try {
+            data = JSON.parse(payload);
+          } catch {
+            continue;
+          }
+
           const choice = data.choices?.[0] || {};
+          const content = choice.delta?.content ?? choice.message?.content ?? choice.text ?? '';
           yield {
-            content: choice.delta?.content ?? choice.message?.content ?? choice.text ?? '',
+            content,
             usage: data.usage,
             raw: data,
           };
-        } catch {}
+        }
       }
+
+      const tail = buffer.trim();
+      if (tail.startsWith('data:')) {
+        const payload = tail.slice(5).trim();
+        if (payload && payload !== '[DONE]') {
+          try {
+            const data = JSON.parse(payload);
+            const choice = data.choices?.[0] || {};
+            yield {
+              content: choice.delta?.content ?? choice.message?.content ?? choice.text ?? '',
+              usage: data.usage,
+              raw: data,
+            };
+          } catch {}
+        }
+      }
+    } catch (error) {
+      throw normalizeFetchError(error, provider, timeoutMs, true, timeout.timedOut());
+    } finally {
+      timeout.cleanup();
     }
   }
 

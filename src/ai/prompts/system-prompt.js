@@ -5,6 +5,7 @@
  */
 
 import { formatRuntimeEnvironmentSummary, getRuntimeEnvironment } from '../../cli/runtime-env.js';
+import { getModelBudgetMultiplier } from '../model-capabilities.js';
 
 const BASE_PRINCIPLES = [
   'Execute, don\'t describe - Do the work, don\'t write plans about doing the work',
@@ -34,11 +35,22 @@ function buildEnvironmentSummary() {
   ].join('\n');
 }
 
+function getPromptBudgets(modelTier = '') {
+  const scale = getModelBudgetMultiplier(modelTier);
+  const compactSystemPrompt = scale <= 0.75;
+
+  return {
+    compactSystemPrompt,
+    projectContextBudget: Math.round(3200 * scale),
+    resourceContextBudget: Math.round(1200 * scale),
+  };
+}
+
 function formatToolList(tools = []) {
   return tools.length > 0 ? tools.slice(0, 10).join(', ') : '';
 }
 
-function appendSharedContext(parts, { environment, session, design, resourceContext, context, includeResources = false } = {}) {
+function appendSharedContext(parts, { environment, session, design, resourceContext, context, includeResources = false, resourceContextBudget = 1200 } = {}) {
   parts.push('## Runtime Environment', environment || buildEnvironmentSummary(), '');
 
   if (session?.memory?.length) {
@@ -65,7 +77,7 @@ function appendSharedContext(parts, { environment, session, design, resourceCont
   }
 
   if (includeResources && resourceContext) {
-    parts.push(resourceContext.trim().slice(0, 1200), '');
+    parts.push(resourceContext.trim().slice(0, resourceContextBudget), '');
   }
 
   if (context && typeof context === 'object') {
@@ -74,7 +86,10 @@ function appendSharedContext(parts, { environment, session, design, resourceCont
 }
 
 function buildStandardSystemPrompt(options = {}) {
-  const { role = 'coding', tools = [], resourceContext } = options;
+  const { role = 'coding', tools = [], resourceContext, modelTier = '' } = options;
+  const budgets = getPromptBudgets(modelTier);
+  const projectContextBudget = options.projectContextBudget ?? budgets.projectContextBudget;
+  const compactSystemPrompt = options.compactSystemPrompt ?? budgets.compactSystemPrompt;
   const parts = [
     'You are Winter, an expert AI coding assistant.',
     '',
@@ -93,7 +108,11 @@ function buildStandardSystemPrompt(options = {}) {
 
   const toolList = formatToolList(tools);
   if (toolList) parts.push('## Tools', toolList, '');
-  appendSharedContext(parts, { ...options, includeResources: Boolean(resourceContext) && (role === 'design' || role === 'ui') });
+  appendSharedContext(parts, {
+    ...options,
+    includeResources: Boolean(resourceContext) && (role === 'design' || role === 'ui'),
+    resourceContextBudget: budgets.resourceContextBudget,
+  });
 
   parts.push('Always respond in Vietnamese.');
   return parts.filter(Boolean).join('\n');
@@ -109,7 +128,10 @@ export function buildSystemPrompt({
   resourceContext,
   modelTier,
 } = {}) {
+  const budgets = getPromptBudgets(modelTier);
   const options = { role, context, tools, session, environment, design, resourceContext, modelTier };
+  options.projectContextBudget = options.projectContextBudget ?? budgets.projectContextBudget;
+  options.compactSystemPrompt = options.compactSystemPrompt ?? budgets.compactSystemPrompt;
   return buildStandardSystemPrompt(options);
 }
 

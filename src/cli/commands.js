@@ -15,6 +15,7 @@ import { redactSecrets } from './secret-env.js';
 import { formatRuntimeEnvironmentSummary, getRuntimeEnvironment } from './runtime-env.js';
 import { ContextLoader } from './context-loader.js';
 import { ECCManager } from './ecc.js';
+import { buildTuiSnapshot, renderLandingTui } from './tui.js';
 import { HtmlFxManager } from '../integrations/htmlfx-manager.js';
 import { selectWorkflow } from '../ai/workflow-selector.js';
 import { getProfileBlueprint } from '../ai/profile-blueprints.js';
@@ -73,6 +74,7 @@ export class CommandParser {
       resources: this.handleResources.bind(this),
       htmlfx: this.handleHtmlFx.bind(this),
       'memory-vault': this.handleMemoryVault.bind(this),
+      tui: this.handleTui.bind(this),
       provider: this.handleProvider.bind(this),
       providers: this.showProviders.bind(this),
       model: this.handleModel.bind(this),
@@ -121,6 +123,7 @@ export class CommandParser {
       '/forget': (args) => this.session.clearMemory(args.length > 0 ? args.join(' ') : null),
       '/memories': () => this.showMemories(),
       '/memory-vault': () => this.handleMemoryVault(args),
+      '/tui': () => this.handleTui(args),
       '/plans': () => this.showPlans(),
       '/plan': () => this.handlePlan(args),
       '/cache': () => this.handleCache(args),
@@ -218,6 +221,15 @@ export class CommandParser {
     } catch {
       console.log(`${colors.yellow}No TokenJuice memory vault yet. It will be created at ${root} after a large tool result is compressed.${colors.reset}`);
     }
+  }
+
+  async handleTui() {
+    await this.ai.init?.();
+    const snapshot = buildTuiSnapshot(this);
+    console.log(`\n${renderLandingTui(snapshot, {
+      colors,
+      title: 'Winter Dashboard',
+    })}\n`);
   }
 
   async searchResourceFiles(root, query, limit = 30) {

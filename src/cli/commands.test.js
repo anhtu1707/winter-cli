@@ -156,6 +156,32 @@ test('slash providers command lists available providers', async () => {
   assert(logs.some(line => line.includes('custom-model')));
 });
 
+test('tui command renders dashboard in slash and plain command modes', async () => {
+  const parser = createParser();
+  parser.ai = {
+    providers: {
+      custom: { model: 'gpt-test', ready: true },
+    },
+    init: async () => {},
+    getActiveProvider: () => 'custom',
+  };
+  const logs = [];
+  const originalLog = console.log;
+
+  console.log = (...args) => logs.push(args.join(' '));
+  try {
+    await parser.parse(['/tui']);
+    await parser.parse(['tui']);
+  } finally {
+    console.log = originalLog;
+  }
+
+  const output = logs.join('\n');
+  assert.match(output, /Winter Dashboard/);
+  assert.match(output, /custom\/gpt-test/);
+  assert.doesNotMatch(output, /Unknown slash command/);
+});
+
 test('provider command switches and persists provider without slash', async () => {
   const saved = [];
   const ai = {
