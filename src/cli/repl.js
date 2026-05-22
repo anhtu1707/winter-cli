@@ -16,7 +16,6 @@ import {
   renderStartupTui,
   renderStatusPanel,
 } from './tui.js';
-import { terminalManager } from './terminal-manager.js';
 import { WinterInputController } from './input-controller.js';
 import { ToolExecutor } from '../tools/executor.js';
 import { SessionManager } from '../session/manager.js';
@@ -125,9 +124,6 @@ export class WinterREPL {
     this.inputController = new WinterInputController(this);
     this.watchers = [];
     this.startupNotices = [];
-    this._fixedPanel = Boolean(process.stdout.isTTY) && process.env.WINTER_FIXED_PANEL_TUI !== '0';
-    
-    terminalManager.install();
   }
 
   async initCodebaseSearch() {
@@ -1798,6 +1794,7 @@ ${colors.reset}
     const hasPath = /[A-Za-z]:[\\/][\w.\\/\\-]+/i.test(text) || /(?:^|\s)[.~]?\/[\w.\/-]+/i.test(text);
     const readVerbs = /\b(đọc|doc|read|xem|view|mở|open|show|hiện|hiển thị|cat|type)\b/i;
     const readFilePatterns = /\b(đọc|doc|read|xem|view|mở|open|show|hiện|cat|type)\b.*\.(?:js|ts|py|json|md|css|html|txt|yaml|yml|toml|cfg|ini|env|sh|bat|ps1|xml|vue|svelte|go|rs|java|c|cpp|rb|php)\b/i;
+    const readPatterns = readFilePatterns;
     const dirPatterns = /\b(đọc|doc|read|xem|liệt kê|list|ls|dir|show|hiện)\b.*\b(thư mục|folder|directory|dir)\b/i;
 
     if (readFilePatterns.test(text)) {

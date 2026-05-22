@@ -118,7 +118,20 @@ export function formatRuntimeEnvironmentSummary(profile = getRuntimeEnvironment(
       ].join('\n')
     : 'Bash tool shell rule: use the native POSIX shell; leave shell unspecified unless a specific shell is required.';
 
+  const now = new Date();
+  const timeFormatter = new Intl.DateTimeFormat('vi-VN', {
+    weekday: 'long',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZoneName: 'short'
+  });
+
   return [
+    `Current Local Time: ${timeFormatter.format(now)}`,
     `Host OS: ${profile.hostOs}`,
     `Node platform: ${profile.platform}`,
     `CPU arch: ${profile.arch}`,

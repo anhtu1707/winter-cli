@@ -65,8 +65,6 @@ export function renderLandingTui(snapshot, { colors } = {}) {
   const padding = Math.max(0, W - leftStatus.length - rightStatus.length);
   const statusBar = `${bgBlue}${white}${leftStatus}${' '.repeat(padding)}${rightStatus}${reset}`;
 
-  const dock = renderInputPanel(snapshot, { colors });
-
   return [
     ...logoLines,
     '',
@@ -74,8 +72,7 @@ export function renderLandingTui(snapshot, { colors } = {}) {
     '',
     `${white}Directory${reset} ${dim}${snapshot.projectPath}${reset}`,
     '',
-    statusBar,
-    dock.top
+    statusBar
   ].join('\n');
 }
 
