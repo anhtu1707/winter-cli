@@ -662,8 +662,13 @@ export class WinterREPL {
     const PASTE_DELAY = 80;
 
     process.stdin.on('data', (chunk) => {
-      // If a large chunk or chunk with newlines arrives, it's definitely a paste.
-      if (chunk.length > 3 || chunk.includes('\n')) {
+      const text = chunk.toString('utf8');
+      const newlineCount = (text.match(/\r?\n/g) || []).length;
+
+      // A normal submitted line can arrive as one chunk like "hello\n".
+      // Treat only real multi-line chunks as paste, otherwise REPL input
+      // gets stuck in multiline mode and never reaches the AI.
+      if (newlineCount > 1) {
         this._isPasteChunk = true;
         if (this._pasteChunkTimer) clearTimeout(this._pasteChunkTimer);
         this._pasteChunkTimer = setTimeout(() => {
@@ -676,7 +681,7 @@ export class WinterREPL {
       this._pasteTimer = null;
       if (this._pasteBuffer.length === 0) return;
 
-      const isSingleLineInput = this._pasteBuffer.length === 1 && !this._isPasteChunk;
+      const isSingleLineInput = this._pasteBuffer.length === 1 && this._multilineBuffer.length === 0;
       const isJustEmptyEnter = this._pasteBuffer.length === 1 && this._pasteBuffer[0].trim() === '';
 
       // Normal single-line submit
