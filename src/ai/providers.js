@@ -614,11 +614,15 @@ export class AIProviderManager {
 
       const decoder = new TextDecoder();
       let buffer = '';
+      let rawText = '';
+      let yieldedAny = false;
 
       for await (const chunk of response.body) {
         if (timeout.resetTimer) timeout.resetTimer();
         
-        buffer += decoder.decode(chunk, { stream: true });
+        const decoded = decoder.decode(chunk, { stream: true });
+        rawText += decoded;
+        buffer += decoded;
         const lines = buffer.split(/\r?\n/);
         buffer = lines.pop() || '';
 
@@ -638,6 +642,7 @@ export class AIProviderManager {
 
           const choice = data.choices?.[0] || {};
           const content = choice.delta?.content ?? choice.message?.content ?? choice.text ?? '';
+          yieldedAny = true;
           yield {
             content,
             usage: data.usage,
@@ -653,12 +658,31 @@ export class AIProviderManager {
           try {
             const data = JSON.parse(payload);
             const choice = data.choices?.[0] || {};
+            yieldedAny = true;
             yield {
               content: choice.delta?.content ?? choice.message?.content ?? choice.text ?? '',
               usage: data.usage,
               raw: data,
             };
           } catch {}
+        }
+      }
+
+      if (!yieldedAny) {
+        try {
+          const data = JSON.parse(rawText.trim());
+          const choice = data.choices?.[0] || {};
+          const content = choice.delta?.content ?? choice.message?.content ?? choice.text ?? '';
+          if (content || data.usage || choice.finish_reason) {
+            yield {
+              content,
+              usage: data.usage,
+              raw: data,
+            };
+          }
+        } catch {
+          // Some OpenAI-compatible servers return 200 with a non-SSE/non-JSON body
+          // when streaming is requested. Let the caller fall back to non-streaming.
         }
       }
     } catch (error) {
