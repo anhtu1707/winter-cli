@@ -9,7 +9,7 @@ export class AgentRuntime {
     this.repl = repl;
   }
 
-  async runConversation(messages, label = 'Thinking', tools = null) {
+  async runConversation(messages, label = 'Thinking... (Đang suy nghĩ, tìm cách giải quyết)', tools = null) {
     const repl = this.repl;
     repl.spinner = new Spinner(label + '...');
     repl.spinner.start();
@@ -46,12 +46,17 @@ export class AgentRuntime {
     try {
       for (let i = 0; i < maxToolTurns; i++) {
         if (repl.isCancelled) throw new Error('AbortError');
+        if (repl.spinner) {
+          repl.spinner.update(`${label}...`);
+          repl.spinner.start();
+        }
         const turn = await repl.requestAssistantTurn(messages, {
           provider: executionProfile.provider,
           model: executionProfile.model,
           enableTools: true,
           toolPromptOnly: forceTextToolFallback,
           requireToolEvidence: requireToolEvidence && !usedTools,
+          usedMutatingTools: usedMutatingTools,
         }, startedAt, totalUsage);
 
         const assistantMsg = turn.assistantMsg || {};
@@ -64,11 +69,14 @@ export class AgentRuntime {
         if (toolCalls.length === 0) {
           if (turn.finishReason === 'tool_evidence_required') {
             noToolActionRetries++;
-            if (noToolActionRetries > 2) {
-              finalContent = 'Chưa thực hiện được: model trả lời mà không dùng tool nên Winter đã chặn để tránh báo xạo.';
+            if (noToolActionRetries > 3) {
+              finalContent = 'Chưa thực hiện được: model trả lời mà không dùng tool nên Winter đã chặn để tránh báo xạo. Hãy thử lại hoặc dùng model mạnh hơn.';
               console.log(`\n${colors.yellow}${finalContent}${colors.reset}\n`);
               reachedToolLimit = false;
               break;
+            }
+            if (noToolActionRetries >= 2) {
+              console.log(`\n${colors.yellow}! Model không chịu dùng tool (lần ${noToolActionRetries}/3). Đang ép buộc lại...${colors.reset}`);
             }
             messages.push({
               role: 'assistant',
@@ -177,9 +185,14 @@ export class AgentRuntime {
           } else if (!proceed) {
             result = { success: false, error: 'User denied permission to execute this command.' };
           } else {
+            if (repl.spinner) {
+              repl.spinner.update(`Executing ${canonicalToolName}... (Đang chạy lệnh)`);
+              repl.spinner.start();
+            }
             result = toolName
               ? await repl.tools.execute(canonicalToolName, enrichedArgs, { cwd: repl.projectPath })
               : { success: false, error: 'Tool call is missing a tool name' };
+            if (repl.spinner) repl.spinner.stop();
           }
           const promptToolResult = await repl.buildPromptToolResultForModel(canonicalToolName, result);
           messages.push({

@@ -35,7 +35,7 @@ export const SLASH_COMMANDS = [
   { cmd: '/grep', desc: 'Search files', usage: '/grep <pattern>' },
   { cmd: '/bash', desc: 'Run command', usage: '/bash <command>' },
   { cmd: '/image', desc: 'Analyze image/screenshot or clipboard image', usage: '/image [file] [question]' },
-  { cmd: '/design', desc: 'Design commands', sub: ['search', 'add', 'list', 'preview'] },
+  { cmd: '/design', desc: 'Design commands', sub: ['search', 'add', 'apply', 'list', 'preview'] },
   { cmd: '/designs', desc: 'List/search awesome-design-md systems', usage: '/designs [query]' },
   { cmd: '/skill', desc: 'Skills management', sub: ['list', 'enable', 'create'] },
   { cmd: '/skills', desc: 'List local Winter/Codex/Claude skills' },

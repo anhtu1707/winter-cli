@@ -3,6 +3,8 @@ import { promises as fs } from 'fs';
 import { colors } from './snowflake-logo.js';
 import { SLASH_COMMANDS } from './slash-commands.js';
 
+import { DesignCommands } from '../design/commands.js';
+
 function getPageAgentRoot(repl) {
   return repl.contextLoader?.getResourcePaths?.()?.pageAgent || path.join(repl.projectPath, 'resources', 'local', 'page-agent');
 }
@@ -735,11 +737,11 @@ export async function handleSlashCommand(repl, input) {
       break;
 
     // Design system
-    case '/design':
-      console.log(`${colors.yellow}Design commands:${colors.reset}`);
-      console.log(`  /design add <name> — Add a design system`);
-      console.log(`  /design search <query> — Search design systems`);
+    case '/design': {
+      const designCmd = new DesignCommands(repl);
+      await designCmd.execute(args[0], args.slice(1));
       break;
+    }
     case '/designs':
       await repl.showDesignSystems();
       break;

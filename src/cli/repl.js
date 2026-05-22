@@ -1706,11 +1706,19 @@ ${colors.reset}
     const text = this.getLatestUserText(messages).toLowerCase();
     if (!text.trim()) return false;
 
-    const actionPattern = /\b(fix|repair|bug|debug|implement|create|write|edit|modify|update|delete|remove|refactor|run|test|build|commit|push|publish|install|check|inspect|read|scan|grep|search|change|apply|patch|sua|lam|tao|ghi|doc|xoa|chay|kiem tra|cai|them|doi|review|tim|sửa|làm|tạo|đọc|xóa|xoá|chạy|kiểm tra|cài|thêm|đổi|tìm)\b/i;
-    const targetPattern = /\b(file|repo|project|code|src|test|build|git|npm|node|folder|directory|cli|tool|provider|model|config|readme|package\.json|du an|thu muc|tap tin|loi|chuc nang|dự án|thư mục|tập tin|lỗi|chức năng)\b|[A-Za-z]:[\\/]|\.js\b|\.ts\b|\.tsx\b|\.json\b|\.md\b/i;
-    const pureQuestionPattern = /^(what|why|how|when|where|is|are|can|could|should|would|tai sao|vi sao|la gi|co nen|co phai|tại sao|vì sao|là gì|có nên|có phải)\b/i;
+    // Direct action verbs (EN + VN)
+    const actionPattern = /\b(fix|repair|bug|debug|implement|create|write|edit|modify|update|delete|remove|refactor|run|test|build|commit|push|publish|install|check|inspect|read|scan|grep|search|change|apply|patch|add|move|rename|copy|migrate|deploy|setup|configure|generate|format|clean|reset|revert|undo|merge|split|extract|inject|insert|replace|append|prepend|convert|transform|compile|execute|verify|validate|optimize|improve|enhance|upgrade|downgrade|enable|disable|toggle|set|connect|send|fetch|download|upload|open|close|start|stop|restart|sua|lam|tao|ghi|doc|xoa|chay|kiem tra|cai|them|doi|review|tim|viet|trien khai|cap nhat|xay dung|cau hinh|chinh|bo sung|loai bo|sửa|làm|tạo|đọc|xóa|xoá|chạy|kiểm tra|cài|thêm|đổi|tìm|viết|triển khai|cập nhật|xây dựng|cấu hình|chỉnh|bổ sung|loại bỏ|di chuyển|đổi tên|nâng cấp|tối ưu|kết nối|gửi|tải|mở|đóng|khởi động|dừng)\b/i;
+    // Target patterns (filenames, paths, project terms)
+    const targetPattern = /\b(file|repo|project|code|src|test|build|git|npm|node|folder|directory|cli|tool|provider|model|config|readme|package\.json|component|module|class|function|api|endpoint|route|page|style|css|html|template|schema|database|server|client|app|service|hook|context|store|reducer|middleware|controller|handler|view|layout|du an|thu muc|tap tin|loi|chuc nang|dự án|thư mục|tập tin|lỗi|chức năng|giao diện|trang|dịch vụ|thành phần|mô hình)\b|[A-Za-z]:[\\/]|\.jsx?\b|\.tsx?\b|\.json\b|\.md\b|\.py\b|\.css\b|\.html\b|\.vue\b|\.svelte\b|\.rs\b|\.go\b|\.java\b|\.c(pp)?\b|\.rb\b/i;
+    // Pure questions that don't need tool action
+    const pureQuestionPattern = /^(what|why|how|when|where|is|are|can|could|should|would|explain|describe|tell me|compare|giải thích|mô tả|so sánh|tai sao|vi sao|la gi|co nen|co phai|tại sao|vì sao|là gì|có nên|có phải|nhu the nao|như thế nào|khi nào)\b/i;
 
     if (pureQuestionPattern.test(text) && !actionPattern.test(text)) return false;
+    
+    // Even without explicit target, some verbs are strong enough on their own
+    const strongActionAlone = /\b(fix|debug|deploy|build|test|commit|install|run|refactor|sửa|chạy|cài|triển khai|xây dựng)\b/i;
+    if (strongActionAlone.test(text)) return true;
+    
     return actionPattern.test(text) && targetPattern.test(text);
   }
 
@@ -1728,23 +1736,107 @@ ${colors.reset}
     const text = String(content || '').toLowerCase();
     if (!text.trim()) return false;
 
-    const clarification = /(?:cần thêm|cho mình|vui lòng|please provide|which file|what file|need more|clarify|không rõ|chưa rõ|file nào|thư mục nào|c?n th?m|cho m?nh|vui l?ng|kh?ng r?|ch?a r?|file n?o|th? m?c n?o)/i;
+    // If model is asking for clarification, that's legitimate - no tool needed
+    const clarification = /(?:cần thêm thông tin|cho mình biết|vui lòng cung cấp|please provide|which file|what file|need more info|clarify|không rõ|chưa rõ|file nào|thư mục nào|bạn muốn|you want me to|could you specify|can you tell)/i;
     if (clarification.test(text)) return false;
+
     return true;
+  }
+
+  detectFakeCompletion(content = '') {
+    const text = String(content || '').toLowerCase();
+    if (!text.trim()) return false;
+
+    // Detect fake completion claims - model says it did something without using tools
+    const fakeCompletionClaims = /(?:đã (?:sửa|tạo|viết|xóa|cập nhật|thêm|chỉnh|xong|hoàn thành|fix|update|edit|write|create|delete|remove|modify|change|apply|deploy|push)|i(?:'ve| have) (?:fixed|created|written|updated|added|modified|changed|edited|applied|deployed|deleted|removed|patched|implemented|refactored)|done!|xong rồi|hoàn thành|đã hoàn tất|hoàn tất|the (?:fix|change|update|edit|modification) (?:has been|is) (?:applied|done|completed|made)|here(?:'s| is) the (?:fix|update|change|solution|implementation|code)|file (?:has been|was) (?:updated|created|modified|written|changed)|changes? (?:have been|has been|were) (?:made|applied|saved)|successfully (?:updated|created|modified|fixed|applied|changed|written))/i;
+    if (fakeCompletionClaims.test(text)) return true;
+
+    // Detect code blocks that pretend to show "changes" without tool use
+    const codeBlockWithFilePath = /```[\s\S]*?(?:[\/\\][\w.-]+\.(?:js|ts|py|css|html|json|md|jsx|tsx|vue|go|rs|java|c|cpp|rb|sh))[\s\S]*?```/i;
+    const claimsFileChange = /(?:here(?:'s| is)|below|sau đây|dưới đây|như sau|updated|modified|changed|new|fixed)/i;
+    if (codeBlockWithFilePath.test(text) && claimsFileChange.test(text)) return true;
+
+    return false;
   }
 
   buildToolEvidenceCorrection(messages = []) {
     const request = this.getLatestUserText(messages);
     return [
-      'Runtime correction: the user requested an action that requires tool evidence.',
-      'Your previous response did not use any tool, so it was blocked to avoid falsely claiming completion.',
-      'Now use the available tools to inspect/edit/run/check as needed. Do not say the task is done until a tool result proves it.',
-      'If native tool calls are not supported by this model/provider, output exactly one fallback tool call and no prose, for example:',
+      '⚠️ RUNTIME ENFORCEMENT: Your previous response was BLOCKED because you did not use any tool.',
+      '',
+      'The user requested an action that requires REAL tool execution. You MUST:',
+      '1. Call Read/Grep/Glob to inspect the relevant files FIRST',
+      '2. Call Write/Edit to make changes',
+      '3. Call Bash to run/test/verify',
+      '',
+      'DO NOT write code in a code block and claim it is done. That is a hallucination.',
+      'DO NOT say "I have updated/created/fixed" without a tool call proving it.',
+      'DO NOT describe what you would do. Actually DO IT with tool calls.',
+      '',
+      'Available tools: Read, Write, Edit, Bash, Glob, Grep, BrowserDebug, WebFetch, WebSearch.',
+      '',
+      'If native tool calls are not supported, output exactly one fallback tool call:',
       '<invoke name="Read"><parameter name="path">README.md</parameter></invoke>',
       '{"tool":"Read","arguments":{"path":"README.md"}}',
       'CALL_TOOL Read {"path":"README.md"}',
+      '',
       `Original user request: ${request}`,
     ].join('\n');
+  }
+
+  /**
+   * Smart Tool Routing: phân tích câu lệnh user và gợi ý tool phù hợp.
+   * Giúp model yếu/nhỏ chọn đúng tool thay vì dùng Bash cho mọi thứ.
+   */
+  buildToolRoutingHint(userMessage = '') {
+    const text = String(userMessage || '').toLowerCase();
+    if (!text.trim()) return null;
+
+    const hints = [];
+
+    // Detect file reading requests
+    const hasPath = /[A-Za-z]:[\\/][\w.\\/\\-]+/i.test(text) || /(?:^|\s)[.~]?\/[\w.\/-]+/i.test(text);
+    const readVerbs = /\b(đọc|doc|read|xem|view|mở|open|show|hiện|hiển thị|cat|type)\b/i;
+    const readFilePatterns = /\b(đọc|doc|read|xem|view|mở|open|show|hiện|cat|type)\b.*\.(?:js|ts|py|json|md|css|html|txt|yaml|yml|toml|cfg|ini|env|sh|bat|ps1|xml|vue|svelte|go|rs|java|c|cpp|rb|php)\b/i;
+    const dirPatterns = /\b(đọc|doc|read|xem|liệt kê|list|ls|dir|show|hiện)\b.*\b(thư mục|folder|directory|dir)\b/i;
+
+    if (readFilePatterns.test(text)) {
+      hints.push('TOOL HINT: To read a file, call tool Read with {"file_path": "<path>"}. Do NOT use Bash with cat/type.');
+    } else if (hasPath && readVerbs.test(text)) {
+      // Path detected + read verb, could be file or directory
+      hints.push('TOOL HINT: To read a file, call tool Read with {"file_path": "<path>"}. To list a directory, call Glob with {"pattern": "*", "cwd": "<path>"}. Do NOT use Bash with ls/dir/cat/type.');
+    } else if (dirPatterns.test(text)) {
+      hints.push('TOOL HINT: To list directory contents, call tool Glob with {"pattern": "*", "cwd": "<path>"}. Do NOT use Bash with ls/dir.');
+    }
+
+    // Detect file writing/creating requests
+    if (/\b(tạo|tao|create|viết|viet|write|ghi)\b.*\b(file|tập tin|tap tin)\b/i.test(text)) {
+      hints.push('TOOL HINT: To create/write a file, call tool Write with {"file_path": "<path>", "content": "<content>"}. Do NOT use Bash with echo/cat.');
+    }
+
+    // Detect file editing requests
+    if (/\b(sửa|sua|edit|chỉnh|chinh|thay|replace|đổi|doi|modify|update|cập nhật)\b.*(?:file|\.(?:js|ts|py|json|md|css|html)\b)/i.test(text)) {
+      hints.push('TOOL HINT: To edit a file, first Read it, then call Edit with {"file_path": "<path>", "old_string": "<exact text>", "new_string": "<replacement>"}.');
+    }
+
+    // Detect search/find requests
+    if (/\b(tìm|tim|find|search|kiếm|kiem|grep|ở đâu|o dau|where)\b/i.test(text) && !(/\b(web|google|online|internet)\b/i.test(text))) {
+      hints.push('TOOL HINT: To search in code, call tool Grep with {"pattern": "<search term>", "path": "<directory>"}. Do NOT use Bash with grep/findstr.');
+    }
+
+    // Detect test/run requests
+    if (/\b(chạy|chay|run|test|execute|thực thi|thuc thi|build|compile|npm|node|python|pip)\b/i.test(text) && !readPatterns.test(text)) {
+      hints.push('TOOL HINT: To run commands, call tool Bash with {"command": "<command>"}.');
+    }
+
+    // Detect URL/web requests  
+    if (/\b(https?:\/\/[^\s]+|url|website|trang web|web page)\b/i.test(text)) {
+      hints.push('TOOL HINT: To fetch a URL, call tool WebFetch with {"url": "<url>"}. For browser debugging, use BrowserDebug.');
+    }
+
+    if (hints.length === 0) return null;
+
+    return `[Tool Router] ${hints.join(' | ')}`;
   }
 
   withCurrentAbortSignal(options = {}) {
@@ -1810,8 +1902,11 @@ ${colors.reset}
     }
     const finishReason = response.choices?.[0]?.finish_reason;
 
+    if (this.spinner) this.spinner.stop();
+
     if (assistantMsg.content && toolCalls.length === 0) {
-      if (options?.requireToolEvidence && this.responseNeedsToolEvidence(assistantMsg.content)) {
+      const isFakeCompletion = !options?.usedMutatingTools && this.detectFakeCompletion(assistantMsg.content);
+      if ((options?.requireToolEvidence && this.responseNeedsToolEvidence(assistantMsg.content)) || isFakeCompletion) {
         return { assistantMsg, toolCalls, finalContent: '', finishReason: 'tool_evidence_required' };
       }
       this.printAssistantAnswer(assistantMsg.content, startedAt, totalUsage);
@@ -1823,6 +1918,8 @@ ${colors.reset}
 
   async collectAssistantStream(messages, options, startedAt, totalUsage) {
     let content = '';
+    let streamBuffer = '';
+    let printedLines = 0;
     const toolCallParts = [];
     let finishReason = null;
     let printed = false;
@@ -1878,6 +1975,18 @@ ${colors.reset}
 
       if (chunk.content) {
         content += chunk.content;
+        if (bufferToolModeContent && this.spinner && process.env.NODE_ENV !== 'test') {
+          streamBuffer += chunk.content;
+          let newlineIdx;
+          const terminalCols = process.stdout.columns || 80;
+          while ((newlineIdx = streamBuffer.indexOf('\n')) !== -1) {
+            const line = streamBuffer.slice(0, newlineIdx).replace(/\r$/, '');
+            streamBuffer = streamBuffer.slice(newlineIdx + 1);
+            const visibleLength = line.replace(/\x1b\[[0-9;]*m/g, '').length + 2;
+            printedLines += Math.max(1, Math.ceil(visibleLength / terminalCols));
+            process.stdout.write(`\r\x1b[K${colors.dim}│ ${colors.reset}${colors.dim}${line}${colors.reset}\n`);
+          }
+        }
       }
 
       if (this.spinner && printed === false) {
@@ -1887,14 +1996,18 @@ ${colors.reset}
             const args = lastCall.function.arguments || '';
             let summary = args.replace(/\s+/g, ' ');
             if (summary.length > 60) summary = '...' + summary.slice(-60);
-            this.spinner.update(`Calling ${lastCall.function.name}... ${summary}`);
+            this.spinner.update(`Calling ${lastCall.function.name}... (Chuẩn bị gọi tool) ${summary}`);
           }
-        } else if (content.length > 0 && bufferToolModeContent) {
-          let summary = content.replace(/\s+/g, ' ');
-          if (summary.length > 60) summary = '...' + summary.slice(-60);
-          this.spinner.update(`Generating... ${summary}`);
         }
       }
+    }
+
+    if (streamBuffer.length > 0 && this.spinner) {
+      const line = streamBuffer.replace(/\r$/, '');
+      const terminalCols = process.stdout.columns || 80;
+      const visibleLength = line.replace(/\x1b\[[0-9;]*m/g, '').length + 2;
+      printedLines += Math.max(1, Math.ceil(visibleLength / terminalCols));
+      process.stdout.write(`\r\x1b[K${colors.dim}│ ${colors.reset}${colors.dim}${line}${colors.reset}\n`);
     }
 
     if (this.spinner) this.spinner.stop();
@@ -1911,7 +2024,15 @@ ${colors.reset}
     const visibleContent = inlineToolExtraction.content || content;
 
     if (toolCalls.length === 0 && visibleContent) {
-      if (options?.requireToolEvidence && this.responseNeedsToolEvidence(visibleContent)) {
+      if (printedLines > 0 && bufferToolModeContent) {
+        const linesToErase = Math.min(printedLines, (process.stdout.rows || 24) - 2);
+        if (linesToErase > 0) {
+          process.stdout.write(`\r\x1b[K\x1b[${linesToErase}A\x1b[J`);
+        }
+      }
+
+      const isFakeCompletion = !options?.usedMutatingTools && this.detectFakeCompletion(visibleContent);
+      if ((options?.requireToolEvidence && this.responseNeedsToolEvidence(visibleContent)) || isFakeCompletion) {
         return {
           assistantMsg: { content: visibleContent },
           toolCalls,
@@ -2067,6 +2188,11 @@ ${colors.reset}
     ];
 
     try {
+      if (this.spinner) {
+        this.spinner.update('Thinking (final answer)... (Đang viết câu trả lời cuối)');
+        this.spinner.start();
+      }
+
       if (typeof this.ai.streamRequest === 'function') {
         return await this.streamFinalAnswer(finalMessages, startedAt, totalUsage, executionProfile);
       }
@@ -2079,11 +2205,15 @@ ${colors.reset}
       });
       this.addUsage(totalUsage, response.usage);
       const content = response.choices?.[0]?.message?.content || '';
+      
+      if (this.spinner) this.spinner.stop();
+      
       if (content) {
         this.printAssistantAnswer(content, startedAt, totalUsage);
       }
       return content;
     } catch (error) {
+      if (this.spinner) this.spinner.stop();
       if (this.isAbortError(error)) throw new Error('AbortError');
       const fallback = this.buildToolFallbackAnswer(toolSummaries, error.message);
       console.log(`\n${colors.yellow}${fallback}${colors.reset}\n`);
@@ -2109,6 +2239,9 @@ ${colors.reset}
         if (chunk.usage) this.addUsage(totalUsage, chunk.usage);
         if (chunk.content) {
           content += chunk.content;
+        }
+        if (this.spinner && isFirst === false) {
+          this.spinner.update('Generating...');
         }
       }
 
@@ -2450,6 +2583,13 @@ ${colors.reset}
       }
 
       const tools = this.getAgentTools('general');
+
+      // Smart tool routing: inject a hint for weak models
+      const toolHint = this.buildToolRoutingHint(message);
+      if (toolHint) {
+        messages.push({ role: 'system', content: toolHint });
+      }
+
       const { finalContent, usedMutatingTools } = await this.runConversation(messages, 'Thinking', tools);
 
       const allToolCalls = [];

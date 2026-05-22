@@ -11,9 +11,10 @@ import { colors, statusIcons } from '../cli/snowflake-logo.js';
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 export class DesignCommands {
-  constructor(session, config) {
-    this.session = session;
-    this.config = config;
+  constructor(repl) {
+    this.repl = repl;
+    this.session = repl.session;
+    this.config = repl.config;
     this.brandsDir = path.join(packageRoot, 'resources', 'local', 'awesome-design-md', 'design-md');
   }
 
@@ -25,6 +26,9 @@ export class DesignCommands {
         break;
       case 'add':
         await this.addBrand(args[0]);
+        break;
+      case 'apply':
+        await this.applyBrand(args[0]);
         break;
       case 'list':
         await this.listBrands();
@@ -104,6 +108,51 @@ export class DesignCommands {
 
       console.log(`${statusIcons.success} Added ${fileName} for ${brand}`);
       await this.session.addToMemory(`Added design file: ${brand}`, 'design');
+    } catch (error) {
+      console.log(`${colors.red}${statusIcons.error} Error: ${error.message}${colors.reset}`);
+    }
+  }
+
+  async applyBrand(brand) {
+    if (!brand) {
+      console.log(`${colors.yellow}Usage: winter design apply <brand>${colors.reset}`);
+      return;
+    }
+
+    try {
+      const brandDir = path.join(this.brandsDir, brand);
+      let fileContent = null;
+      let fileName = null;
+
+      const designPath = path.join(brandDir, 'DESIGN.md');
+      const readmePath = path.join(brandDir, 'README.md');
+
+      if (await fs.access(designPath).then(() => true).catch(() => false)) {
+        fileContent = await fs.readFile(designPath, 'utf8');
+        fileName = 'DESIGN.md';
+      } else if (await fs.access(readmePath).then(() => true).catch(() => false)) {
+        fileContent = await fs.readFile(readmePath, 'utf8');
+        fileName = 'README.md';
+      }
+
+      if (!fileContent) {
+        console.log(`${colors.red}${statusIcons.error} Brand "${brand}" not found${colors.reset}`);
+        return;
+      }
+
+      console.log(`${colors.cyan}${statusIcons.info} Analyzing and applying ${brand} design system...${colors.reset}`);
+      
+      const prompt = `Please act as a Senior UI/UX Engineer. Analyze the following design system (${brand}) and completely refactor the UI and styles in this project to match its specifications. Focus on colors, typography, border radiuses, interactive states, and overall visual aesthetics as defined in the document.
+
+<design_system>
+${fileContent}
+</design_system>
+
+Start by reviewing the codebase, especially tailwind configs or global css, then rewrite the main components. Create a plan if needed.`;
+      
+      // Inject the task to the AI REPL loop
+      await this.repl.chat(prompt);
+      
     } catch (error) {
       console.log(`${colors.red}${statusIcons.error} Error: ${error.message}${colors.reset}`);
     }
