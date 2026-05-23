@@ -56,6 +56,102 @@ test('streamRequest parses OpenAI-compatible SSE chunks with usage', async () =>
   }
 });
 
+test('custom provider can use native Anthropic defaults without baseURL', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, headers: options.headers, body: JSON.parse(options.body) });
+    return {
+      ok: true,
+      async json() {
+        return {
+          id: 'msg_1',
+          model: 'claude-3-5-sonnet-latest',
+          content: [{ type: 'text', text: 'anthropic custom ok' }],
+          usage: { input_tokens: 3, output_tokens: 4 },
+          stop_reason: 'end_turn',
+        };
+      },
+    };
+  };
+
+  try {
+    const ai = new AIProviderManager({
+      async load() {
+        return {
+          defaultProvider: 'custom',
+          custom: {
+            apiFormat: 'anthropic',
+            apiKey: 'anthropic-key',
+          },
+        };
+      },
+    });
+    ai.loadAuthToken = async () => null;
+    await ai.init();
+
+    const result = await ai.sendRequestToProvider(ai.providers.custom, [
+      { role: 'system', content: 'Be brief.' },
+      { role: 'user', content: 'hello' },
+    ]);
+
+    assert.equal(ai.providers.custom.baseURL, 'https://api.anthropic.com/v1');
+    assert.equal(ai.providers.custom.model, 'claude-3-5-sonnet-latest');
+    assert.equal(calls[0].url, 'https://api.anthropic.com/v1/messages');
+    assert.equal(calls[0].headers['x-api-key'], 'anthropic-key');
+    assert.equal(calls[0].headers['anthropic-version'], '2023-06-01');
+    assert.equal(calls[0].body.system, 'Be brief.');
+    assert.equal(calls[0].body.messages[0].content, 'hello');
+    assert.equal(result.choices[0].message.content, 'anthropic custom ok');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('custom provider can use native Gemini defaults without baseURL', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, headers: options.headers, body: JSON.parse(options.body) });
+    return {
+      ok: true,
+      async json() {
+        return {
+          candidates: [{ content: { parts: [{ text: 'gemini default ok' }] }, finishReason: 'STOP' }],
+          usageMetadata: { totalTokenCount: 5 },
+        };
+      },
+    };
+  };
+
+  try {
+    const ai = new AIProviderManager({
+      async load() {
+        return {
+          defaultProvider: 'custom',
+          custom: {
+            apiFormat: 'gemini',
+            apiKey: 'gemini-key',
+          },
+        };
+      },
+    });
+    ai.loadAuthToken = async () => null;
+    await ai.init();
+
+    const result = await ai.sendRequestToProvider(ai.providers.custom, [{ role: 'user', content: 'hello' }]);
+
+    assert.equal(ai.providers.custom.baseURL, 'https://generativelanguage.googleapis.com/v1beta');
+    assert.equal(ai.providers.custom.model, 'gemini-1.5-pro');
+    assert.equal(calls[0].url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=gemini-key');
+    assert.equal(calls[0].body.contents[0].parts[0].text, 'hello');
+    assert.equal(result.choices[0].message.content, 'gemini default ok');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 test('sendRequestToProvider aborts stalled provider requests', async () => {
   const originalFetch = globalThis.fetch;
 
@@ -280,6 +376,94 @@ test('custom named provider can be the default provider', async () => {
 
   assert.equal(ai.getActiveProvider(), 'custom2');
   assert.equal(ai.providers.custom2.apiKey, 'not-required');
+});
+
+test('custom provider stays OpenAI-compatible by default', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, headers: options.headers, body: JSON.parse(options.body) });
+    return {
+      ok: true,
+      async json() {
+        return { choices: [{ message: { content: 'custom ok' } }] };
+      },
+    };
+  };
+
+  try {
+    const ai = new AIProviderManager({
+      async load() {
+        return {
+          defaultProvider: 'custom',
+          custom: {
+            baseURL: 'https://gateway.example/v1',
+            model: 'custom-model',
+          },
+        };
+      },
+    });
+    ai.loadAuthToken = async () => null;
+    await ai.init();
+
+    const result = await ai.sendRequestToProvider(ai.providers.custom, [{ role: 'user', content: 'hello' }]);
+
+    assert.equal(calls[0].url, 'https://gateway.example/v1/chat/completions');
+    assert.equal(calls[0].headers.Authorization, undefined);
+    assert.equal(calls[0].body.model, 'custom-model');
+    assert.equal(result.choices[0].message.content, 'custom ok');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('custom named provider can opt into native Gemini format', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, headers: options.headers, body: JSON.parse(options.body) });
+    return {
+      ok: true,
+      async json() {
+        return {
+          candidates: [{ content: { parts: [{ text: 'gemini custom ok' }] }, finishReason: 'STOP' }],
+          usageMetadata: { totalTokenCount: 7 },
+        };
+      },
+    };
+  };
+
+  try {
+    const ai = new AIProviderManager({
+      async load() {
+        return {
+          defaultProvider: 'mygemini',
+          mygemini: {
+            apiFormat: 'gemini',
+            baseURL: 'https://gemini-gateway.example/v1beta',
+            apiKey: 'gemini-key',
+            model: 'gemini-custom',
+          },
+        };
+      },
+    });
+    ai.loadAuthToken = async () => null;
+    await ai.init();
+
+    const result = await ai.sendRequestToProvider(ai.providers.mygemini, [
+      { role: 'system', content: 'Be brief.' },
+      { role: 'user', content: 'hello' },
+    ]);
+
+    assert.equal(calls[0].url, 'https://gemini-gateway.example/v1beta/models/gemini-custom:generateContent?key=gemini-key');
+    assert.deepEqual(calls[0].body.systemInstruction, { parts: [{ text: 'Be brief.' }] });
+    assert.equal(calls[0].body.contents[0].parts[0].text, 'hello');
+    assert.equal(result.choices[0].message.content, 'gemini custom ok');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('anthropic config is accepted as claude-compatible provider config', async () => {

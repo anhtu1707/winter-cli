@@ -178,6 +178,13 @@ test('coding project task still builds codebase and graph context', async () => 
   assert.match(context, /\[CodeGraph Context\]/);
 });
 
+test('codebase search enables CodeGraph by default unless explicitly disabled', () => {
+  const replSource = WinterREPL.prototype.initCodebaseSearch.toString();
+
+  assert.match(replSource, /enableCodeGraph:\s*process\.env\.WINTER_CODEGRAPH !== '0'/);
+  assert.doesNotMatch(replSource, /enableCodeGraph:\s*process\.env\.WINTER_CODEGRAPH === '1'/);
+});
+
 test('page-agent slash command exposes resource browsing, snippets, and URL fetch helper', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'winter-page-agent-'));
   const pageAgentRoot = path.join(root, 'resources', 'local', 'page-agent');

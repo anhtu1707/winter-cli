@@ -11,6 +11,7 @@ import SuccessCriteria from './prompts/success-criteria.js';
 import { ReasoningConfig, REASONING_LEVELS, complexityToReasoningLevel } from './reasoning.js';
 import { buildResourceContext, getRelevantDesignGuide } from '../context/resource-loader.js';
 import { classifyModelTier } from './model-capabilities.js';
+import { buildProviderRequest, normalizeProviderResponse, normalizeProviderStreamChunk, getProviderPreset } from './provider-adapters.js';
 
 const RESERVED_CONFIG_SECTIONS = new Set([
   'analytics',
@@ -117,30 +118,50 @@ export class AIProviderManager {
     // Load auth token from Claude Code's auth.json if available
     this.authToken = await this.loadAuthToken();
 
-    if (claudeConfig?.baseURL || this.authToken) {
+    if (claudeConfig?.baseURL || claudeConfig?.apiKey || this.authToken) {
+      const claudeIsNativeAnthropic = Boolean(claudeConfig?.apiFormat === 'anthropic' || claudeConfig?.native === true);
+      const anthropicPreset = getProviderPreset('anthropic');
       this.providers.claude = {
-        name: 'Claude-compatible API',
-        baseURL: claudeConfig?.baseURL || 'http://localhost:4000/v1',
+        name: claudeIsNativeAnthropic ? 'Anthropic API' : 'Claude-compatible API',
+        providerName: claudeIsNativeAnthropic ? 'anthropic' : 'claude',
+        apiFormat: claudeConfig?.apiFormat || (claudeIsNativeAnthropic ? 'anthropic' : 'openai'),
+        baseURL: claudeConfig?.baseURL || (claudeIsNativeAnthropic ? anthropicPreset.baseURL : 'http://localhost:4000/v1'),
         authToken: this.authToken,
         apiKey: claudeConfig?.apiKey,
-        model: claudeConfig?.model || 'nvidia/moonshotai/kimi-k2.6',
+        model: claudeConfig?.model || (claudeIsNativeAnthropic ? anthropicPreset.model : 'nvidia/moonshotai/kimi-k2.6'),
         ready: !!this.authToken || !!claudeConfig?.apiKey || claudeConfig?.apiKey === 'not-required',
       };
     }
 
-    if (cfg.custom?.baseURL) {
+    const customConfig = cfg.custom || null;
+    if (this.isProviderConfigSection('custom', customConfig)) {
+      const customApiFormat = customConfig.apiFormat || customConfig.format || 'openai';
+      const customPreset = getProviderPreset(customApiFormat) || null;
+      const customBaseURL = customConfig.baseURL
+        || customPreset?.baseURL
+        || (customApiFormat === 'anthropic'
+          ? getProviderPreset('anthropic')?.baseURL
+          : customApiFormat === 'gemini'
+            ? getProviderPreset('gemini')?.baseURL
+            : 'http://localhost:4000/v1');
+
       this.providers.custom = {
-        name: 'Custom API',
-        baseURL: cfg.custom.baseURL,
-        apiKey: cfg.custom.apiKey || 'not-required',
-        model: cfg.custom.model || 'gpt-4-turbo',
-        ready: true,
+        name: customConfig.name || 'Custom API',
+        providerName: 'custom',
+        apiFormat: customApiFormat,
+        baseURL: customBaseURL,
+        authToken: customConfig.authToken,
+        apiKey: customConfig.apiKey || 'not-required',
+        model: customConfig.model || customPreset?.model || 'gpt-4-turbo',
+        ready: Boolean(customConfig.authToken || customConfig.apiKey || customConfig.baseURL || customPreset?.baseURL),
       };
     }
 
     if (cfg.ollama?.baseURL) {
       this.providers.ollama = {
         name: 'Ollama Local',
+        providerName: 'ollama',
+        apiFormat: cfg.ollama.apiFormat || 'openai',
         apiKey: cfg.ollama.apiKey || 'not-required',
         baseURL: cfg.ollama.baseURL,
         model: cfg.ollama.model || 'llama3',
@@ -151,6 +172,8 @@ export class AIProviderManager {
     if (cfg.openai?.apiKey) {
       this.providers.openai = {
         name: 'OpenAI',
+        providerName: 'openai',
+        apiFormat: cfg.openai.apiFormat || 'openai',
         baseURL: cfg.openai.baseURL || 'https://api.openai.com/v1',
         apiKey: cfg.openai.apiKey,
         model: cfg.openai.model || 'gpt-4-turbo',
@@ -161,6 +184,8 @@ export class AIProviderManager {
     if (cfg.groq?.apiKey) {
       this.providers.groq = {
         name: 'Groq',
+        providerName: 'groq',
+        apiFormat: cfg.groq.apiFormat || 'openai',
         baseURL: cfg.groq.baseURL || 'https://api.groq.com/openai/v1',
         apiKey: cfg.groq.apiKey,
         model: cfg.groq.model || 'llama-3.1-70b-versatile',
@@ -254,26 +279,41 @@ export class AIProviderManager {
     if (RESERVED_CONFIG_SECTIONS.has(providerName)) return false;
     if (providerName === 'anthropic') return false;
     if (!section || typeof section !== 'object' || Array.isArray(section)) return false;
+    if (providerName === 'custom') {
+      return Boolean(
+        section.baseURL ||
+        section.apiKey ||
+        section.authToken ||
+        section.apiFormat ||
+        section.format
+      );
+    }
 
     return Boolean(
       section.baseURL ||
       section.apiKey ||
-      section.authToken
+      section.authToken ||
+      getProviderPreset(providerName)
     );
   }
 
   buildProviderFromConfig(providerName, section) {
+    const preset = getProviderPreset(providerName);
     return {
-      name: this.getProviderDisplayName(providerName),
-      baseURL: section.baseURL || this.getProviderDefaultBaseURL(providerName),
+      name: section.name || preset?.name || this.getProviderDisplayName(providerName),
+      providerName,
+      apiFormat: section.apiFormat || section.format || preset?.apiFormat || 'openai',
+      baseURL: section.baseURL || preset?.baseURL || this.getProviderDefaultBaseURL(providerName),
       authToken: section.authToken,
       apiKey: section.apiKey || 'not-required',
-      model: section.model || this.getProviderDefaultModel(providerName),
-      ready: Boolean(section.authToken || section.apiKey || section.baseURL),
+      model: section.model || preset?.model || this.getProviderDefaultModel(providerName),
+      ready: Boolean(section.authToken || section.apiKey || section.baseURL || preset?.baseURL),
     };
   }
 
   getProviderDisplayName(providerName) {
+    const preset = getProviderPreset(providerName);
+    if (preset?.name) return preset.name;
     const labels = {
       anthropic: 'Claude-compatible API',
       claude: 'Claude-compatible API',
@@ -286,6 +326,8 @@ export class AIProviderManager {
   }
 
   getProviderDefaultBaseURL(providerName) {
+    const preset = getProviderPreset(providerName);
+    if (preset?.baseURL) return preset.baseURL;
     if (providerName === 'openai') return 'https://api.openai.com/v1';
     if (providerName === 'groq') return 'https://api.groq.com/openai/v1';
     if (providerName === 'ollama') return 'http://localhost:11434/v1';
@@ -293,6 +335,8 @@ export class AIProviderManager {
   }
 
   getProviderDefaultModel(providerName) {
+    const preset = getProviderPreset(providerName);
+    if (preset?.model) return preset.model;
     if (providerName === 'groq') return 'llama-3.1-70b-versatile';
     if (providerName === 'ollama') return 'llama3';
     return 'gpt-4-turbo';
@@ -490,46 +534,25 @@ export class AIProviderManager {
       throw new Error('No active provider is configured');
     }
     const timeoutMs = getRequestTimeoutMs(options);
-
-    const body = {
-      model: options.model || provider.model,
-      messages,
-    };
-
-    // Apply reasoning configuration
     const reasoningParam = options.reasoning || this._getReasoningParam(options, provider);
-    if (reasoningParam) {
-      if (reasoningParam.reasoning_effort) {
-        body.reasoning_effort = reasoningParam.reasoning_effort;
-      }
-      if (reasoningParam.thinking) {
-        body.thinking = reasoningParam.thinking;
-      }
-    }
-
-    if (this.tools.length > 0 && options.enableTools && !options.toolPromptOnly) {
-      const tools = this.normalizeToolDefinitionsForApi(this.tools);
-      if (tools.length > 0) body.tools = tools;
-    }
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    };
-
-    if (provider.authToken) {
-      headers['Authorization'] = `Bearer ${provider.authToken}`;
-    } else if (provider.apiKey && provider.apiKey !== 'not-required') {
-      headers['Authorization'] = `Bearer ${provider.apiKey}`;
-    }
+    const tools = this.tools.length > 0 && options.enableTools && !options.toolPromptOnly
+      ? this.normalizeToolDefinitionsForApi(this.tools)
+      : [];
+    const request = buildProviderRequest(provider, messages, {
+      ...options,
+      stream: false,
+      model: options.model || provider.model,
+      reasoning: reasoningParam,
+      tools,
+    });
 
     const timeout = createTimeoutSignal(timeoutMs, options.signal || options.abortSignal);
     let response;
     try {
-      response = await fetch(`${provider.baseURL}/chat/completions`, {
+      response = await fetch(request.url, {
         method: 'POST',
-        headers,
-        body: JSON.stringify(body),
+        headers: request.headers,
+        body: JSON.stringify(request.body),
         signal: timeout.signal,
       });
     } catch (error) {
@@ -545,7 +568,7 @@ export class AIProviderManager {
       throw requestError;
     }
 
-    return await response.json();
+    return normalizeProviderResponse(provider, await response.json());
   }
 
   async *streamRequestToProvider(provider, messages, options = {}) {
@@ -553,51 +576,25 @@ export class AIProviderManager {
       throw new Error('No active provider is configured');
     }
     const timeoutMs = getRequestTimeoutMs(options);
-
-    const body = {
-      model: options.model || provider.model,
-      messages,
-      stream: true,
-    };
-
-    if (options.includeUsage !== false) {
-      body.stream_options = { include_usage: true };
-    }
-
-    // Apply reasoning configuration
     const reasoningParam = options.reasoning || this._getReasoningParam(options, provider);
-    if (reasoningParam) {
-      if (reasoningParam.reasoning_effort) {
-        body.reasoning_effort = reasoningParam.reasoning_effort;
-      }
-      if (reasoningParam.thinking) {
-        body.thinking = reasoningParam.thinking;
-      }
-    }
-
-    if (this.tools.length > 0 && options.enableTools && !options.toolPromptOnly) {
-      const tools = this.normalizeToolDefinitionsForApi(this.tools);
-      if (tools.length > 0) body.tools = tools;
-    }
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'Accept': 'text/event-stream',
-    };
-
-    if (provider.authToken) {
-      headers['Authorization'] = `Bearer ${provider.authToken}`;
-    } else if (provider.apiKey && provider.apiKey !== 'not-required') {
-      headers['Authorization'] = `Bearer ${provider.apiKey}`;
-    }
+    const tools = this.tools.length > 0 && options.enableTools && !options.toolPromptOnly
+      ? this.normalizeToolDefinitionsForApi(this.tools)
+      : [];
+    const request = buildProviderRequest(provider, messages, {
+      ...options,
+      stream: true,
+      model: options.model || provider.model,
+      reasoning: reasoningParam,
+      tools,
+    });
 
     const timeout = createTimeoutSignal(timeoutMs, options.signal || options.abortSignal);
     let response;
     try {
-      response = await fetch(`${provider.baseURL}/chat/completions`, {
+      response = await fetch(request.url, {
         method: 'POST',
-        headers,
-        body: JSON.stringify(body),
+        headers: request.headers,
+        body: JSON.stringify(request.body),
         signal: timeout.signal,
       });
 
@@ -640,14 +637,10 @@ export class AIProviderManager {
             continue;
           }
 
-          const choice = data.choices?.[0] || {};
-          const content = choice.delta?.content ?? choice.message?.content ?? choice.text ?? '';
+          const chunk = normalizeProviderStreamChunk(provider, data);
+          if (!chunk.content && !chunk.usage && !chunk.raw) continue;
           yieldedAny = true;
-          yield {
-            content,
-            usage: data.usage,
-            raw: data,
-          };
+          yield chunk;
         }
       }
 
@@ -657,13 +650,11 @@ export class AIProviderManager {
         if (payload && payload !== '[DONE]') {
           try {
             const data = JSON.parse(payload);
-            const choice = data.choices?.[0] || {};
-            yieldedAny = true;
-            yield {
-              content: choice.delta?.content ?? choice.message?.content ?? choice.text ?? '',
-              usage: data.usage,
-              raw: data,
-            };
+            const chunk = normalizeProviderStreamChunk(provider, data);
+            if (chunk.content || chunk.usage || chunk.raw) {
+              yieldedAny = true;
+              yield chunk;
+            }
           } catch {}
         }
       }
@@ -736,27 +727,18 @@ export class AIProviderManager {
     while (iterations < maxIterations) {
       iterations++;
 
-      const body = {
+      const tools = this.tools.length > 0 ? this.normalizeToolDefinitionsForApi(this.tools) : [];
+      const request = buildProviderRequest(provider, currentMessages, {
+        ...options,
+        stream: false,
         model: options.model || provider.model,
-        messages: currentMessages,
-        tools: this.tools.length > 0 ? this.normalizeToolDefinitionsForApi(this.tools) : undefined,
-      };
+        tools,
+      });
 
-      const headers = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      };
-
-      if (provider.authToken) {
-        headers['Authorization'] = `Bearer ${provider.authToken}`;
-      } else if (provider.apiKey && provider.apiKey !== 'not-required') {
-        headers['Authorization'] = `Bearer ${provider.apiKey}`;
-      }
-
-      const response = await fetch(`${provider.baseURL}/chat/completions`, {
+      const response = await fetch(request.url, {
         method: 'POST',
-        headers,
-        body: JSON.stringify(body),
+        headers: request.headers,
+        body: JSON.stringify(request.body),
       });
 
       if (!response.ok) {
@@ -764,7 +746,7 @@ export class AIProviderManager {
         throw new Error(`${this.activeProvider} error (${response.status}): ${error}`);
       }
 
-      const data = await response.json();
+      const data = normalizeProviderResponse(provider, await response.json());
       const assistantMsg = data.choices?.[0]?.message;
 
       // Check for tool calls

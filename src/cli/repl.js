@@ -131,7 +131,7 @@ export class WinterREPL {
     if (this.codebaseSearcher) return;
     this.codebaseSearcher = new CodebaseSearch({
       projectPath: this.projectPath,
-      enableCodeGraph: process.env.WINTER_CODEGRAPH === '1',
+      enableCodeGraph: process.env.WINTER_CODEGRAPH !== '0',
     });
     await this.codebaseSearcher.init();
     this.atContext = new AtContextResolver({

@@ -861,20 +861,20 @@ export class ToolExecutor {
 
   async mcp(serverName, toolName, argumentsObject = {}) {
     if (typeof serverName !== 'string' || serverName.trim() === '') {
-      return { success: false, error: 'server is required' };
+      return { success: false, error: 'server is required', recovery: 'Example: MCP {"server":"filesystem","tool":"read_file","arguments":{}}' };
     }
     if (typeof toolName !== 'string' || toolName.trim() === '') {
-      return { success: false, error: 'tool is required' };
+      return { success: false, error: 'tool is required', recovery: 'Example: MCP {"server":"filesystem","tool":"read_file","arguments":{}}' };
     }
 
     const allowed = await this.permissionManager.isMcpServerAllowed(serverName);
     if (!allowed) {
-      return { success: false, error: `MCP server not allowlisted: ${serverName}` };
+      return { success: false, error: `MCP server not allowlisted: ${serverName}`, recovery: 'Allowlist this MCP server only after verifying it is trusted, then retry the same tool call.' };
     }
 
     const client = await this.getMcpClient(serverName);
     if (!client) {
-      return { success: false, error: `MCP server not configured: ${serverName}` };
+      return { success: false, error: `MCP server not configured: ${serverName}`, recovery: 'Configure this MCP server in Winter config before calling its tools, or choose a configured server.' };
     }
 
     const retryPolicy = await this.getRetryPolicy();
@@ -882,7 +882,7 @@ export class ToolExecutor {
       const result = await withRetry(() => client.callTool(toolName, argumentsObject), retryPolicy);
       return { success: true, server: serverName, tool: toolName, result };
     } catch (error) {
-      return { success: false, error: error.message, server: serverName, tool: toolName };
+      return { success: false, error: error.message, server: serverName, tool: toolName, recovery: 'Inspect the MCP server error, verify the tool name and arguments, then retry with corrected arguments.' };
     }
   }
 
@@ -1098,7 +1098,7 @@ export class ToolExecutor {
 
   async readFile(filePath) {
     if (!filePath) {
-      return { success: false, error: 'file_path is required' };
+      return { success: false, error: 'file_path is required', recovery: 'Example: Read {"file_path":"src/app.js"}' };
     }
 
     try {
@@ -1142,7 +1142,7 @@ export class ToolExecutor {
           ].join(' '),
         };
       }
-      return { success: false, error: error.message, code: error?.code, path: filePath };
+      return { success: false, error: error.message, code: error?.code, path: filePath, recovery: 'Check the path, permissions, and workspace boundary. Use Glob to confirm the file exists before retrying.' };
     }
   }
 
@@ -1210,10 +1210,10 @@ export class ToolExecutor {
 
   async writeFile(filePath, content) {
     if (!filePath) {
-      return { success: false, error: 'file_path is required' };
+      return { success: false, error: 'file_path is required', recovery: 'Example: Write {"file_path":"src/app.js","content":"..."}' };
     }
     if (typeof content !== 'string') {
-      return { success: false, error: 'content is required', path: filePath };
+      return { success: false, error: 'content is required', path: filePath, recovery: 'Example: Write {"file_path":"src/app.js","content":"..."}' };
     }
 
     try {
@@ -1236,7 +1236,7 @@ export class ToolExecutor {
 
       return { success: true, path: filePath, size: content.length, diff: diffOutput };
     } catch (error) {
-      return { success: false, error: error.message, path: filePath };
+      return { success: false, error: error.message, path: filePath, recovery: 'Check that the path is inside the workspace and writable. If editing, use Read first to confirm exact content.' };
     }
   }
 
@@ -1319,7 +1319,7 @@ export class ToolExecutor {
 
   async editFile(filePath, oldString, newString) {
     if (!filePath) {
-      return { success: false, error: 'file_path is required' };
+      return { success: false, error: 'file_path is required', recovery: 'Example: Read {"file_path":"src/app.js"}' };
     }
     if (typeof oldString !== 'string' || typeof newString !== 'string') {
       return {
@@ -1355,13 +1355,13 @@ export class ToolExecutor {
 
       return { success: true, path: filePath, replacements: 1, diff: diffOutput };
     } catch (error) {
-      return { success: false, error: error.message, path: filePath };
+      return { success: false, error: error.message, path: filePath, recovery: 'Check that the path is inside the workspace and writable. If editing, use Read first to confirm exact content.' };
     }
   }
 
   async bash(command, cwd, timeout = 60000, shell = 'auto') {
     if (typeof command !== 'string' || command.trim() === '') {
-      return { success: false, error: 'command is required', exitCode: 1 };
+      return { success: false, error: 'command is required', exitCode: 1, recovery: 'Example: Bash {"command":"npm test"}' };
     }
     
     timeout = parseInt(timeout, 10);
@@ -1402,7 +1402,8 @@ export class ToolExecutor {
         error: error.message,
         stdout: error.stdout || '',
         stderr: error.stderr || '',
-        exitCode: error.code || 1
+        exitCode: error.code || 1,
+        recovery: 'Read stderr/stdout, fix the first concrete error, then retry with a corrected command. Do not retry the same failing command unchanged.'
       };
     }
   }
@@ -1466,7 +1467,7 @@ export class ToolExecutor {
     cwd = normalizedRequest.cwd;
 
     if (typeof pattern !== 'string' || pattern.trim() === '') {
-      return { success: false, error: 'pattern is required', pattern, cwd };
+      return { success: false, error: 'pattern is required', pattern, cwd, recovery: 'Example: Glob {"pattern":"src/**/*.js"}' };
     }
 
     try {
@@ -1479,7 +1480,7 @@ export class ToolExecutor {
         count: files.length
       };
     } catch (error) {
-      return { success: false, error: error.message, pattern, cwd };
+      return { success: false, error: error.message, pattern, cwd, recovery: 'Check the glob pattern and cwd. Example: Glob {"pattern":"src/**/*.js","cwd":"."}' };
     }
   }
 
@@ -1648,7 +1649,7 @@ export class ToolExecutor {
 
   async grep(pattern, searchPath, globPattern, outputMode = 'content', options = {}) {
     if (typeof pattern !== 'string' || pattern === '') {
-      return { success: false, error: 'pattern is required', pattern, path: searchPath };
+      return { success: false, error: 'pattern is required', pattern, path: searchPath, recovery: 'Example: Grep {"pattern":"TODO","path":"src"}' };
     }
 
     const caseInsensitive = options.case_insensitive || options.ignoreCase || false;
@@ -1750,7 +1751,7 @@ export class ToolExecutor {
         output_mode: outputMode
       };
     } catch (error) {
-      return { success: false, error: error.message, pattern, path: searchPath };
+      return { success: false, error: error.message, pattern, path: searchPath, recovery: 'If this is a regex issue, retry with fixed_string: true. Also verify the search path exists.' };
     }
   }
 
@@ -1854,10 +1855,10 @@ export class ToolExecutor {
 
   async lsp(operation, input, filePath) {
     if (typeof operation !== 'string' || operation.trim() === '') {
-      return { success: false, error: 'operation is required' };
+      return { success: false, error: 'operation is required', recovery: 'Example: LSP {"operation":"definition","file_path":"src/app.js"}' };
     }
     if (!filePath) {
-      return { success: false, error: 'file_path is required' };
+      return { success: false, error: 'file_path is required', recovery: 'Example: Read {"file_path":"src/app.js"}' };
     }
 
     return {
@@ -1870,10 +1871,10 @@ export class ToolExecutor {
 
   async taskCreate(title, description) {
     if (typeof title !== 'string' || title.trim() === '') {
-      return { success: false, error: 'title is required' };
+      return { success: false, error: 'title is required', recovery: 'Example: TaskCreate {"title":"Fix failing executor test","description":"Investigate and patch the failing path"}' };
     }
     if (!this.repl?.session?.createPlan) {
-      return { success: false, error: 'session manager is not available' };
+      return { success: false, error: 'session manager is not available', recovery: 'Task tools require an active Winter REPL session. Use the built-in plan/task UI from an interactive session, or continue without task persistence.' };
     }
 
     const task = await this.repl.session.createPlan(title, description);
@@ -1882,29 +1883,29 @@ export class ToolExecutor {
 
   async taskUpdate(taskId, updates) {
     if (typeof taskId !== 'string' || taskId.trim() === '') {
-      return { success: false, error: 'task_id is required' };
+      return { success: false, error: 'task_id is required', recovery: 'Example: TaskUpdate {"task_id":"task-123","updates":{"status":"done"}}' };
     }
     if (!this.repl?.session?.updatePlan) {
-      return { success: false, error: 'session manager is not available' };
+      return { success: false, error: 'session manager is not available', recovery: 'Task tools require an active Winter REPL session. Use the built-in plan/task UI from an interactive session, or continue without task persistence.' };
     }
 
     const task = await this.repl.session.updatePlan(taskId, updates);
     if (!task) {
-      return { success: false, error: 'Task not found', taskId };
+      return { success: false, error: 'Task not found', taskId, recovery: 'Check the task ID from TaskList or the REPL plan UI, then retry TaskUpdate with the exact task_id.' };
     }
     return { success: true, task };
   }
 
   async taskList() {
     if (!this.repl?.session?.getPlans) {
-      return { success: false, error: 'session manager is not available' };
+      return { success: false, error: 'session manager is not available', recovery: 'Task tools require an active Winter REPL session. Use the built-in plan/task UI from an interactive session, or continue without task persistence.' };
     }
     return { success: true, tasks: this.repl.session.getPlans() };
   }
 
   async parallelExecute(calls = [], context = {}) {
     if (!Array.isArray(calls) || calls.length === 0) {
-      return { success: false, error: 'tools must be a non-empty array' };
+      return { success: false, error: 'tools must be a non-empty array', recovery: 'Example: Parallel {"tools":[{"name":"Read","input":{"file_path":"src/app.js"}}]}' };
     }
 
     const safeCalls = calls.slice(0, 8).map((call, index) => ({
@@ -1948,7 +1949,7 @@ export class ToolExecutor {
 
   async webFetch(url, prompt) {
     if (typeof url !== 'string' || url.trim() === '') {
-      return { success: false, error: 'url is required' };
+      return { success: false, error: 'url is required', recovery: 'Example: WebFetch {"url":"https://example.com"}. Include the https:// scheme.' };
     }
 
     try {
@@ -1969,13 +1970,13 @@ export class ToolExecutor {
         length: cleanText.length
       };
     } catch (error) {
-      return { success: false, error: error.message, url };
+      return { success: false, error: error.message, url, recovery: 'Verify the URL is reachable and includes https://. If the page needs JavaScript, use BrowserDebug.' };
     }
   }
 
   async webSearch(query) {
     if (typeof query !== 'string' || query.trim() === '') {
-      return { success: false, error: 'query is required' };
+      return { success: false, error: 'query is required', recovery: 'Example: WebSearch {"query":"winter cli"}' };
     }
 
     try {
@@ -2001,7 +2002,7 @@ export class ToolExecutor {
         count: results.length,
       };
     } catch (error) {
-      return { success: false, error: error.message, query };
+      return { success: false, error: error.message, query, recovery: 'Check network access, simplify the query, then retry WebSearch.' };
     }
   }
 
@@ -2025,7 +2026,7 @@ export class ToolExecutor {
   }
 
   async browserDebug(url, action) {
-    if (!url) return { success: false, error: 'url is required' };
+    if (!url) return { success: false, error: 'url is required', recovery: 'Example: WebFetch {"url":"https://example.com"}. Include the https:// scheme.' };
     
     try {
       const retryPolicy = await this.getRetryPolicy();
@@ -2033,7 +2034,7 @@ export class ToolExecutor {
       try {
         puppeteer = (await import('puppeteer')).default;
       } catch (e) {
-        return { success: false, error: 'Thư viện puppeteer chưa được cài đặt. AI HÃY TỰ DÙNG TOOL BASH ĐỂ CHẠY LỆNH: npm install puppeteer --no-save' };
+        return { success: false, error: 'Thư viện puppeteer chưa được cài đặt.', recovery: 'Run Bash {"command":"npm install puppeteer --no-save"} if browser automation is required, or use WebFetch for non-JavaScript pages.' };
       }
 
       const browser = await withRetry(() => puppeteer.launch({ headless: 'new' }), retryPolicy);
@@ -2071,7 +2072,7 @@ export class ToolExecutor {
         actionResult
       };
     } catch (e) {
-      return { success: false, error: e.message, url };
+      return { success: false, error: e.message, url, recovery: 'Check that the dev server/page is reachable, then retry BrowserDebug with a valid URL and smaller action.' };
     }
   }
 
@@ -2079,14 +2080,14 @@ export class ToolExecutor {
     const inputPath = this.resolveInputPath(input.input_path ?? input.inputPath ?? input.input, cwd);
     const outputPath = this.resolveInputPath(input.output_path ?? input.outputPath ?? input.output, cwd);
     if (!inputPath || !outputPath) {
-      return { success: false, error: 'input_path and output_path are required' };
+      return { success: false, error: 'input_path and output_path are required', recovery: 'Example: HtmlEffectiveness {"input_path":"page.md","output_path":"dist/page.html"}' };
     }
 
     const autoInstall = input.auto_install ?? input.autoInstall ?? true;
     const info = await this.htmlFxManager.info();
     if (!info.binaryReady) {
       if (!autoInstall) {
-        return { success: false, error: 'html-effectiveness compiler is not installed. Run winter htmlfx install first.' };
+        return { success: false, error: 'html-effectiveness compiler is not installed. Run winter htmlfx install first.', recovery: 'Run winter htmlfx install first, or retry with auto_install: true.' };
       }
       await this.htmlFxManager.ensureInstalled({ update: false });
     }
