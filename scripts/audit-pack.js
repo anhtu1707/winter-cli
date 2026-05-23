@@ -34,6 +34,19 @@ const violations = files
     blockedPatterns.some(pattern => pattern.test(filePath))
   ));
 
+const requiredPrefixes = [
+  'resources/local/agents.md/',
+  'resources/local/awesome-design-md/',
+  'resources/local/karpathy-tools/',
+  'resources/local/page-agent/',
+  'resources/local/ecc/',
+  'skills/',
+  'memories/',
+];
+
+const missingRequired = requiredPrefixes
+  .filter(prefix => !files.some(file => file.path.startsWith(prefix)));
+
 if (violations.length > 0) {
   console.error('Package audit failed. Blocked files would be published:');
   for (const filePath of violations.slice(0, 50)) {
@@ -41,6 +54,14 @@ if (violations.length > 0) {
   }
   if (violations.length > 50) {
     console.error(`... and ${violations.length - 50} more`);
+  }
+  process.exit(1);
+}
+
+if (missingRequired.length > 0) {
+  console.error('Package audit failed. Required packaged paths are missing:');
+  for (const prefix of missingRequired) {
+    console.error(`- ${prefix}`);
   }
   process.exit(1);
 }
