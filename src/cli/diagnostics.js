@@ -61,7 +61,7 @@ export async function showContextDiagnostics(repl, task = '') {
   const context = await repl.getProjectContext(task);
   let codebaseStats = null;
   try {
-    codebaseStats = await repl.ensureCodebaseIndex({ verbose: false });
+    codebaseStats = repl.codebaseSearcher?.indexer?.getStats?.() || null;
   } catch {
     codebaseStats = null;
   }

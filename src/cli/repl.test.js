@@ -90,6 +90,94 @@ test('codebase index auto-loads into project context and slash search remains ca
   assert.match(context, /featureFlag/);
 });
 
+test('non-command input does not init codebase search outside a detected project', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-light-context-'));
+  const repl = new WinterREPL({ projectPath: root });
+  repl.readlineClosed = true;
+
+  let initCalls = 0;
+  let chatCalls = 0;
+  repl.initCodebaseSearch = async () => {
+    initCalls++;
+  };
+  repl.shouldUseHeavyProjectContext = async () => false;
+  repl.atContext = {
+    hasAtReferences: () => false,
+    parse: async input => ({ hasAtReferences: false, input }),
+    formatContextPrompt: () => '',
+  };
+  repl.chat = async () => {
+    chatCalls++;
+  };
+
+  await repl.processInputTask('hello');
+
+  assert.equal(initCalls, 0);
+  assert.equal(chatCalls, 1);
+});
+
+test('casual project chat does not build codebase or graph context', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-casual-project-chat-'));
+  await writeFile(path.join(root, 'package.json'), JSON.stringify({ type: 'module' }), 'utf8');
+
+  const repl = new WinterREPL({ projectPath: root });
+  repl.getRequiredLocalResourceSummary = async () => '';
+  repl.readProjectInstructionFiles = async () => [];
+  repl.shouldUseHeavyProjectContext = async () => true;
+  repl.shouldUseCompactPrompt = () => false;
+
+  let codebaseCalls = 0;
+  let graphCalls = 0;
+  repl.buildCodebaseContext = async () => {
+    codebaseCalls++;
+    return '[Codebase Index]\nshould not happen';
+  };
+  repl.codebaseSearcher = {
+    buildGraphContext: async () => {
+      graphCalls++;
+      return 'should not happen';
+    },
+  };
+
+  const context = await repl.getProjectContext('hello');
+
+  assert.equal(codebaseCalls, 0);
+  assert.equal(graphCalls, 0);
+  assert.doesNotMatch(context, /\[Codebase Index\]/);
+  assert.doesNotMatch(context, /\[CodeGraph Context\]/);
+});
+
+test('coding project task still builds codebase and graph context', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-coding-project-chat-'));
+  await writeFile(path.join(root, 'package.json'), JSON.stringify({ type: 'module' }), 'utf8');
+
+  const repl = new WinterREPL({ projectPath: root });
+  repl.getRequiredLocalResourceSummary = async () => '';
+  repl.readProjectInstructionFiles = async () => [];
+  repl.shouldUseHeavyProjectContext = async () => true;
+  repl.shouldUseCompactPrompt = () => false;
+
+  let codebaseCalls = 0;
+  let graphCalls = 0;
+  repl.buildCodebaseContext = async () => {
+    codebaseCalls++;
+    return '[Codebase Index]\nfeature.js';
+  };
+  repl.codebaseSearcher = {
+    buildGraphContext: async () => {
+      graphCalls++;
+      return 'featureGraph';
+    },
+  };
+
+  const context = await repl.getProjectContext('fix bug in feature.js');
+
+  assert.equal(codebaseCalls, 1);
+  assert.equal(graphCalls, 1);
+  assert.match(context, /\[Codebase Index\]/);
+  assert.match(context, /\[CodeGraph Context\]/);
+});
+
 test('page-agent slash command exposes resource browsing, snippets, and URL fetch helper', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'winter-page-agent-'));
   const pageAgentRoot = path.join(root, 'resources', 'local', 'page-agent');
@@ -140,6 +228,7 @@ test('page-agent slash command exposes resource browsing, snippets, and URL fetc
   assert(calls.some(call => call.tool === 'WebFetch'));
   assert.doesNotMatch(output, /Unknown slash command/);
 });
+
 
 test('startup codebase warmup is silent so it does not corrupt the prompt', async () => {
   const repl = new WinterREPL({ projectPath: process.cwd() });

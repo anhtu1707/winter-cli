@@ -124,11 +124,15 @@ export class WinterREPL {
     this.inputController = new WinterInputController(this);
     this.watchers = [];
     this.startupNotices = [];
+    this.projectContextSafety = null;
   }
 
   async initCodebaseSearch() {
     if (this.codebaseSearcher) return;
-    this.codebaseSearcher = new CodebaseSearch({ projectPath: this.projectPath, enableCodeGraph: true });
+    this.codebaseSearcher = new CodebaseSearch({
+      projectPath: this.projectPath,
+      enableCodeGraph: process.env.WINTER_CODEGRAPH === '1',
+    });
     await this.codebaseSearcher.init();
     this.atContext = new AtContextResolver({
       projectPath: this.projectPath,
@@ -164,6 +168,52 @@ export class WinterREPL {
     if (this.startupNotices.length > 6) {
       this.startupNotices = this.startupNotices.slice(-6);
     }
+  }
+
+  async shouldUseHeavyProjectContext() {
+    if (this.projectContextSafety !== null) return this.projectContextSafety;
+    this.projectContextSafety = await this.shouldAutoIndexCodebase();
+    return this.projectContextSafety;
+  }
+
+  shouldUseCodebaseContextForTask(task = '') {
+    const text = String(task || '').trim();
+    if (!text) return false;
+
+    // Keep casual chat fast and safe. Codebase indexing/search is pulled in only
+    // when the task is likely about project files, code, debugging, tests, or
+    // explicit @ references. This preserves strong project awareness for coding
+    // work without making first-run greetings index an entire repository.
+    if (/@[\w./\\-]+/.test(text)) return true;
+    if (/\b\w+\.(js|jsx|ts|tsx|mjs|cjs|json|md|py|java|go|rs|php|rb|cs|cpp|c|h|css|scss|html|vue|svelte|sql|yaml|yml|toml)\b/i.test(text)) return true;
+    if (/\b[a-z]+[A-Z][A-Za-z0-9_$]*\b/.test(text)) return true;
+
+    return /\b(code|source|file|function|class|method|symbol|import|export|module|component|route|api|endpoint|bug|error|exception|stack|trace|crash|fail|failing|test|tests|build|compile|lint|typecheck|debug|fix|patch|edit|modify|refactor|implement|implementation|feature|find|locate|search|git|diff|commit|package|dependency|repl|cli|tool|provider|stream|index|grep|read|write|s?a|sua|l?i|loi|t?o|tao|th?m|them|x?a|xoa|ki?m tra|kiem tra|ch?y|chay|bi?n d?ch|bien dich|h?m|ham|d? ?n|du an)\b/i.test(text);
+  }
+
+  async shouldAutoIndexCodebase() {
+    const root = path.resolve(this.projectPath || process.cwd());
+    const home = path.resolve(homedir());
+    const parent = path.dirname(root);
+
+    // Do not auto-scan broad user/drive roots. On a fresh global install,
+    // running `winter` from C:\Users\name can otherwise index the whole home
+    // directory and exhaust the Node heap before the first AI response.
+    if (root === home || root === parent) return false;
+
+    const markers = [
+      'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'pom.xml',
+      'build.gradle', 'composer.json', 'Gemfile', '.git', 'winter.md', 'CLAUDE.md',
+    ];
+
+    for (const marker of markers) {
+      try {
+        await fs.stat(path.join(root, marker));
+        return true;
+      } catch {}
+    }
+
+    return false;
   }
 
   async startCodebaseWatcher() {
@@ -242,7 +292,10 @@ export class WinterREPL {
     }
   }
 
-  async ensureCodebaseIndex({ verbose = false } = {}) {
+  async ensureCodebaseIndex({ verbose = false, force = false } = {}) {
+    if (!force && !await this.shouldAutoIndexCodebase()) {
+      return { totalChunks: 0, totalFiles: 0, skipped: true, reason: 'unsafe-project-root' };
+    }
     await this.initCodebaseSearch();
     const before = this.codebaseSearcher.indexer.getStats();
     if (before.totalChunks > 0) return before;
@@ -619,12 +672,16 @@ export class WinterREPL {
     await this.bootstrapProjectCapabilities();
     await this.compactStartupMemories({ projectInstructionFiles, autoCreateDocs });
 
-    // Codebase Index: warm in background, then inject summaries into model context on demand.
-    this.codebaseWarmup = this.ensureCodebaseIndex({ verbose: false })
-      .then(() => this.startCodebaseWatcher())
-      .catch((error) => {
-        this.startupNotice(`codebase disabled: ${error.message}`);
-      });
+    // Codebase Index is intentionally lazy/on-demand. Top-tier coding agents do
+    // not make first-run chat pay for a repo-wide scan, and this also prevents
+    // global installs launched from broad folders from exhausting Node's heap.
+    // Codebase context is still available when a coding/debug task needs it via
+    // getProjectContext() -> buildCodebaseContext() -> ensureCodebaseIndex().
+    if (await this.shouldAutoIndexCodebase()) {
+      this.startupNotice('codebase index ready on demand');
+    } else {
+      this.startupNotice('codebase auto-index skipped outside a project folder');
+    }
 
     const sessionHistory = this.session.getHistory(4);
     if (sessionHistory.length > 0) {
@@ -1068,8 +1125,9 @@ export class WinterREPL {
 
       // Parse @-symbols for non-command input
       if (!input.startsWith('/')) {
-        await this.initCodebaseSearch();
-        if (this.atContext && this.atContext.hasAtReferences(input)) {
+        const canUseHeavyContext = await this.shouldUseHeavyProjectContext();
+        if (canUseHeavyContext && this.atContext && this.atContext.hasAtReferences(input)) {
+          await this.initCodebaseSearch();
           try {
             const parsed = await this.atContext.parse(input);
             if (parsed.hasAtReferences) {
@@ -2542,7 +2600,8 @@ ${colors.reset}
     try {
       await this.autoApplyWorkflowForTask(message);
       const needsTools = true;
-      const context = await this.getProjectContext(message);
+      const canUseHeavyContext = await this.shouldUseHeavyProjectContext();
+      const context = await this.getProjectContext(message, { includeHeavy: canUseHeavyContext });
       const systemPrompt = this.getSystemPrompt(context);
 
       // Inject @-context if any
@@ -2940,7 +2999,7 @@ Do NOT stop until all errors are resolved.`;
     const context = await this.getProjectContext(task);
     let codebaseStats = null;
     try {
-      codebaseStats = await this.ensureCodebaseIndex({ verbose: false });
+      codebaseStats = this.codebaseSearcher?.indexer?.getStats?.() || null;
     } catch {
       codebaseStats = null;
     }
@@ -2999,9 +3058,13 @@ Do NOT stop until all errors are resolved.`;
     return runFullDoctorDiagnostics(this);
   }
 
-  async getProjectContext(task = '') {
+  async getProjectContext(task = '', options = {}) {
+    const includeHeavy = options.includeHeavy !== false;
+    const useHeavyContext = includeHeavy && await this.shouldUseHeavyProjectContext();
     const modelTier = this.getActiveModelTier();
     const context = [];
+    const projectPath = this.projectPath;
+
     const requiredLocalResources = await this.getRequiredLocalResourceSummary();
     if (requiredLocalResources) {
       context.push(requiredLocalResources);
@@ -3013,8 +3076,7 @@ Do NOT stop until all errors are resolved.`;
       context.push(localResources);
     }
 
-    const projectInstructionFiles = await this.readProjectInstructionFiles();
-
+    const projectInstructionFiles = useHeavyContext ? await this.readProjectInstructionFiles() : [];
     for (const file of projectInstructionFiles) {
       try {
         const preview = this.compactText(file.content, 1200, 'project instruction');
@@ -3022,49 +3084,57 @@ Do NOT stop until all errors are resolved.`;
       } catch { }
     }
 
-    try {
-      const packageJsonPath = path.join(this.projectPath, 'package.json');
-      const stat = await fs.stat(packageJsonPath);
-      if (stat.isFile()) {
-        const content = await fs.readFile(packageJsonPath, 'utf-8');
-        context.push(`[package.json]\n${this.compactText(content, 1600, 'package.json')}`);
-      }
-    } catch { }
+    if (useHeavyContext) {
+      try {
+        const packageJsonPath = path.join(projectPath, 'package.json');
+        const stat = await fs.stat(packageJsonPath);
+        if (stat.isFile()) {
+          const content = await fs.readFile(packageJsonPath, 'utf-8');
+          context.push(`[package.json]\n${this.compactText(content, 1600, 'package.json')}`);
+        }
+      } catch { }
 
-    const codebaseContext = await this.buildCodebaseContext(task);
-    if (codebaseContext) {
-      context.push(codebaseContext);
-    }
-
-    const graphContext = await this.codebaseSearcher?.buildGraphContext?.(task, {
-      maxNodes: 24,
-      maxCodeBlocks: 8,
-      maxCodeBlockSize: 1800,
-    });
-    if (graphContext) {
-      context.push(`[CodeGraph Context]\n${this.compactText(graphContext, 5200, 'codegraph context')}`);
-    }
-
-    // Git Context
-    try {
-      const { execSync } = await import('child_process');
-      const gitStatus = execSync('git status --short', { cwd: this.projectPath, encoding: 'utf8', stdio: 'pipe' }).trim();
-      if (gitStatus) {
-        context.push(`[Git Status]\n${gitStatus}`);
-
-        const gitSummary = execSync('git diff --stat --summary', { cwd: this.projectPath, encoding: 'utf8', stdio: 'pipe', maxBuffer: 1024 * 50 }).trim();
-        if (gitSummary) {
-          context.push(`[Git Summary]\n${this.compactText(gitSummary, 1200, 'git summary')}`);
+      const shouldUseCodebaseContext = this.shouldUseCodebaseContextForTask(task);
+      if (shouldUseCodebaseContext) {
+        const codebaseContext = await this.buildCodebaseContext(task);
+        if (codebaseContext) {
+          context.push(codebaseContext);
         }
 
-        // Get brief git diff for context
-        const gitDiff = execSync('git diff', { cwd: this.projectPath, encoding: 'utf8', stdio: 'pipe', maxBuffer: 1024 * 50 }).trim().split('\n').slice(0, 30).join('\n');
-        if (gitDiff) {
-          context.push(`[Git Diff]\n${this.compactText(gitDiff, 2200, 'git diff')}`);
+        const graphContext = await this.codebaseSearcher?.buildGraphContext?.(task, {
+          maxNodes: 24,
+          maxCodeBlocks: 8,
+          maxCodeBlockSize: 1800,
+        });
+        if (graphContext) {
+          context.push(`[CodeGraph Context]\n${this.compactText(graphContext, 5200, 'codegraph context')}`);
         }
       }
-    } catch (e) {
-      // Not a git repo or git not installed
+
+      // Git Context
+      try {
+        const { execSync } = await import('child_process');
+        const gitStatus = execSync('git status --short', { cwd: projectPath, encoding: 'utf8', stdio: 'pipe' }).trim();
+        if (gitStatus) {
+          context.push(`[Git Status]\n${gitStatus}`);
+
+          const gitSummary = execSync('git diff --stat --summary', { cwd: projectPath, encoding: 'utf8', stdio: 'pipe', maxBuffer: 1024 * 50 }).trim();
+          if (gitSummary) {
+            context.push(`[Git Summary]\n${this.compactText(gitSummary, 1200, 'git summary')}`);
+          }
+
+          // Get brief git diff for context
+          const gitDiff = execSync('git diff', { cwd: projectPath, encoding: 'utf8', stdio: 'pipe', maxBuffer: 1024 * 50 }).trim().split('\n').slice(0, 30).join('\n');
+          if (gitDiff) {
+            context.push(`[Git Diff]\n${this.compactText(gitDiff, 2200, 'git diff')}`);
+          }
+        }
+      } catch (e) {
+        // Not a git repo or git not installed
+      }
+    } else {
+      context.push(`[Project Context]
+Light mode enabled for safety. Heavy codebase, graph, and git context are skipped outside a detected project root.`);
     }
 
     return this.compactText(context.join('\n\n') || 'No project context found.', this.getProjectContextBudget(modelTier), 'project context');
