@@ -6,12 +6,16 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { homedir } from 'os';
+import { fileURLToPath } from 'url';
 import { colors, statusIcons } from '../cli/snowflake-logo.js';
+
+const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 export class SkillManager {
   constructor(session) {
     this.session = session;
     this.skillsDir = path.join(homedir(), '.winter', 'skills');
+    this.packagedSkillsDir = path.join(PACKAGE_ROOT, 'skills');
     this.builtinSkills = this.getBuiltinSkills();
   }
 
@@ -92,27 +96,51 @@ export class SkillManager {
   }
 
   async listSkills() {
+    const packagedSkills = await this.getPackagedSkills();
     const customSkills = await this.getCustomSkills();
-    return [...this.builtinSkills, ...customSkills];
+    const byName = new Map();
+    for (const skill of [...this.builtinSkills, ...packagedSkills, ...customSkills]) {
+      if (!byName.has(skill.name)) byName.set(skill.name, skill);
+    }
+    return [...byName.values()];
+  }
+
+  async getPackagedSkills() {
+    return this.getMarkdownSkillsFromDirectory(this.packagedSkillsDir, {
+      icon: '*',
+      isPackaged: true,
+    });
   }
 
   async getCustomSkills() {
     try {
       await fs.mkdir(this.skillsDir, { recursive: true });
-      const files = await fs.readdir(this.skillsDir);
+      return this.getMarkdownSkillsFromDirectory(this.skillsDir, {
+        icon: '$',
+        isCustom: true,
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  async getMarkdownSkillsFromDirectory(directory, defaults = {}) {
+    try {
+      const files = await fs.readdir(directory);
       const skills = [];
 
       for (const file of files) {
-        if (file.endsWith('.md')) {
-          const content = await fs.readFile(path.join(this.skillsDir, file), 'utf8');
-          const name = file.replace('.md', '');
-          skills.push({
-            name,
-            icon: '$',
-            description: this.extractDescription(content),
-            isCustom: true,
-          });
-        }
+        if (!file.endsWith('.md')) continue;
+        const content = await fs.readFile(path.join(directory, file), 'utf8');
+        const name = file.replace(/\.md$/i, '');
+        skills.push({
+          name,
+          icon: defaults.icon || '$',
+          description: this.extractDescription(content),
+          prompts: this.extractPrompts(content),
+          path: path.join(directory, file),
+          ...defaults,
+        });
       }
 
       return skills;
@@ -124,6 +152,23 @@ export class SkillManager {
   extractDescription(content) {
     const match = content.match(/^#\s+(.+)/m);
     return match ? match[1] : 'Custom skill';
+  }
+
+  extractPrompts(content) {
+    const lines = String(content || '').split(/\r?\n/);
+    const prompts = [];
+    let inPrompts = false;
+    for (const line of lines) {
+      if (/^##\s+prompts\b/i.test(line)) {
+        inPrompts = true;
+        continue;
+      }
+      if (inPrompts && /^##\s+/.test(line)) break;
+      if (!inPrompts) continue;
+      const match = line.match(/^\s*[-*]\s+(.+)/);
+      if (match) prompts.push(match[1].trim());
+    }
+    return prompts;
   }
 
   async createSkill(name, options = {}) {
@@ -173,6 +218,7 @@ Describe how to use this skill here.
 
   async getSkillPrompts(name) {
     const skill = this.builtinSkills.find(s => s.name === name) ||
+                  (await this.getPackagedSkills()).find(s => s.name === name) ||
                   (await this.getCustomSkills()).find(s => s.name === name);
 
     return skill?.prompts || [];

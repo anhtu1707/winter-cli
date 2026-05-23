@@ -59,6 +59,11 @@ export class ContextLoader {
   getResourcePaths() {
     const localRoot = this.getResourceRoot();
     return {
+      winter: {
+        root: PACKAGE_ROOT,
+        skills: path.join(PACKAGE_ROOT, 'skills'),
+        memories: path.join(PACKAGE_ROOT, 'memories'),
+      },
       codex: {
         root: path.join(localRoot, 'codex'),
         skills: path.join(localRoot, 'codex', 'skills'),
@@ -140,7 +145,9 @@ export class ContextLoader {
       const manifest = JSON.parse(raw.replace(/^\uFEFF/, ''));
       const paths = this.getResourcePaths();
       const userPaths = this.getUserResourcePaths();
-      const [claudeSkills, codexSkills, claudePlugins, codexMemories] = await Promise.all([
+      const [winterSkills, winterMemories, claudeSkills, codexSkills, claudePlugins, codexMemories] = await Promise.all([
+        this.listPathEntries(paths.winter.skills, 20),
+        this.listPathEntries(paths.winter.memories, 20),
         this.listPathEntries(paths.claude.skills, 20),
         this.listPathEntries(paths.codex.skills, 20),
         this.listPathEntries(paths.claude.plugins, 20),
@@ -168,9 +175,15 @@ export class ContextLoader {
       }
 
       lines.push('- Use Read/Grep/Glob to inspect any local resource when it matters for the task.');
-      lines.push('- Local resource families: agents.md, awesome-design-md, claude, codex, karpathy-tools, page-agent, ecc.');
+      lines.push('- Local resource families: winter skills, winter memories, agents.md, awesome-design-md, claude, codex, karpathy-tools, page-agent, ecc.');
       lines.push(`- User resource roots: ${userPaths.codexRoot}, ${userPaths.claudeRoot}`);
 
+      if (winterSkills.length > 0) {
+        lines.push(`- Winter packaged skills: ${winterSkills.slice(0, 10).map(item => item.name).join(', ')}${winterSkills.length > 10 ? ', ...' : ''}`);
+      }
+      if (winterMemories.length > 0) {
+        lines.push(`- Winter packaged memories: ${winterMemories.slice(0, 10).map(item => item.name).join(', ')}${winterMemories.length > 10 ? ', ...' : ''}`);
+      }
       if (claudeSkills.length > 0) {
         lines.push(`- Claude skills: ${claudeSkills.slice(0, 10).map(item => item.name).join(', ')}${claudeSkills.length > 10 ? ', ...' : ''}`);
       }
@@ -216,17 +229,47 @@ export class ContextLoader {
     const pageAgentReadmePath = path.join(paths.pageAgent, 'README.md');
     const pageAgentAgentsPath = path.join(paths.pageAgent, 'AGENTS.md');
     const pageAgentWinterPath = path.join(paths.pageAgent, 'WINTER.md');
+    const winterCodingSkillPath = path.join(paths.winter.skills, 'coding.md');
+    const winterDebugSkillPath = path.join(paths.winter.skills, 'debug.md');
+    const winterTestSkillPath = path.join(paths.winter.skills, 'test.md');
+    const winterMemoryReadmePath = path.join(paths.winter.memories, 'readme.md');
 
-    const [karpathy, agents, designReadme, designBrands, pageAgentWinter, pageAgentAgents] = await Promise.all([
+    const [
+      karpathy,
+      agents,
+      designReadme,
+      designBrands,
+      pageAgentWinter,
+      pageAgentAgents,
+      winterCodingSkill,
+      winterDebugSkill,
+      winterTestSkill,
+      winterMemoryReadme,
+    ] = await Promise.all([
       this.readTextIfExists(karpathyPath, 2200),
       this.readTextIfExists(agentsPath, 1800),
       this.readTextIfExists(designReadmePath, 1600),
       this.listPathEntries(paths.designs, 40),
       this.readTextIfExists(pageAgentWinterPath, 1600),
       this.readTextIfExists(pageAgentAgentsPath, 2200),
+      this.readTextIfExists(winterCodingSkillPath, 1200),
+      this.readTextIfExists(winterDebugSkillPath, 1000),
+      this.readTextIfExists(winterTestSkillPath, 1000),
+      this.readTextIfExists(winterMemoryReadmePath, 1000),
     ]);
 
-    const hasRequired = Boolean(karpathy || agents || designReadme || designBrands.length > 0 || pageAgentWinter || pageAgentAgents);
+    const hasRequired = Boolean(
+      karpathy ||
+      agents ||
+      designReadme ||
+      designBrands.length > 0 ||
+      pageAgentWinter ||
+      pageAgentAgents ||
+      winterCodingSkill ||
+      winterDebugSkill ||
+      winterTestSkill ||
+      winterMemoryReadme
+    );
     if (!hasRequired) return '';
 
     const lines = [];
@@ -241,6 +284,10 @@ export class ContextLoader {
     lines.push(`  Internal architecture at: ${path.relative(this.projectPath, pageAgentAgentsPath)}`);
     lines.push(`- Design system corpus: ${path.relative(this.projectPath, designReadmePath)} and ${path.relative(this.projectPath, paths.designs)}`);
     lines.push('  Apply: for UI/brand/design tasks, search the design-md corpus first and follow the closest existing brand/design guidance instead of inventing style from scratch.');
+    lines.push(`- Winter packaged skills: ${path.relative(this.projectPath, paths.winter.skills)}`);
+    lines.push('  Apply: coding/debug/test skills are bundled with the npm package, so a global install on another machine can still load Winter baseline behavior without project-local skill files.');
+    lines.push(`- Winter packaged memories: ${path.relative(this.projectPath, paths.winter.memories)}`);
+    lines.push('  Apply: packaged memories document how Winter memory is structured; user/session memories still live under the user profile.');
     lines.push('- Use Read/Grep/Glob to inspect the full resource files whenever task details require more than this startup summary.');
 
     const brandNames = designBrands
@@ -266,6 +313,18 @@ export class ContextLoader {
     }
     if (/Monorepo|PageAgentCore|PageController|DOM Pipeline|FlatDomTree/i.test(pageAgentAgents)) {
       evidence.push('page-agent AGENTS.md confirms monorepo structure, DOM pipeline, and tool architecture.');
+    }
+    if (/Read code to understand|Read relevant project files|Verify|automatic tool usage/i.test(winterCodingSkill)) {
+      evidence.push('packaged coding skill confirms inspect-before-edit and verify-after-change behavior.');
+    }
+    if (/Reproduce|root cause|surgical/i.test(winterDebugSkill)) {
+      evidence.push('packaged debug skill confirms reproduce, trace root cause, fix surgically, and verify.');
+    }
+    if (/Unit Tests|Integration Tests|Run Tests/i.test(winterTestSkill)) {
+      evidence.push('packaged test skill confirms test planning and execution behavior.');
+    }
+    if (/Long-term Memory|Project Memory|\/remember/i.test(winterMemoryReadme)) {
+      evidence.push('packaged memory guide confirms long-term and project memory concepts.');
     }
     if (evidence.length > 0) {
       lines.push(`- Startup evidence: ${evidence.join(' ')}`);
@@ -317,7 +376,7 @@ export class ContextLoader {
     const catalog = new Set(['coding', 'design', 'debug', 'refactor', 'test', 'security', 'performance']);
     const resourcePaths = this.getResourcePaths();
     const userPaths = this.getUserResourcePaths();
-    const folders = [resourcePaths.claude.skills, resourcePaths.codex.skills, userPaths.claudeSkills, userPaths.codexSkills];
+    const folders = [resourcePaths.winter.skills, resourcePaths.claude.skills, resourcePaths.codex.skills, userPaths.claudeSkills, userPaths.codexSkills];
 
     for (const folder of folders) {
       const entries = await this.listPathEntries(folder, 200);

@@ -19,6 +19,16 @@ const blockedPrefixes = [
   'vscode-main/',
   '.winter/',
   '.git/',
+  '.github/',
+  '.claude/',
+  '.codegraph/',
+  'extensions/vscode/node_modules/',
+  'extensions/vscode/out/',
+  'resources/local/codex/config.toml',
+  'resources/local/codex/memories/',
+  'resources/local/claude/settings.json',
+  'resources/local/claude/tasks/',
+  'resources/local/claude/todos/',
   'resources/local/ecc/node_modules/',
 ];
 const blockedPatterns = [
@@ -37,11 +47,25 @@ const violations = files
 const requiredPrefixes = [
   'resources/local/agents.md/',
   'resources/local/awesome-design-md/',
+  'resources/local/codex/AGENTS.md',
+  'resources/local/codex/models_cache.json',
+  'resources/local/codex/plugins/',
+  'resources/local/codex/rules/',
+  'resources/local/codex/skills/',
+  'resources/local/claude/plugins/',
+  'resources/local/claude/skills/',
   'resources/local/karpathy-tools/',
   'resources/local/page-agent/',
   'resources/local/ecc/',
+  'docs/',
+  'rules/',
+  'extensions/vscode/',
   'skills/',
   'memories/',
+  'CLAUDE.md',
+  'design.md',
+  'skill.md',
+  'rule.md',
 ];
 
 const missingRequired = requiredPrefixes

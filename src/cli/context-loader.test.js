@@ -42,6 +42,8 @@ test('ContextLoader getResourcePaths returns correct structure', () => {
   const paths = loader.getResourcePaths();
 
   assert(paths.localRoot.includes(path.join('resources', 'local')));
+  assert(paths.winter.skills.endsWith('skills'));
+  assert(paths.winter.memories.endsWith('memories'));
   assert(paths.codex.skills.includes(path.join('codex', 'skills')));
   assert(paths.claude.plugins.includes(path.join('claude', 'plugins')));
   assert(paths.manifest.includes('manifest.json'));
@@ -107,6 +109,23 @@ test('ContextLoader getStartupSkillCatalog returns built-in skills', async () =>
   assert(catalog.has('design'), 'should include design');
   assert(catalog.has('debug'), 'should include debug');
   assert(catalog.has('test'), 'should include test');
+});
+
+test('ContextLoader includes packaged Winter skills and memories for global installs', async () => {
+  const loader = new ContextLoader({ projectPath: path.join(tmpdir(), 'external-project-without-winter-files') });
+  const paths = loader.getResourcePaths();
+
+  assert(paths.winter.skills.includes(path.join('winter', 'skills')));
+  assert(paths.winter.memories.includes(path.join('winter', 'memories')));
+
+  const context = await loader.getLocalResourceContext();
+  assert.match(context, /Winter packaged skills:/);
+  assert.match(context, /Winter packaged memories:/);
+
+  const summary = await loader.getRequiredLocalResourceSummary();
+  assert.match(summary, /Winter packaged skills:/);
+  assert.match(summary, /Winter packaged memories:/);
+  assert.match(summary, /packaged coding skill/);
 });
 
 test('ContextLoader inferStartupSkills detects React projects', async () => {

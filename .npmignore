@@ -7,6 +7,15 @@ resources/local/**
 !resources/local/manifest.json
 !resources/local/agents.md/**
 !resources/local/awesome-design-md/**
+!resources/local/codex/
+!resources/local/codex/AGENTS.md
+!resources/local/codex/models_cache.json
+!resources/local/codex/plugins/**
+!resources/local/codex/rules/**
+!resources/local/codex/skills/**
+!resources/local/claude/
+!resources/local/claude/plugins/**
+!resources/local/claude/skills/**
 !resources/local/karpathy-tools/**
 !resources/local/page-agent/**
 !resources/local/ecc/**
@@ -18,6 +27,9 @@ resources/local/claude/todos/
 
 # Non-package noise
 src/**/*.test.js
+extensions/vscode/node_modules/
+extensions/vscode/*.vsix
+extensions/vscode/out/
 .git/
 .winter/
 .codegraph/
