@@ -39,8 +39,14 @@ export function extractInlineToolCalls(content, idFactory = index => `inline-${D
   };
   const pushParsedToolObject = (parsed) => {
     const { name, args } = extractToolPayload(parsed, parseToolArguments);
-    if (!name || typeof name !== 'string') return false;
-    pushToolCall(name, args, 'object');
+    if (name && typeof name === 'string') {
+      pushToolCall(name, args, 'object');
+      return true;
+    }
+
+    const inferred = inferSafeToolFromBareArguments(parsed);
+    if (!inferred) return false;
+    pushToolCall(inferred.name, inferred.args, 'bare-arguments');
     return true;
   };
 
@@ -302,6 +308,22 @@ function extractToolPayload(payload, parseArguments) {
     name: normalizedName,
     args: normalizedName ? parseArguments(args) : undefined,
   };
+}
+
+export function inferSafeToolFromBareArguments(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+
+  const keys = Object.keys(value);
+  if (keys.length === 0) return null;
+
+  const hasGenericPayloadKeys = keys.some(key => /^(arguments?|args?|input|parameters?|params?|tool[_-]?input|function[_-]?arguments?)$/i.test(key));
+  if (!hasGenericPayloadKeys) return null;
+
+  const name = value.name || value.tool || value.tool_name || value.function_name || null;
+  if (typeof name !== 'string' || !name.trim()) return null;
+
+  const args = value.arguments ?? value.args ?? value.input ?? value.parameters ?? value.params ?? value.tool_input ?? value.function_arguments ?? {};
+  return { name, args };
 }
 
 export function formatToolCallsForMessage(toolCalls) {
