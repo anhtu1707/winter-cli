@@ -68,7 +68,10 @@ export function buildToolFallbackAnswer(toolSummaries, errorMessage = '') {
 export function formatToolResultForConsole(toolName, result) {
   if (!result) return '';
   if (result.success === false) {
-    return `Tool failed: ${result.error || 'unknown error'}`;
+    return [
+      `Tool failed: ${result.error || 'unknown error'}`,
+      result.recovery ? `Recovery: ${result.recovery}` : '',
+    ].filter(Boolean).join('\n');
   }
 
   switch (toolName) {

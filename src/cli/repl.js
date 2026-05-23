@@ -2389,17 +2389,61 @@ ${colors.reset}
     return formatToolCalls(toolCalls);
   }
 
-  async promptToolPermission(commandText) {
+  buildToolPermissionDetails(request = {}) {
+    const details = typeof request === 'string' ? { command: request } : { ...request };
+    const toolName = details.toolName || 'Tool';
+    const args = details.args && typeof details.args === 'object' ? details.args : {};
+    const command = details.command || args.command || args.cmd;
+    const target = details.target || args.file_path || args.path || args.cwd || args.url || args.server;
+    const cwd = details.cwd || args.cwd;
+
+    const riskByTool = {
+      Bash: 'Runs a shell command from the workspace.',
+      Write: 'Creates or overwrites a project file.',
+      Edit: 'Modifies an existing project file.',
+      MCP: 'Allows an external MCP server/tool action.',
+    };
+
+    return {
+      toolName,
+      risk: details.risk || riskByTool[toolName] || 'Runs a sensitive tool action.',
+      command,
+      target,
+      cwd,
+      workspace: details.workspace || this.projectPath,
+    };
+  }
+
+  formatToolPermissionBody(request) {
     const c = colors;
-    const width = terminalWidth(68, 100, 80);
+    const details = this.buildToolPermissionDetails(request);
+    const subject = details.command || details.target || 'requested action';
     const body = [
-      `${c.yellow}${this.useUnicodeUi ? '⚠' : '!'}  AI wants to run${c.reset}`,
-      `${c.bright}${c.white}${commandText}${c.reset}`,
+      `${c.yellow}${this.useUnicodeUi ? '⚠' : '!'}  AI requests tool permission${c.reset}`,
+      `${c.dim}Tool:${c.reset} ${c.bright}${details.toolName}${c.reset}`,
+      `${c.dim}Risk:${c.reset} ${details.risk}`,
+    ];
+
+    if (details.command) body.push(`${c.dim}Command:${c.reset} ${c.bright}${c.white}${details.command}${c.reset}`);
+    if (!details.command && details.target) body.push(`${c.dim}Target:${c.reset} ${c.bright}${c.white}${details.target}${c.reset}`);
+    if (details.cwd) body.push(`${c.dim}Working dir:${c.reset} ${details.cwd}`);
+    if (details.workspace) body.push(`${c.dim}Workspace:${c.reset} ${details.workspace}`);
+    if (!details.command && !details.target) body.push(`${c.dim}Action:${c.reset} ${subject}`);
+
+    body.push(
       '',
       `${c.cyan}1.${c.reset} Allow once`,
-      `${c.cyan}2.${c.reset} Allow for session`,
-      `${c.cyan}3.${c.reset} Deny`,
-    ];
+      `${c.cyan}2.${c.reset} Allow for session (${details.toolName})`,
+      `${c.cyan}3.${c.reset} Deny`
+    );
+
+    return body;
+  }
+
+  async promptToolPermission(request) {
+    const c = colors;
+    const width = terminalWidth(68, 100, 80);
+    const body = this.formatToolPermissionBody(request);
 
     console.log(renderBox({
       title: 'Tool Permission',

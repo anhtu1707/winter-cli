@@ -30,8 +30,16 @@ export class ToolExecutor {
   constructor(repl) {
     this.repl = repl;
     this.projectPath = repl?.projectPath || process.cwd();
-    this.allowedCommands = ['git', 'npm', 'node', 'python', 'code', 'pnpm', 'yarn', 'bun', 'pip', 'cargo', 'rustc'];
-    this.blockedPatterns = ['rm -rf', '/f/s', '--force'];
+    this.allowedCommands = ['git', 'npm', 'node', 'python', 'code', 'pnpm', 'yarn', 'bun', 'pip', 'cargo', 'rustc', 'echo', 'printf', 'cat', 'ls', 'dir', 'type', 'copy', 'mkdir', 'get-childitem', 'set-content', 'get-content', 'test-path', 'get-date'];
+    this.blockedPatterns = [
+      { pattern: /\brm\s+-[^\n;|&]*r[^\n;|&]*f\b|\brm\s+-[^\n;|&]*f[^\n;|&]*r\b/i, label: 'rm -rf' },
+      { pattern: /\bremove-item\b[^\n;|&]*(?:-recurse\b[^\n;|&]*-force\b|-force\b[^\n;|&]*-recurse\b)/i, label: 'Remove-Item -Recurse -Force' },
+      { pattern: /\b(?:del|erase)\b[^\n;|&]*(?:\/s\b[^\n;|&]*\/q\b|\/q\b[^\n;|&]*\/s\b)/i, label: 'del /s /q' },
+      { pattern: /\brmdir\b[^\n;|&]*(?:\/s\b[^\n;|&]*\/q\b|\/q\b[^\n;|&]*\/s\b)/i, label: 'rmdir /s /q' },
+      { pattern: /\bgit\s+reset\s+--hard\b/i, label: 'git reset --hard' },
+      { pattern: /\bgit\s+clean\s+-[^\n;|&]*[xfd][^\n;|&]*/i, label: 'git clean -fd' },
+      { pattern: /\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b[^\n]*\|\s*(?:sh|bash|zsh|powershell|pwsh|cmd)\b/i, label: 'remote script pipe to shell' },
+    ];
     this.permissionManager = new PermissionManager(repl?.config, repl?.session);
     this.mcpClients = new Map();
     this.notebookTool = new NotebookTool();
@@ -468,7 +476,9 @@ export class ToolExecutor {
   async executeInternal(toolName, input, context = {}) {
     toolName = this.normalizeToolName(toolName);
     input = this.normalizeToolInput(toolName, input);
-    const cwd = context.cwd || this.projectPath;
+    const cwd = this.resolveInputPath(context.cwd || this.projectPath, this.projectPath);
+    const cwdSafety = await this.validateWorkspacePath(cwd, 'working directory');
+    if (cwdSafety?.success === false) return cwdSafety;
     const resolvedPath = (p) => this.resolveInputPath(p, cwd);
 
     const preflight = await this.preflightValidateToolArgs(toolName, input, { cwd });
@@ -605,8 +615,10 @@ export class ToolExecutor {
     if (toolName === 'Write') {
       const filePath = pick('file_path', 'filePath', 'filepath', 'path', 'file', 'filename', 'target_file', 'targetFile');
       if (!filePath) {
-        return { success: false, error: 'content is required', recovery: 'Example: Write {"file_path":"src/app.js","content":"..."}' };
+        return { success: false, error: 'file_path is required', recovery: 'Example: Write {"file_path":"src/app.js","content":"..."}' };
       }
+      const writePathSafety = await this.validateWorkspacePath(this.resolveInputPath(filePath, cwd), 'Write path');
+      if (writePathSafety?.success === false) return writePathSafety;
       const content = pick('content', 'text', 'data', 'value', 'body');
       if (typeof content !== 'string') {
         return { success: false, error: 'content is required', recovery: 'Example: Write {"file_path":"src/app.js","content":"..."}' };
@@ -619,7 +631,12 @@ export class ToolExecutor {
       if (!cmd) {
         return { success: false, error: 'command is required', recovery: 'Example: Bash {"command":"npm test"}' };
       }
-      const missingScript = await this.findMissingNpmScript(cmd, cwd);
+      const bashCwd = this.resolveInputPath(args.cwd || args.path || cwd, cwd);
+      const bashCwdSafety = await this.validateWorkspacePath(bashCwd, 'Bash cwd');
+      if (bashCwdSafety?.success === false) return bashCwdSafety;
+      const safety = await this.validateBashCommandSafety(cmd);
+      if (safety?.success === false) return safety;
+      const missingScript = await this.findMissingNpmScript(cmd, bashCwd);
       if (missingScript) {
         return {
           success: false,
@@ -632,7 +649,7 @@ export class ToolExecutor {
       const next = { command: cmd };
       if (typeof args.timeout !== 'undefined') next.timeout = args.timeout;
       if (typeof args.shell !== 'undefined') next.shell = args.shell;
-      if (typeof args.cwd === 'string' && args.cwd.trim()) next.cwd = args.cwd;
+      if (typeof args.cwd === 'string' && args.cwd.trim()) next.cwd = bashCwd;
       return { success: true, coerced: true, args: next };
     }
 
@@ -675,7 +692,9 @@ export class ToolExecutor {
       if (!notebookPath) {
         return { success: false, error: 'notebook_path is required', recovery: 'Example: NotebookRead {"notebook_path":"analysis.ipynb"}' };
       }
-      return { success: true, coerced: true, args: { notebook_path: notebookPath } };
+        const notebookPathSafety = await this.validateWorkspacePath(this.resolveInputPath(notebookPath, cwd), 'NotebookRead path');
+        if (notebookPathSafety?.success === false) return notebookPathSafety;
+        return { success: true, coerced: true, args: { notebook_path: notebookPath } };
     }
 
     if (toolName === 'NotebookEdit') {
@@ -684,6 +703,8 @@ export class ToolExecutor {
         return { success: false, error: 'notebook_path is required', recovery: 'Example: NotebookEdit {"notebook_path":"a.ipynb","cell_id":"cell-0","new_source":"print(1)"}' };
       }
       const cellId = pick('cell_id', 'cellId');
+      const notebookPathSafety = await this.validateWorkspacePath(this.resolveInputPath(notebookPath, cwd), 'NotebookEdit path');
+      if (notebookPathSafety?.success === false) return notebookPathSafety;
       const newSource = pick('new_source', 'newSource', 'source');
       if (!cellId || !newSource) {
         return {
@@ -714,6 +735,52 @@ export class ToolExecutor {
 
     // Default: allow tool implementation to validate
     return { success: true };
+  }
+
+  async validateBashCommandSafety(command) {
+    const text = String(command || '').trim();
+    for (const blocked of this.blockedPatterns) {
+      if (blocked.pattern.test(text)) {
+        return {
+          success: false,
+          error: `Blocked destructive command pattern: ${blocked.label}`,
+          recovery: 'Use a safer command, inspect files first, or ask the user for an explicit manual destructive action.',
+        };
+      }
+    }
+
+    const baseCommand = this.getBaseCommand(text);
+    if (!baseCommand) return { success: true };
+
+    const cfg = await this.getRuntimeConfig();
+    const permissionCommands = cfg.permissions?.allowlist?.commands || [];
+    const sandbox = cfg.sandbox || {};
+    const sandboxCommands = sandbox.enabled === false ? [] : (sandbox.allowedCommands || this.allowedCommands);
+    const allowed = new Set([
+      ...this.allowedCommands,
+      ...sandboxCommands,
+      ...permissionCommands,
+    ].map(value => String(value || '').toLowerCase()).filter(Boolean));
+
+    if (allowed.size > 0 && !allowed.has(baseCommand.toLowerCase())) {
+      return {
+        success: false,
+        error: `Command is not allowlisted: ${baseCommand}`,
+        recovery: `Use an allowlisted command (${[...allowed].sort().join(', ')}) or add it to permissions.allowlist.commands after confirming it is safe.`,
+      };
+    }
+
+    return { success: true };
+  }
+
+  getBaseCommand(command) {
+    let text = String(command || '').trim();
+    if (!text) return '';
+    text = text.replace(/^\s*(?:cmd(?:\.exe)?\s+\/d\s+\/s\s+\/c|cmd(?:\.exe)?\s+\/c|powershell(?:\.exe)?\s+-[^\n]*?-command|pwsh\s+-[^\n]*?-command)\s+/i, '');
+    text = text.replace(/^\s*(?:&\s*)?['"]([^'"]+)['"]/, '$1');
+    const match = text.match(/^\s*([A-Za-z0-9_.:\/-]+)/);
+    if (!match) return '';
+    return path.basename(match[1]).replace(/\.(?:exe|cmd|bat|ps1)$/i, '').toLowerCase();
   }
 
   async findMissingNpmScript(command, cwd) {
@@ -996,7 +1063,30 @@ export class ToolExecutor {
       return null;
     }
     filePath = this.normalizePathText(filePath);
-    return path.isAbsolute(filePath) ? filePath : path.join(cwd, filePath);
+    return path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(cwd, filePath);
+  }
+
+  async shouldRestrictToWorkspace() {
+    const cfg = await this.getRuntimeConfig();
+    return cfg.sandbox?.enabled !== false && cfg.sandbox?.restrictToWorkspace !== false;
+  }
+
+  isPathInsideWorkspace(targetPath) {
+    if (!targetPath) return false;
+    const root = path.resolve(this.projectPath);
+    const target = path.resolve(targetPath);
+    const relative = path.relative(root, target);
+    return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+  }
+
+  async validateWorkspacePath(targetPath, action = 'path') {
+    if (!targetPath || !await this.shouldRestrictToWorkspace()) return { success: true };
+    if (this.isPathInsideWorkspace(targetPath)) return { success: true };
+    return {
+      success: false,
+      error: `${action} is outside the workspace: ${targetPath}`,
+      recovery: `Use a path inside ${path.resolve(this.projectPath)} or set sandbox.restrictToWorkspace=false after explicit user approval.`,
+    };
   }
 
   normalizePathText(value) {
@@ -1127,6 +1217,9 @@ export class ToolExecutor {
     }
 
     try {
+      const pathSafety = await this.validateWorkspacePath(filePath, 'Write path');
+      if (pathSafety?.success === false) return pathSafety;
+
       await this.backupFile(filePath);
       let oldContent = '';
       try { oldContent = await fs.readFile(filePath, 'utf8'); } catch(e) {}
@@ -1155,6 +1248,12 @@ export class ToolExecutor {
       const results = [];
       for (const item of batch) {
         const edit = this.normalizeEditArgs({ ...request, ...this.unwrapToolInput(item) }, cwd);
+        const editPathSafety = await this.validateWorkspacePath(edit.filePath, 'Edit path');
+        if (editPathSafety?.success === false) {
+          const result = editPathSafety;
+          results.push(result);
+          return { ...result, batchResults: results };
+        }
         const result = await this.editFile(edit.filePath, edit.oldString, edit.newString);
         results.push(result);
         if (result.success === false) {
@@ -1172,6 +1271,8 @@ export class ToolExecutor {
     }
 
     const edit = this.normalizeEditArgs(request, cwd);
+    const editPathSafety = await this.validateWorkspacePath(edit.filePath, 'Edit path');
+    if (editPathSafety?.success === false) return editPathSafety;
     return await this.editFile(edit.filePath, edit.oldString, edit.newString);
   }
 
@@ -1229,6 +1330,9 @@ export class ToolExecutor {
     }
 
     try {
+      const pathSafety = await this.validateWorkspacePath(filePath, 'Edit path');
+      if (pathSafety?.success === false) return pathSafety;
+
       await this.backupFile(filePath);
       const content = await fs.readFile(filePath, 'utf8');
       if (!content.includes(oldString)) {
@@ -1266,18 +1370,17 @@ export class ToolExecutor {
     const heredocResult = await this.tryHandleHeredocWrite(command, cwd);
     if (heredocResult) return heredocResult;
 
+    const cwdSafety = await this.validateWorkspacePath(this.resolveInputPath(cwd || this.projectPath, this.projectPath), 'Bash cwd');
+    if (cwdSafety?.success === false) return cwdSafety;
+
     let requestedShell = this.normalizeWindowsShell(shell);
     const translated = await this.translateWindowsCommand(command);
     command = translated.command;
     if (requestedShell === 'auto' && translated.shell) requestedShell = translated.shell;
 
     // Security check
-    const lowerCommand = command.toLowerCase();
-    for (const blocked of this.blockedPatterns) {
-      if (lowerCommand.includes(blocked)) {
-        return { success: false, error: `Blocked command pattern: ${blocked}` };
-      }
-    }
+    const safety = await this.validateBashCommandSafety(command);
+    if (safety?.success === false) return safety;
 
     try {
       const executedShell = process.platform === 'win32'
@@ -1474,8 +1577,10 @@ export class ToolExecutor {
     if (!match) return null;
 
     const [, rawTarget, , content] = match;
-    const target = this.resolveInputPath(rawTarget.trim(), cwd);
-    return await this.writeFile(target, content.endsWith('\n') ? content : `${content}\n`);
+      const target = this.resolveInputPath(rawTarget.trim(), cwd);
+      const targetSafety = await this.validateWorkspacePath(target, 'Bash heredoc target');
+      if (targetSafety?.success === false) return targetSafety;
+      return await this.writeFile(target, content.endsWith('\n') ? content : `${content}\n`);
   }
 
   parseLsArgs(rawArgs) {

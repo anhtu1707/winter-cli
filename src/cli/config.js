@@ -103,6 +103,7 @@ export class ConfigLoader {
       },
       sandbox: {
         enabled: true,
+        restrictToWorkspace: true,
         allowedCommands: ['git', 'npm', 'node', 'python'],
       },
       session: {

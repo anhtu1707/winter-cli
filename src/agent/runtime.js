@@ -157,7 +157,14 @@ export class AgentRuntime {
             if (repl.sessionPermissionGrants.has(canonicalToolName)) {
               proceed = true;
             } else {
-              proceed = await repl.promptToolPermission(cmd);
+              proceed = await repl.promptToolPermission({
+                toolName: canonicalToolName,
+                args: enrichedArgs,
+                command: cmd,
+                target: enrichedArgs.file_path || enrichedArgs.path || enrichedArgs.url || enrichedArgs.server,
+                cwd: enrichedArgs.cwd,
+                workspace: repl.projectPath,
+              });
               if (proceed === 'session') {
                 await repl.rememberSessionToolPermission(canonicalToolName);
                 proceed = true;

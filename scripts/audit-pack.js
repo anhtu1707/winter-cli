@@ -2,15 +2,15 @@
 
 import { execFileSync } from 'child_process';
 
-const output = process.platform === 'win32'
-  ? execFileSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'npm pack --dry-run --json'], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  : execFileSync('npm', ['pack', '--dry-run', '--json'], {
+const PACK_STDIO_OPTIONS = {
   encoding: 'utf8',
   stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  maxBuffer: 50 * 1024 * 1024,
+};
+
+const output = process.platform === 'win32'
+  ? execFileSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'npm pack --dry-run --json'], PACK_STDIO_OPTIONS)
+  : execFileSync('npm', ['pack', '--dry-run', '--json'], PACK_STDIO_OPTIONS);
 
 const [pack] = JSON.parse(output);
 const files = pack.files || [];
@@ -19,6 +19,7 @@ const blockedPrefixes = [
   'vscode-main/',
   '.winter/',
   '.git/',
+  'resources/local/ecc/node_modules/',
 ];
 const blockedPatterns = [
   /(^|\/)src\/.*\.test\.js$/,

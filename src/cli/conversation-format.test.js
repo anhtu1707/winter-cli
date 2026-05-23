@@ -121,6 +121,17 @@ test('normalizeToolCalls supports anthropic, gemini, and responses-api payload s
   assert.deepEqual(normalized[2].toolArgs, { pattern: 'Winter', path: 'README.md' });
 });
 
+test('tool failure output includes recovery guidance', () => {
+  const output = formatToolResultForConsole('Bash', {
+    success: false,
+    error: 'Command failed',
+    recovery: 'Try npm test',
+  });
+
+  assert.match(output, /Tool failed: Command failed/);
+  assert.match(output, /Recovery: Try npm test/);
+});
+
 test('tool result and signature helpers stay compact', () => {
   const result = formatToolResultForConsole('Bash', { success: true, stdout: 'x'.repeat(1300) });
   assert.match(result, /truncated/);
