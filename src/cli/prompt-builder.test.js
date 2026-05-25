@@ -73,6 +73,23 @@ test('PromptBuilder buildSystemPrompt includes project context when provided', (
   assert(result.includes('CALL_TOOL Read'));
 });
 
+test('PromptBuilder prioritizes recent work ledger memory', () => {
+  const memories = [
+    ...Array.from({ length: 12 }, (_, index) => ({ text: `Memory ${index + 1}: ${'x'.repeat(80)}` })),
+    { text: '[Recent Work Ledger]:\nLast user request: sửa MCP\nTool evidence from last turn:\n- Edit: src/mcp/ide-server.js' },
+  ];
+  const builder = new PromptBuilder({
+    session: createMockSession(memories),
+    projectPath: '/test',
+    compactText: (t) => t,
+    summarizePrompts: (items, opts) => items.slice(-opts.limit).map(opts.mapper).join('\n'),
+  });
+  const result = builder.buildSystemPrompt();
+
+  assert(result.includes('[Recent Work Ledger]'));
+  assert(result.includes('src/mcp/ide-server.js'));
+});
+
 test('PromptBuilder buildFastSystemPrompt returns short Vietnamese prompt', () => {
   const builder = new PromptBuilder({
     session: createMockSession(),

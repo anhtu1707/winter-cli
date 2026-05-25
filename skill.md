@@ -16,10 +16,12 @@ File này định nghĩa cách Winter chọn và áp dụng skill. Không chỉ 
 - **security**: Protect secrets, validate inputs, avoid unsafe shell/file operations.
 - **performance**: Measure or reason from the hot path before optimizing.
 
-## Available Local Skills (13)
+## Available Local Skills (16)
 - codex-primary-runtime
 - coding
+- coding.md
 - debug
+- debug.md
 - design
 - learned
 - performance
@@ -27,6 +29,7 @@ File này định nghĩa cách Winter chọn và áp dụng skill. Không chỉ 
 - security
 - skill-creator
 - test
+- test.md
 - vercel-react-best-practices
 - vibefigma
 - web-design-guidelines

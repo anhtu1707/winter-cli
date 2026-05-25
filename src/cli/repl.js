@@ -1761,8 +1761,18 @@ ${colors.reset}
     return '';
   }
 
+  normalizeIntentText(text = '') {
+    return String(text || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/đ/g, 'd')
+      .replace(/Đ/g, 'D')
+      .toLowerCase();
+  }
+
   actionRequiresTools(messages = []) {
-    const text = this.getLatestUserText(messages).toLowerCase();
+    const rawText = this.getLatestUserText(messages).toLowerCase();
+    const text = `${rawText}\n${this.normalizeIntentText(rawText)}`;
     if (!text.trim()) return false;
 
     // Direct action verbs (EN + VN)
@@ -1848,7 +1858,8 @@ ${colors.reset}
    * Giúp model yếu/nhỏ chọn đúng tool thay vì dùng Bash cho mọi thứ.
    */
   buildToolRoutingHint(userMessage = '') {
-    const text = String(userMessage || '').toLowerCase();
+    const rawText = String(userMessage || '').toLowerCase();
+    const text = `${rawText}\n${this.normalizeIntentText(rawText)}`;
     if (!text.trim()) return null;
 
     const hints = [];
@@ -2241,7 +2252,10 @@ ${colors.reset}
           'You have finished using tools.',
           'Now answer the user directly in the same language as the user.',
           'Do not call more tools. Do not ask the user to provide files you already read.',
-          'Use the tool results above. If a tool failed, explain the concrete failure briefly and answer with the available evidence.',
+          'Use only the tool results above as evidence for claims about files, commands, tests, and changes.',
+          'Start with the actual outcome, then mention only the most relevant files/commands. Avoid broad generic advice.',
+          'If a tool failed, explain the concrete failure briefly and answer with the available evidence.',
+          'Do not repeat the plan. Do not re-summarize unrelated project context. Do not claim memory/tool state that is not visible in the transcript.',
           toolSummaries.length ? `Tool summary:\n${toolSummaries.join('\n')}` : '',
         ].filter(Boolean).join('\n'),
       },
@@ -2495,6 +2509,44 @@ ${colors.reset}
     };
   }
 
+  async updateRecentWorkLedger({ userMessage = '', finalContent = '', toolCalls = [], usedTools = false, usedMutatingTools = false } = {}) {
+    if (typeof this.session?.replaceMemory !== 'function') return;
+
+    const toolLines = Array.isArray(toolCalls) && toolCalls.length > 0
+      ? toolCalls.slice(-8).map(call => `- ${this.summarizeToolCallForLedger(call)}`).join('\n')
+      : '- none';
+    const status = usedMutatingTools ? 'changed project state' : (usedTools ? 'inspected project state' : 'answered without tools');
+    const final = this.compactText(String(finalContent || '').replace(/\s+/g, ' ').trim(), 700, 'final answer');
+    const request = this.compactText(String(userMessage || '').replace(/\s+/g, ' ').trim(), 400, 'user request');
+    const content = [
+      `Updated: ${new Date().toISOString()}`,
+      `Status: ${status}`,
+      `Last user request: ${request || '(empty)'}`,
+      'Tool evidence from last turn:',
+      toolLines,
+      final ? `Last answer summary: ${final}` : 'Last answer summary: (empty)',
+      '',
+      'Instruction for next turn: treat this ledger as the source of truth for what Winter already did. Do not repeat completed inspection unless the user asks or new evidence is needed.',
+    ].join('\n');
+
+    await this.session.replaceMemory('[Recent Work Ledger]', content, 'summary');
+  }
+
+  summarizeToolCallForLedger(call = {}) {
+    const fn = call.function || {};
+    const name = this.tools?.normalizeToolName?.(fn.name || call.name || call.toolName || 'unknown') || fn.name || call.name || call.toolName || 'unknown';
+    let args = {};
+    try {
+      args = typeof fn.arguments === 'string' ? JSON.parse(fn.arguments || '{}') : (call.toolArgs || fn.arguments || {});
+    } catch {
+      args = call.toolArgs || {};
+    }
+    const target = args.file_path || args.path || args.cwd || args.url || args.server || args.pattern || '';
+    const command = args.command || args.cmd || '';
+    const detail = command || target || '';
+    return detail ? `${name}: ${this.compactText(String(detail), 180, `${name} args`)}` : name;
+  }
+
   async compressSessionContext(verbose = false) {
     const raw = this.session.getHistory(80)
       .filter(entry => entry && typeof entry.content === 'string')
@@ -2711,6 +2763,13 @@ ${colors.reset}
         historyEntry.tool_calls = allToolCalls;
       }
       await this.session.addToHistory(historyEntry);
+      await this.updateRecentWorkLedger({
+        userMessage: message,
+        finalContent,
+        toolCalls: allToolCalls,
+        usedTools: allToolCalls.length > 0,
+        usedMutatingTools,
+      });
 
       // Tự động verify: nếu AI đã dùng tools (sửa code), chạy test/build.
       if (finalContent && this.shouldAutoVerifyAfterTools(message, usedMutatingTools)) {

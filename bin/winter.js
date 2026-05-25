@@ -13,6 +13,7 @@ import { SessionManager } from '../src/session/manager.js';
 import { AIProviderManager } from '../src/ai/providers.js';
 import { CommandParser } from '../src/cli/commands.js';
 import { supportsUnicodeUi } from '../src/cli/terminal-ui.js';
+import { IDEServer } from '../src/mcp/ide-server.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const version = pkg.version;
@@ -23,7 +24,7 @@ const COMMANDS = new Set([
   'autopilot', 'plan',
   'provider', 'providers', 'model', 'models', 'ecc', 'page-agent', 'pageagent',
   'resources', 'htmlfx', 'memory-vault', 'doctor', 'context', 'scorecard',
-  'tui',
+  'tui', 'rag',
 ]);
 
 function isInteractiveRequest(args) {
@@ -69,6 +70,7 @@ Commands:
   winter context [task]       Inspect model context for this project
   winter scorecard            Score Winter capability gates
   winter doctor [full|tools]  Diagnose context, provider, and tools
+  winter rag <action>         RAG query/index/status/reset
   winter provider [name]      Show/switch provider
   winter providers            List providers
   winter model [model]        Show/set active provider model
@@ -89,6 +91,7 @@ Flags:
 
   winter -h, --help           Show help
   winter -v, --version        Show version
+  winter --mcp [--port n]     Start VS Code/IDE MCP bridge
 
 Version ${version}
   `);
@@ -96,6 +99,25 @@ Version ${version}
 
 async function main() {
   const args = process.argv.slice(2);
+
+  if (args.includes('--mcp')) {
+    const portIndex = args.indexOf('--port');
+    const hostIndex = args.indexOf('--host');
+    const projectIndex = args.indexOf('--project');
+    const server = new IDEServer({
+      port: portIndex !== -1 && args[portIndex + 1] ? Number(args[portIndex + 1]) : undefined,
+      host: hostIndex !== -1 && args[hostIndex + 1] ? args[hostIndex + 1] : undefined,
+      projectPath: projectIndex !== -1 && args[projectIndex + 1] ? path.resolve(args[projectIndex + 1]) : process.cwd(),
+    });
+    await server.start();
+    const shutdown = async () => {
+      await server.stop();
+      process.exit(0);
+    };
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+    return new Promise(() => {});
+  }
 
   if (args.includes('--help') || args.includes('-h')) {
     printHelp();

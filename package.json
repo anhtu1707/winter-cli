@@ -83,7 +83,8 @@
   },
   "dependencies": {
     "cli-highlight": "^2.1.11",
-    "diff": "^9.0.0"
+    "diff": "^9.0.0",
+    "glob": "^13.0.6"
   },
   "optionalDependencies": {
     "@colbymchenry/codegraph": "^0.7.12",

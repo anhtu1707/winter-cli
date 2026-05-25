@@ -1,6 +1,7 @@
 export const SLASH_COMMANDS = [
   { cmd: '/project', desc: 'Show/set current project' },
   { cmd: '/index', desc: 'Index codebase for semantic search', usage: '/index [full]' },
+  { cmd: '/rag', desc: 'RAG query and index management', sub: ['query', 'index', 'status', 'search'] },
   { cmd: '/search', desc: 'Semantic codebase search', usage: '/search <query>' },
   { cmd: '/search-def', desc: 'Find symbol/definition in codebase', usage: '/search-def <name>' },
   { cmd: '/undo', desc: 'Undo last change from backup', usage: '/undo [file]' },

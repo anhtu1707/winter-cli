@@ -6,7 +6,10 @@
 import { createServer } from 'net';
 import { promises as fs } from 'fs';
 import path from 'path';
-import { MCPProtocol } from './protocol.js';
+import { CompletionProvider } from './completions.js';
+import { ConfigLoader } from '../cli/config.js';
+import { AIProviderManager } from '../ai/providers.js';
+import { extractTextFromResponse } from '../ai/provider-adapters.js';
 
 const SERVER_NAME = 'winter-ide';
 const SERVER_VERSION = '1.0.0';
@@ -16,10 +19,13 @@ export class IDEServer {
     this.port = options.port || 4157;
     this.host = options.host || '127.0.0.1';
     this.projectPath = options.projectPath || process.cwd();
-    this.protocol = new MCPProtocol();
     this.server = null;
     this.clients = new Map();
     this.handlers = new Map();
+    this.completionProvider = new CompletionProvider();
+    this.config = options.config || new ConfigLoader();
+    this.ai = options.ai || new AIProviderManager(this.config);
+    this.aiReady = false;
     this._registerDefaultHandlers();
   }
 
@@ -162,6 +168,73 @@ export class IDEServer {
     this.handlers.set('ping', (clientId) => {
       this._sendTo(clientId, { type: 'pong', timestamp: Date.now() });
     });
+
+    this.handlers.set('inline:complete', async (clientId, msg) => {
+      try {
+        const filePath = msg.path || msg.filePath;
+        if (!filePath) {
+          this._sendTo(clientId, { type: 'error', message: 'inline:complete requires path' });
+          return;
+        }
+
+        const fullPath = path.isAbsolute(filePath) ? filePath : path.resolve(this.projectPath, filePath);
+        const content = await fs.readFile(fullPath, 'utf8');
+        const lines = content.split(/\r?\n/);
+        const line = Number.isFinite(Number(msg.line)) ? Math.max(1, Number(msg.line)) : lines.length;
+        const column = Number.isFinite(Number(msg.column)) ? Math.max(0, Number(msg.column)) : (lines[line - 1] || '').length;
+
+        const result = await this.completionProvider.generate({
+          filePath: fullPath,
+          content,
+          cursorLine: Math.min(line - 1, Math.max(0, lines.length - 1)),
+          cursorColumn: column,
+          language: detectLanguage(fullPath),
+        });
+        this._sendTo(clientId, { type: 'inline:complete:result', ...result });
+      } catch (error) {
+        this._sendTo(clientId, { type: 'error', message: `Inline completion failed: ${error.message}` });
+      }
+    });
+
+    this.handlers.set('ai:action', async (clientId, msg) => {
+      try {
+        const action = String(msg.action || 'explain').toLowerCase();
+        const code = String(msg.code || '');
+        if (!code.trim()) {
+          this._sendTo(clientId, { type: 'error', message: 'ai:action requires code' });
+          return;
+        }
+
+        await this._ensureAi();
+        const prompt = buildActionPrompt(action, code, msg.filePath || msg.path);
+        const data = await this.ai.sendRequest([
+          { role: 'system', content: 'You are Winter IDE assistant. Be concise, practical, and return code only when asked to fix, refactor, or generate tests.' },
+          { role: 'user', content: prompt },
+        ], { reason: `ide:${action}` });
+
+        const response = extractTextFromResponse(data);
+        const payload = {
+          type: 'ai:action:result',
+          action,
+          response,
+        };
+
+        if (['fix', 'refactor', 'generate-tests'].includes(action)) {
+          const editedContent = extractCodeBlock(response);
+          if (editedContent) payload.editedContent = editedContent;
+        }
+
+        this._sendTo(clientId, payload);
+      } catch (error) {
+        this._sendTo(clientId, { type: 'error', message: `AI action failed: ${error.message}` });
+      }
+    });
+  }
+
+  async _ensureAi() {
+    if (this.aiReady) return;
+    await this.ai.init();
+    this.aiReady = true;
   }
 
   async _handleMessage(clientId, raw) {
@@ -190,6 +263,45 @@ export class IDEServer {
       this._send(socket, message);
     }
   }
+}
+
+function detectLanguage(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  const map = {
+    '.js': 'javascript',
+    '.jsx': 'javascriptreact',
+    '.ts': 'typescript',
+    '.tsx': 'typescriptreact',
+    '.py': 'python',
+    '.go': 'go',
+    '.rs': 'rust',
+    '.java': 'java',
+    '.cs': 'csharp',
+    '.cpp': 'cpp',
+    '.c': 'c',
+    '.h': 'c',
+    '.hpp': 'cpp',
+    '.json': 'json',
+    '.md': 'markdown',
+  };
+  return map[ext] || ext.replace(/^\./, '') || 'text';
+}
+
+function buildActionPrompt(action, code, filePath = '') {
+  const location = filePath ? `File: ${filePath}\n\n` : '';
+  const prompts = {
+    explain: 'Explain what this code does and point out notable risks.',
+    refactor: 'Refactor this code. Return the improved code in one fenced code block, followed by a brief note.',
+    fix: 'Find and fix bugs in this code. Return the fixed code in one fenced code block, followed by a brief note.',
+    review: 'Review this code for bugs, risks, and missing tests. Prioritize findings.',
+    'generate-tests': 'Generate practical tests for this file. Return the test code in one fenced code block.',
+  };
+  return `${location}${prompts[action] || prompts.explain}\n\nCode:\n\`\`\`\n${code}\n\`\`\``;
+}
+
+function extractCodeBlock(text = '') {
+  const match = String(text).match(/```(?:[\w-]+)?\r?\n([\s\S]*?)```/);
+  return match ? match[1].trimEnd() : '';
 }
 
 export default IDEServer;

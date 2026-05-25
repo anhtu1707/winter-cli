@@ -44,6 +44,44 @@ test('provider slash suggestion uses configured provider names', () => {
   assert.doesNotMatch(provider.usage, /openai\|groq/);
 });
 
+test('action detection handles Vietnamese accents without mojibake variants', () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+
+  assert.equal(repl.actionRequiresTools([{ role: 'user', content: 'sửa lỗi trong README.md rồi chạy test' }]), true);
+  assert.equal(repl.actionRequiresTools([{ role: 'user', content: 'đọc lại toàn dự án xem' }]), true);
+});
+
+test('recent work ledger records tool evidence for the next turn', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  let memoryWrite = null;
+  repl.session = {
+    replaceMemory: async (prefix, content, type) => {
+      memoryWrite = { prefix, content, type };
+    },
+  };
+  repl.tools = {
+    normalizeToolName: name => name,
+  };
+
+  await repl.updateRecentWorkLedger({
+    userMessage: 'sửa MCP',
+    finalContent: 'Đã nối MCP và chạy test.',
+    usedTools: true,
+    usedMutatingTools: true,
+    toolCalls: [{
+      function: {
+        name: 'Edit',
+        arguments: JSON.stringify({ file_path: 'src/mcp/ide-server.js' }),
+      },
+    }],
+  });
+
+  assert.equal(memoryWrite.prefix, '[Recent Work Ledger]');
+  assert.equal(memoryWrite.type, 'summary');
+  assert.match(memoryWrite.content, /Status: changed project state/);
+  assert.match(memoryWrite.content, /Edit: src\/mcp\/ide-server\.js/);
+});
+
 test('Freebuff-style input shortcuts route bang commands and agent mentions', async () => {
   const repl = new WinterREPL({ projectPath: process.cwd() });
   repl.readlineClosed = true;
@@ -805,8 +843,8 @@ test('buildPromptToolResult preserves more tool output for flagship models', asy
 test('compactStartupMemories removes full startup resource dumps and keeps path summaries', async () => {
   const repl = new WinterREPL({ projectPath: process.cwd() });
   const memory = [
-    { text: `[Tá»± Ä‘á»™ng ghi nhá»› file README.md]:\n${'x'.repeat(10000)}` },
-    { text: `[Quy táº¯c dá»± Ã¡n tá»« winter.md]:\n${'y'.repeat(10000)}` },
+    { text: `[Tự động ghi nhớ file README.md]:\n${'x'.repeat(10000)}` },
+    { text: `[Quy tắc dự án từ winter.md]:\n${'y'.repeat(10000)}` },
     { text: '[Project Anchor]:\nkeep me' },
   ];
   repl.session = {

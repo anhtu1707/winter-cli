@@ -20,6 +20,7 @@ import { HtmlFxManager } from '../integrations/htmlfx-manager.js';
 import { selectWorkflow } from '../ai/workflow-selector.js';
 import { getProfileBlueprint } from '../ai/profile-blueprints.js';
 import { ToolExecutor } from '../tools/executor.js';
+import { handleRagCommandFromParser } from '../rag/cli.js';
 import { promises as fs } from 'fs';
 import path from 'path';
 import readline from 'node:readline/promises';
@@ -76,6 +77,7 @@ export class CommandParser {
       resources: this.handleResources.bind(this),
       htmlfx: this.handleHtmlFx.bind(this),
       'memory-vault': this.handleMemoryVault.bind(this),
+      rag: this.handleRag.bind(this),
       tui: this.handleTui.bind(this),
       provider: this.handleProvider.bind(this),
       providers: this.showProviders.bind(this),
@@ -142,6 +144,7 @@ export class CommandParser {
       '/htmlfx': () => this.handleHtmlFx(args),
       '/debug': () => this.handleDebug(args),
       '/auto': () => this.handleDebug(args),
+      '/rag': () => this.handleRag(args),
       '/autopilot': () => this.handleAutopilot(args),
       '/exit': () => process.exit(0),
     };
@@ -232,6 +235,10 @@ export class CommandParser {
       colors,
       title: 'Winter Dashboard',
     })}\n`);
+  }
+
+  async handleRag(args = []) {
+    await handleRagCommandFromParser(this, args);
   }
 
   async searchResourceFiles(root, query, limit = 30) {

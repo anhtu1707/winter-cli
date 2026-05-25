@@ -234,11 +234,33 @@ export class PromptBuilder {
 
   /** @private */
   _formatMemories(memories, options = {}) {
-    return `\n## Memories (Important Context)\n${this._summarizePrompts(memories, {
-      limit: 8,
+    const priorityPatterns = [
+      /^\[Recent Work Ledger\]/i,
+      /^\[Conversation Summary\]/i,
+      /^\[Project Anchor\]/i,
+    ];
+    const priority = [];
+    const regular = [];
+
+    for (const memory of memories) {
+      const text = typeof memory === 'string' ? memory : memory?.text || '';
+      if (priorityPatterns.some(pattern => pattern.test(text))) {
+        priority.push(memory);
+      } else {
+        regular.push(memory);
+      }
+    }
+
+    const ordered = [
+      ...regular.slice(-Math.max(0, (options.limit || 10) - Math.min(priority.length, 4))),
+      ...priority.slice(-4),
+    ];
+
+    return `\n## Memories (Important Context)\n${this._summarizePrompts(ordered, {
+      limit: options.limit || 10,
       maxEntryChars: 220,
       maxTotalChars: options.maxTotalChars || 1200,
-      mapper: memory => memory.text,
+      mapper: memory => typeof memory === 'string' ? memory : memory?.text,
     })}`;
   }
 

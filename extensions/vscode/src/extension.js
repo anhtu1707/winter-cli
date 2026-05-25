@@ -341,6 +341,7 @@ function sendMessage(message) {
     }, 5000);
 
     let responseData = '';
+    let settled = false;
 
     client.connect(SERVER_PORT, SERVER_HOST, () => {
       client.write(JSON.stringify(message) + '\n');
@@ -348,13 +349,31 @@ function sendMessage(message) {
 
     client.on('data', (data) => {
       responseData += data.toString();
-      try {
-        const response = JSON.parse(responseData);
+      const lines = responseData.split(/\r?\n/);
+      responseData = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let response;
+        try {
+          response = JSON.parse(line);
+        } catch {
+          continue;
+        }
+
+        if (response.type === 'server:info') {
+          continue;
+        }
+
+        settled = true;
         clearTimeout(timeout);
         client.destroy();
-        resolve(response);
-      } catch {
-        // Incomplete JSON, wait for more data
+        if (response.type === 'error') {
+          reject(new Error(response.message || 'Winter MCP server returned an error'));
+        } else {
+          resolve(response);
+        }
+        return;
       }
     });
 
@@ -366,9 +385,17 @@ function sendMessage(message) {
 
     client.on('close', () => {
       clearTimeout(timeout);
-      if (responseData) {
+      if (settled) return;
+      if (responseData.trim()) {
         try {
-          resolve(JSON.parse(responseData));
+          const response = JSON.parse(responseData);
+          if (response.type === 'error') {
+            reject(new Error(response.message || 'Winter MCP server returned an error'));
+          } else if (response.type === 'server:info') {
+            reject(new Error('Connection closed before Winter MCP server responded'));
+          } else {
+            resolve(response);
+          }
         } catch {
           reject(new Error('Invalid response from Winter MCP server'));
         }

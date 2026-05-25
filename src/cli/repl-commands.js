@@ -4,6 +4,7 @@ import { colors } from './snowflake-logo.js';
 import { SLASH_COMMANDS } from './slash-commands.js';
 
 import { DesignCommands } from '../design/commands.js';
+import { handleRagCommandFromRepl } from '../rag/cli.js';
 
 function getPageAgentRoot(repl) {
   return repl.contextLoader?.getResourcePaths?.()?.pageAgent || path.join(repl.projectPath, 'resources', 'local', 'page-agent');
@@ -671,6 +672,11 @@ export async function handleSlashCommand(repl, input) {
     case '/page-agent':
     case '/pageagent':
       await handlePageAgentCommand(repl, args);
+      break;
+
+    // RAG
+    case '/rag':
+      await handleRagCommandFromRepl(repl, args);
       break;
     case '/image':
       const imagePath = args[0];
