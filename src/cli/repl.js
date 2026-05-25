@@ -22,6 +22,8 @@ import { SessionManager } from '../session/manager.js';
 import { AIProviderManager } from '../ai/providers.js';
 import { ConfigLoader } from './config.js';
 import { PermissionManager } from '../tools/permission.js';
+import { MCPClient } from '../mcp/client.js';
+import { getMcpPreset, upsertMcpServer } from '../mcp/presets.js';
 import { compressConversation } from '../context/compress.js';
 import { getToolUsageSummary } from '../tools/analytics.js';
 import { SweAgent } from '../agent/swe-agent.js';
@@ -1123,6 +1125,19 @@ export class WinterREPL {
         return;
       }
 
+      if (!input.startsWith('/')) {
+        const browserShortcut = this.resolveBrowserShortcut(input);
+        if (browserShortcut) {
+          await this.handleOpenBrowserIntent(input, browserShortcut);
+          return;
+        }
+      }
+
+      if (!input.startsWith('/') && this.isOpenBrowserIntent(input)) {
+        await this.handleOpenBrowserIntent(input);
+        return;
+      }
+
       // Parse @-symbols for non-command input
       if (!input.startsWith('/')) {
         const canUseHeavyContext = await this.shouldUseHeavyProjectContext();
@@ -1194,6 +1209,84 @@ export class WinterREPL {
         if (!this.readlineClosed) this.showInputPrompt();
       }
     }
+  }
+
+  isOpenBrowserIntent(input = '') {
+    const raw = String(input || '').trim();
+    if (!raw) return false;
+    const text = `${raw.toLowerCase()}\n${this.normalizeIntentText(raw).toLowerCase()}`;
+    return /\b(mo|open|launch|start)\b.*\b(chrome|browser|trinh duyet|google chrome)\b/i.test(text)
+      || /\b(chrome|browser|trinh duyet|google chrome)\b.*\b(mo|open|launch|start)\b/i.test(text);
+  }
+
+  resolveBrowserShortcut(input = '') {
+    const raw = String(input || '').trim();
+    if (!raw) return null;
+    const normalized = this.normalizeIntentText(raw).toLowerCase();
+    const text = `${raw.toLowerCase()}\n${normalized}`;
+
+    const url = this.extractUrlFromText(raw);
+    if (url && /\b(mo|open|launch|start|browse)\b/i.test(normalized)) {
+      return { url, label: url };
+    }
+
+    const knownSites = [
+      { pattern: /\b(youtube music|yt music|music youtube)\b/i, url: 'https://music.youtube.com', label: 'YouTube Music' },
+      { pattern: /\b(youtube|you tube)\b/i, url: 'https://www.youtube.com', label: 'YouTube' },
+      { pattern: /\b(spotify)\b/i, url: 'https://open.spotify.com', label: 'Spotify' },
+      { pattern: /\b(google)\b/i, url: 'https://www.google.com', label: 'Google' },
+    ];
+
+    if (/\b(mo|open|launch|start)\b/i.test(normalized)) {
+      const site = knownSites.find(item => item.pattern.test(text));
+      if (site) return site;
+    }
+
+    if (/\b(tim|search|kiem)\b/i.test(normalized) && /\b(chrome|google|browser|trinh duyet)\b/i.test(normalized)) {
+      const query = this.extractBrowserSearchQuery(raw);
+      if (query) {
+        return {
+          url: `https://www.google.com/search?${new URLSearchParams({ q: query }).toString()}`,
+          label: `Google search: ${query}`,
+        };
+      }
+    }
+
+    return null;
+  }
+
+  extractBrowserSearchQuery(input = '') {
+    let query = String(input || '').trim();
+    query = query.replace(/^\s*(tìm|tim|search|kiếm|kiem)\s+/i, '');
+    query = query.replace(/\s+(trên|tren|on)\s+(chrome|google|browser|trình duyệt|trinh duyet)\b.*$/i, '');
+    query = query.replace(/\s+(đi|di)\s*$/i, '');
+    query = query.trim();
+    return query || null;
+  }
+
+  extractUrlFromText(input = '') {
+    const match = String(input || '').match(/https?:\/\/[^\s]+/i);
+    return match ? match[0].replace(/[),.;]+$/g, '') : null;
+  }
+
+  async handleOpenBrowserIntent(input = '', options = {}) {
+    const url = options.url || this.extractUrlFromText(input) || 'about:blank';
+    const result = await this.tools.execute('OpenBrowser', { browser: 'chrome', url }, { cwd: this.projectPath });
+    await this.session?.addToHistory?.({ role: 'user', content: input });
+
+    if (result?.success === false) {
+      const message = `Không mở được Chrome: ${result.error || 'unknown error'}`;
+      console.log(`${colors.red}${message}${colors.reset}`);
+      if (result.recovery) console.log(`${colors.dim}${result.recovery}${colors.reset}`);
+      await this.session?.addToHistory?.({ role: 'assistant', content: message });
+      return result;
+    }
+
+    const label = options.label || url;
+    const message = `Đã mở Chrome${url && url !== 'about:blank' ? `: ${label}` : '.'}`;
+    console.log(`${colors.green}${message}${colors.reset}`);
+    await this.session?.addToHistory?.({ role: 'assistant', content: message });
+    return result;
   }
 
   showSmartTip(input = '') {
@@ -1395,7 +1488,7 @@ export class WinterREPL {
 
 CRITICAL DEBUG/AGENT RULES:
 1. Inspect the project before changing anything. Read the failing file, related caller, config, and logs.
-2. Reproduce or locate the first hard failure. For frontend/runtime UI issues, use BrowserDebug when a URL/dev server is available.
+2. Reproduce or locate the first hard failure. For frontend/runtime UI issues, use chrome-devtools MCP in visible Chrome when a URL/dev server is available; use BrowserDebug only as a headless fallback.
 3. Patch the smallest root cause with Write/Edit.
 4. Run the closest verification command(s): ${verifyCommands.join(' && ')}.
 5. If verification fails, read the new error, patch again, and run verification again.
@@ -1651,14 +1744,14 @@ ${colors.reset}
       case 'review':
         return byName(['Read', 'Grep', 'Glob', 'Bash', 'WebFetch']);
       case 'debug':
-        return byName(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'BrowserDebug', 'WebFetch', 'Parallel']);
+        return byName(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'OpenBrowser', 'BrowserDebug', 'WebFetch', 'MCP', 'Parallel']);
       case 'research':
         return byName(['Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch', 'Parallel']);
       case 'design':
       case 'ui':
-        return byName(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'BrowserDebug', 'WebFetch']);
+        return byName(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'OpenBrowser', 'BrowserDebug', 'WebFetch', 'MCP']);
       default:
-        return byName(['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'BrowserDebug', 'WebFetch', 'WebSearch', 'Parallel', 'Agent']);
+        return byName(['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'OpenBrowser', 'BrowserDebug', 'WebFetch', 'WebSearch', 'MCP', 'Parallel', 'Agent']);
     }
   }
 
@@ -1783,6 +1876,8 @@ ${colors.reset}
     const pureQuestionPattern = /^(what|why|how|when|where|is|are|can|could|should|would|explain|describe|tell me|compare|giải thích|mô tả|so sánh|tai sao|vi sao|la gi|co nen|co phai|tại sao|vì sao|là gì|có nên|có phải|nhu the nao|như thế nào|khi nào)\b/i;
 
     if (pureQuestionPattern.test(text) && !actionPattern.test(text)) return false;
+
+    if (this.isBrowserInteractionRequest(rawText)) return true;
     
     // Even without explicit target, some verbs are strong enough on their own
     const strongActionAlone = /\b(fix|debug|deploy|build|test|commit|install|run|refactor|sửa|chạy|cài|triển khai|xây dựng)\b/i;
@@ -1812,6 +1907,15 @@ ${colors.reset}
     return true;
   }
 
+  isBrowserInteractionRequest(text = '') {
+    const raw = String(text || '');
+    const normalized = this.normalizeIntentText(raw);
+    const combined = `${raw}\n${normalized}`;
+    const action = /\b(click|fill|submit|press|select|navigate|bam|dien|chon|nhan|vao|bấm|điền|chọn|nhấn|vào)\b/i;
+    const target = /\b(url|http|https|site|website|web|page|form|button|link|chrome|browser|trang|nut|nút|dang ky|dang nhap|khach hang|khách hàng|đăng ký|đăng nhập)\b/i;
+    return action.test(combined) && target.test(combined);
+  }
+
   detectFakeCompletion(content = '') {
     const text = String(content || '').toLowerCase();
     if (!text.trim()) return false;
@@ -1819,6 +1923,9 @@ ${colors.reset}
     // Detect fake completion claims - model says it did something without using tools
     const fakeCompletionClaims = /(?:đã (?:sửa|tạo|viết|xóa|cập nhật|thêm|chỉnh|xong|hoàn thành|fix|update|edit|write|create|delete|remove|modify|change|apply|deploy|push)|i(?:'ve| have) (?:fixed|created|written|updated|added|modified|changed|edited|applied|deployed|deleted|removed|patched|implemented|refactored)|done!|xong rồi|hoàn thành|đã hoàn tất|hoàn tất|the (?:fix|change|update|edit|modification) (?:has been|is) (?:applied|done|completed|made)|here(?:'s| is) the (?:fix|update|change|solution|implementation|code)|file (?:has been|was) (?:updated|created|modified|written|changed)|changes? (?:have been|has been|were) (?:made|applied|saved)|successfully (?:updated|created|modified|fixed|applied|changed|written))/i;
     if (fakeCompletionClaims.test(text)) return true;
+
+    const fakeBrowserClaims = /(?:đã|da|i(?:'ve| have))\s+(?:bấm|bam|click(?:ed)?|mở|mo|open(?:ed)?|điền|dien|fill(?:ed)?|chọn|chon|select(?:ed)?|submit(?:ted)?|vào|vao|navigate(?:d)?)/i;
+    if (fakeBrowserClaims.test(text)) return true;
 
     // Detect code blocks that pretend to show "changes" without tool use
     const codeBlockWithFilePath = /```[\s\S]*?(?:[\/\\][\w.-]+\.(?:js|ts|py|css|html|json|md|jsx|tsx|vue|go|rs|java|c|cpp|rb|sh))[\s\S]*?```/i;
@@ -1830,6 +1937,19 @@ ${colors.reset}
 
   buildToolEvidenceCorrection(messages = []) {
     const request = this.getLatestUserText(messages);
+    if (this.isBrowserInteractionRequest(request)) {
+      return [
+        'RUNTIME ENFORCEMENT: Your previous response was BLOCKED because you claimed a browser/web action without real browser tool evidence.',
+        '',
+        'For browser interaction tasks you MUST use tools, not prose:',
+        '1. If chrome-devtools MCP is configured, call MCP {"server":"chrome-devtools","tool":"list"} first if needed.',
+        '2. Use chrome-devtools MCP tools such as new_page/navigate_page, take_snapshot, click, fill/fill_form, evaluate_script, list_network_requests, and take_screenshot in visible Chrome.',
+        '3. Use WebFetch only for static text extraction. WebFetch cannot click buttons, fill forms, or preserve page state. BrowserDebug is headless and should be fallback only.',
+        '4. Do not say "đã bấm", "đã điền", "đã mở", or "đã kiểm tra" until a browser/MCP tool result proves it.',
+        '',
+        `Original user request: ${request}`,
+      ].join('\n');
+    }
     return [
       '⚠️ RUNTIME ENFORCEMENT: Your previous response was BLOCKED because you did not use any tool.',
       '',
@@ -1842,7 +1962,7 @@ ${colors.reset}
       'DO NOT say "I have updated/created/fixed" without a tool call proving it.',
       'DO NOT describe what you would do. Actually DO IT with tool calls.',
       '',
-      'Available tools: Read, Write, Edit, Bash, Glob, Grep, BrowserDebug, WebFetch, WebSearch.',
+      'Available tools: Read, Write, Edit, Bash, Glob, Grep, OpenBrowser, BrowserDebug, WebFetch, WebSearch, MCP.',
       '',
       'If native tool calls are not supported, output exactly one fallback tool call:',
       '<invoke name="Read"><parameter name="path">README.md</parameter></invoke>',
@@ -1863,6 +1983,10 @@ ${colors.reset}
     if (!text.trim()) return null;
 
     const hints = [];
+
+    if (/\b(click|fill|submit|press|select|navigate|bam|dien|chon|nhan|vao|bấm|điền|chọn|nhấn|vào)\b/i.test(text) && /\b(web|website|page|url|http|chrome|browser|form|button|link|trang|nut|nút|dang ky|dang nhap|khach hang|đăng ký|đăng nhập|khách hàng)\b/i.test(text)) {
+      hints.push('TOOL HINT: This is a live browser interaction. Do NOT use WebFetch alone. Prefer visible Chrome via MCP {"server":"chrome-devtools","tool":"list"} then chrome-devtools tools new_page/navigate_page, take_snapshot, click, fill/fill_form, evaluate_script, list_network_requests, and take_screenshot. Only use BrowserDebug as headless fallback. Only claim click/fill/navigation after MCP or BrowserDebug evidence.');
+    }
 
     // Detect file reading requests
     const hasPath = /[A-Za-z]:[\\/][\w.\\/\\-]+/i.test(text) || /(?:^|\s)[.~]?\/[\w.\/-]+/i.test(text);
@@ -1902,7 +2026,11 @@ ${colors.reset}
 
     // Detect URL/web requests  
     if (/\b(https?:\/\/[^\s]+|url|website|trang web|web page)\b/i.test(text)) {
-      hints.push('TOOL HINT: To fetch a URL, call tool WebFetch with {"url": "<url>"}. For browser debugging, use BrowserDebug.');
+      hints.push('TOOL HINT: To fetch static URL text, call WebFetch. For live visible browser debugging/control, prefer MCP server chrome-devtools with new_page/navigate_page, take_snapshot, click, fill/fill_form, evaluate_script, list_console_messages, list_network_requests, or performance trace tools; use BrowserDebug only as headless fallback.');
+    }
+
+    if (/\b(chrome|devtools|browser debug|debug browser|screenshot|console|network|lcp|performance|perf|web vitals|localhost|127\.0\.0\.1)\b/i.test(text)) {
+      hints.push('TOOL HINT: For "open Chrome" / "mở chrome", call OpenBrowser {"browser":"chrome","url":"about:blank"}. Do NOT call Bash/Get-Command/Start-Process. If configured, use MCP {"server":"chrome-devtools","tool":"list"} for page state, console, network, screenshots, and performance.');
     }
 
     if (hints.length === 0) return null;
@@ -2244,6 +2372,9 @@ ${colors.reset}
 
   async requestFinalAnswer(messages, toolSummaries, startedAt, totalUsage) {
     const executionProfile = this.selectExecutionProfile(messages, { enableTools: false });
+    const latestUserText = this.getLatestUserText(messages);
+    const browserInteraction = this.isBrowserInteractionRequest(latestUserText);
+    const hasBrowserEvidence = toolSummaries.some(summary => /^(MCP|BrowserDebug|OpenBrowser):/i.test(summary));
     const finalMessages = [
       ...messages,
       {
@@ -2256,6 +2387,7 @@ ${colors.reset}
           'Start with the actual outcome, then mention only the most relevant files/commands. Avoid broad generic advice.',
           'If a tool failed, explain the concrete failure briefly and answer with the available evidence.',
           'Do not repeat the plan. Do not re-summarize unrelated project context. Do not claim memory/tool state that is not visible in the transcript.',
+          browserInteraction && !hasBrowserEvidence ? 'Important: The user asked for browser interaction, but no MCP/BrowserDebug/OpenBrowser result is available. You must say the browser action was NOT performed; do not claim you clicked, filled, navigated, or inspected pages.' : '',
           toolSummaries.length ? `Tool summary:\n${toolSummaries.join('\n')}` : '',
         ].filter(Boolean).join('\n'),
       },
@@ -2268,7 +2400,7 @@ ${colors.reset}
       }
 
       if (typeof this.ai.streamRequest === 'function') {
-        return await this.streamFinalAnswer(finalMessages, startedAt, totalUsage, executionProfile);
+        return await this.streamFinalAnswer(finalMessages, startedAt, totalUsage, executionProfile, { browserInteraction, hasBrowserEvidence });
       }
 
       const response = await this.ai.sendRequest(finalMessages, {
@@ -2278,7 +2410,10 @@ ${colors.reset}
         signal: this.currentAbortController?.signal,
       });
       this.addUsage(totalUsage, response.usage);
-      const content = response.choices?.[0]?.message?.content || '';
+      let content = response.choices?.[0]?.message?.content || '';
+      if (browserInteraction && !hasBrowserEvidence && this.detectFakeCompletion(content)) {
+        content = 'Chưa thực hiện được thao tác trên trình duyệt: lượt này không có bằng chứng từ MCP/BrowserDebug/OpenBrowser, nên Winter chặn câu trả lời để tránh báo sai. Hãy bật chrome-devtools MCP hoặc dùng lại yêu cầu để Winter gọi đúng browser tool.';
+      }
       
       if (this.spinner) this.spinner.stop();
       
@@ -2295,7 +2430,7 @@ ${colors.reset}
     }
   }
 
-  async streamFinalAnswer(messages, startedAt, totalUsage, executionProfile = null) {
+  async streamFinalAnswer(messages, startedAt, totalUsage, executionProfile = null, validation = {}) {
     let content = '';
     const profile = executionProfile || this.selectExecutionProfile(messages, { enableTools: false });
 
@@ -2321,6 +2456,10 @@ ${colors.reset}
 
       if (this.spinner) this.spinner.stop();
 
+      if (validation.browserInteraction && !validation.hasBrowserEvidence && this.detectFakeCompletion(content)) {
+        content = 'Chưa thực hiện được thao tác trên trình duyệt: lượt này không có bằng chứng từ MCP/BrowserDebug/OpenBrowser, nên Winter chặn câu trả lời để tránh báo sai. Hãy bật chrome-devtools MCP hoặc dùng lại yêu cầu để Winter gọi đúng browser tool.';
+      }
+
       if (content) {
         this.printAssistantAnswer(content, startedAt, totalUsage);
         return content;
@@ -2341,6 +2480,9 @@ ${colors.reset}
     });
     this.addUsage(totalUsage, response.usage);
     content = response.choices?.[0]?.message?.content || '';
+    if (validation.browserInteraction && !validation.hasBrowserEvidence && this.detectFakeCompletion(content)) {
+      content = 'Chưa thực hiện được thao tác trên trình duyệt: lượt này không có bằng chứng từ MCP/BrowserDebug/OpenBrowser, nên Winter chặn câu trả lời để tránh báo sai. Hãy bật chrome-devtools MCP hoặc dùng lại yêu cầu để Winter gọi đúng browser tool.';
+    }
     if (content) {
       this.printAssistantAnswer(content, startedAt, totalUsage);
     }
@@ -3378,6 +3520,8 @@ Light mode enabled for safety. Heavy codebase, graph, and git context are skippe
     const [action, ...rest] = args;
     const config = await this.config.load();
     config.mcp = config.mcp || { servers: [] };
+    config.permissions = config.permissions || { allowlist: {} };
+    config.permissions.allowlist = config.permissions.allowlist || { tools: [], commands: [], mcpServers: [] };
 
     switch (action) {
       case undefined:
@@ -3410,8 +3554,31 @@ Light mode enabled for safety. Heavy codebase, graph, and git context are skippe
         }
         config.mcp.servers = (config.mcp.servers || []).filter(server => server.name !== name);
         config.mcp.servers.push({ name, command, args: parsedArgs, enabled: true });
+        config.permissions.allowlist.mcpServers = [...new Set([...(config.permissions.allowlist.mcpServers || []), name])];
         await this.config.save(config);
         console.log(`${colors.green}✓ Added MCP server: ${name}${colors.reset}`);
+        break;
+      }
+      case 'preset':
+      case 'install': {
+        const [presetName, ...presetOptions] = rest;
+        if (!presetName) {
+          console.log(`${colors.yellow}Usage: /mcp preset <chrome-devtools> [--isolated] [--headless] [--browser-url <url>]${colors.reset}`);
+          break;
+        }
+        try {
+          const server = getMcpPreset(presetName, presetOptions);
+          upsertMcpServer(config, server);
+          await this.config.save(config);
+          console.log(`${colors.green}OK Installed MCP preset: ${server.name}${colors.reset}`);
+          console.log(`  ${colors.dim}${server.command} ${server.args.join(' ')}${colors.reset}`);
+          if (!server.args.includes('--headless')) {
+            console.log(`  ${colors.dim}Visible Chrome mode: enabled. Use --headless only for background browser runs.${colors.reset}`);
+          }
+          console.log(`  ${colors.dim}Inspect tools with: /mcp tools ${server.name}${colors.reset}`);
+        } catch (error) {
+          console.log(`${colors.red}${error.message}${colors.reset}`);
+        }
         break;
       }
       case 'remove': {
@@ -3421,6 +3588,7 @@ Light mode enabled for safety. Heavy codebase, graph, and git context are skippe
           break;
         }
         config.mcp.servers = (config.mcp.servers || []).filter(server => server.name !== name);
+        config.permissions.allowlist.mcpServers = (config.permissions.allowlist.mcpServers || []).filter(server => server !== name);
         await this.config.save(config);
         console.log(`${colors.green}✓ Removed MCP server: ${name}${colors.reset}`);
         break;
@@ -3435,8 +3603,37 @@ Light mode enabled for safety. Heavy codebase, graph, and git context are skippe
         console.log(`${colors.green}✓ MCP server allowed: ${name}${colors.reset}`);
         break;
       }
+      case 'tools': {
+        const name = rest[0];
+        if (!name) {
+          console.log(`${colors.yellow}Usage: /mcp tools <name>${colors.reset}`);
+          break;
+        }
+        const server = (config.mcp.servers || []).find(item => item.name === name && item.enabled !== false);
+        if (!server) {
+          console.log(`${colors.red}MCP server not configured or disabled: ${name}${colors.reset}`);
+          break;
+        }
+        const client = new MCPClient(server);
+        try {
+          const tools = await client.listTools();
+          console.log(`${colors.cyan}MCP Tools: ${name}${colors.reset}`);
+          if (!tools.length) {
+            console.log(`  ${colors.dim}No tools reported.${colors.reset}`);
+          }
+          tools.forEach(tool => {
+            const description = tool.description ? ` - ${tool.description}` : '';
+            console.log(`  ${colors.green}${tool.name}${colors.reset}${description}`);
+          });
+        } catch (error) {
+          console.log(`${colors.red}Failed to list MCP tools: ${error.message}${colors.reset}`);
+        } finally {
+          await client.close();
+        }
+        break;
+      }
       default:
-        console.log(`${colors.yellow}Usage: /mcp <list|add|remove|allow>${colors.reset}`);
+        console.log(`${colors.yellow}Usage: /mcp <list|add|preset|install|remove|allow|tools>${colors.reset}`);
     }
   }
 

@@ -5,7 +5,7 @@
 
 import { promises as fs } from 'fs';
 import path from 'path';
-import { exec, execFile } from 'child_process';
+import { exec, execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import { diffLines } from 'diff';
 import { withRetry } from './retry.js';
@@ -207,11 +207,11 @@ export class ToolExecutor {
       {
         type: 'function',
         name: 'MCP',
-        description: 'Call a configured MCP server tool by name. Use for external integrations and IDE-like tools. Discover available MCP tools via the MCP tool with server name and tool=list. Also, tools from MCP servers are exposed with mcp__<server>__<tool> naming for direct IDE integration (e.g. mcp__vscode__open_file).',
+        description: 'Call a configured MCP server tool by name. Use for external integrations and IDE-like tools. Discover available MCP tools via the MCP tool with server name and tool=list. For live Chrome debugging, use server chrome-devtools with tools such as new_page, navigate_page, take_snapshot, take_screenshot, evaluate_script, list_console_messages, list_network_requests, and performance trace tools. Also, tools from MCP servers are exposed with mcp__<server>__<tool> naming for direct IDE integration (e.g. mcp__vscode__open_file).',
         parameters: {
           type: 'object',
           properties: {
-            server: { type: 'string', description: 'Configured MCP server name (e.g. vscode)' },
+            server: { type: 'string', description: 'Configured MCP server name (e.g. vscode, chrome-devtools)' },
             tool: { type: 'string', description: 'MCP tool name, or set to "list" to discover all tools from a server' },
             arguments: { type: 'object', description: 'Tool arguments' },
           },
@@ -390,6 +390,18 @@ export class ToolExecutor {
       },
       {
         type: 'function',
+        name: 'OpenBrowser',
+        description: 'Open Chrome or the default browser visibly for the user. Use this for requests like "mở chrome", "open Chrome", or "open this URL in browser". Do not use Bash/Start-Process for this.',
+        parameters: {
+          type: 'object',
+          properties: {
+            url: { type: 'string', description: 'URL to open. Defaults to about:blank.' },
+            browser: { type: 'string', description: 'chrome or default. Defaults to chrome.' },
+          }
+        }
+      },
+      {
+        type: 'function',
         name: 'WebFetch',
         description: 'Fetch web page content.',
         parameters: {
@@ -532,6 +544,8 @@ export class ToolExecutor {
         return await this.parallelExecute(input.tools ?? input.calls ?? [], { cwd });
       case 'BrowserDebug':
         return await this.browserDebug(input.url ?? input.uri, input.action);
+      case 'OpenBrowser':
+        return await this.openBrowser(input.url ?? input.uri ?? input.href, input.browser);
       case 'WebFetch':
         return await this.webFetch(input.url ?? input.uri ?? input.href, input.prompt ?? input.query ?? input.extract);
       case 'WebSearch':
@@ -572,7 +586,7 @@ export class ToolExecutor {
         return {
           success: false,
           error: `Unknown tool: ${toolName}`,
-          availableTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'TaskCreate', 'TaskUpdate', 'TaskList', 'MCP', 'Parallel', 'BrowserDebug', 'WebFetch', 'WebSearch', 'WebArchive', 'HtmlEffectiveness', 'NotebookRead', 'NotebookEdit', 'TodoWrite', 'TodoList', 'ScheduleWakeup', 'AskUserQuestion', 'Agent', 'InsertText', 'StrReplaceAll'],
+          availableTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'TaskCreate', 'TaskUpdate', 'TaskList', 'MCP', 'Parallel', 'OpenBrowser', 'BrowserDebug', 'WebFetch', 'WebSearch', 'WebArchive', 'HtmlEffectiveness', 'NotebookRead', 'NotebookEdit', 'TodoWrite', 'TodoList', 'ScheduleWakeup', 'AskUserQuestion', 'Agent', 'InsertText', 'StrReplaceAll'],
           recovery: 'Call one of the available tools. For file writes use Write with { "file_path": "...", "content": "..." }. For shell commands use Bash with { "command": "..." }.',
         };
     }
@@ -725,6 +739,12 @@ export class ToolExecutor {
       return { success: true, coerced: true, args: next };
     }
 
+    if (toolName === 'OpenBrowser') {
+      const url = pick('url', 'uri', 'href') || 'about:blank';
+      const browser = pick('browser', 'app') || 'chrome';
+      return { success: true, coerced: true, args: { ...args, url, browser } };
+    }
+
     if (toolName === 'WebSearch') {
       const query = pick('query', 'q', 'search', 'search_query', 'searchQuery');
       if (!query) {
@@ -751,6 +771,14 @@ export class ToolExecutor {
 
     const baseCommand = this.getBaseCommand(text);
     if (!baseCommand) return { success: true };
+
+    if (/^(?:get-command|start-process|start|open|xdg-open)$/i.test(baseCommand) && /\b(chrome|browser|google chrome)\b/i.test(text)) {
+      return {
+        success: false,
+        error: `Use OpenBrowser instead of shell command for browser launch: ${baseCommand}`,
+        recovery: 'Call OpenBrowser {"browser":"chrome","url":"about:blank"} for "mở chrome", or OpenBrowser {"browser":"chrome","url":"https://example.com"} for a specific URL.',
+      };
+    }
 
     const cfg = await this.getRuntimeConfig();
     const permissionCommands = cfg.permissions?.allowlist?.commands || [];
@@ -974,6 +1002,11 @@ export class ToolExecutor {
       searchweb: 'WebSearch',
       internetsearch: 'WebSearch',
       googlesearch: 'WebSearch',
+      openbrowser: 'OpenBrowser',
+      open_browser: 'OpenBrowser',
+      browseropen: 'OpenBrowser',
+      openchrome: 'OpenBrowser',
+      launchchrome: 'OpenBrowser',
       browserdebug: 'BrowserDebug',
       browser: 'BrowserDebug',
       browserinspect: 'BrowserDebug',
@@ -2074,6 +2107,72 @@ export class ToolExecutor {
     } catch (e) {
       return { success: false, error: e.message, url, recovery: 'Check that the dev server/page is reachable, then retry BrowserDebug with a valid URL and smaller action.' };
     }
+  }
+
+  buildBrowserLaunchCommand(url = 'about:blank', browser = 'chrome', platform = process.platform) {
+    const targetUrl = String(url || 'about:blank');
+    const targetBrowser = String(browser || 'chrome').toLowerCase();
+
+    if (platform === 'win32') {
+      if (targetBrowser === 'default') {
+        return { command: 'cmd', args: ['/c', 'start', '', targetUrl] };
+      }
+      return { command: 'cmd', args: ['/c', 'start', '', 'chrome', targetUrl] };
+    }
+
+    if (platform === 'darwin') {
+      if (targetBrowser === 'default') {
+        return { command: 'open', args: [targetUrl] };
+      }
+      return { command: 'open', args: ['-a', 'Google Chrome', targetUrl] };
+    }
+
+    if (targetBrowser === 'default') {
+      return { command: 'xdg-open', args: [targetUrl] };
+    }
+    return { command: 'google-chrome', args: [targetUrl] };
+  }
+
+  async openBrowser(url = 'about:blank', browser = 'chrome') {
+    const targetUrl = String(url || 'about:blank');
+    const targetBrowser = String(browser || 'chrome').toLowerCase();
+    const launch = this.buildBrowserLaunchCommand(targetUrl, targetBrowser);
+
+    return await new Promise(resolve => {
+      let child;
+      try {
+        child = spawn(launch.command, launch.args, {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: false,
+        });
+      } catch (error) {
+        resolve({
+          success: false,
+          error: error.message,
+          recovery: 'Install Chrome or retry with OpenBrowser {"browser":"default","url":"about:blank"}.',
+        });
+        return;
+      }
+
+      child.once('error', error => {
+        resolve({
+          success: false,
+          error: error.message,
+          recovery: 'Install Chrome or retry with OpenBrowser {"browser":"default","url":"about:blank"}.',
+        });
+      });
+      child.once('spawn', () => {
+        child.unref();
+        resolve({
+          success: true,
+          browser: targetBrowser,
+          url: targetUrl,
+          command: launch.command,
+          args: launch.args,
+        });
+      });
+    });
   }
 
   async htmlEffectivenessCompile(input, cwd) {

@@ -10,6 +10,7 @@ import { DesignCommands } from '../design/commands.js';
 import { SkillManager } from '../skills/manager.js';
 import { PluginManager } from '../plugins/manager.js';
 import { MCPClient } from '../mcp/client.js';
+import { getMcpPreset, upsertMcpServer } from '../mcp/presets.js';
 import { BenchmarkRunner } from '../ai/benchmark.js';
 import { redactSecrets } from './secret-env.js';
 import { formatRuntimeEnvironmentSummary, getRuntimeEnvironment } from './runtime-env.js';
@@ -813,6 +814,29 @@ EXECUTION CONTRACT:
         console.log(`${colors.green}✓ Added MCP server: ${name}${colors.reset}`);
         break;
       }
+      case 'preset':
+      case 'install': {
+        const [presetName, ...presetOptions] = rest;
+        if (!presetName) {
+          console.log(`${colors.yellow}Usage: winter mcp preset <chrome-devtools> [--isolated] [--headless] [--browser-url <url>]${colors.reset}`);
+          break;
+        }
+
+        try {
+          const server = getMcpPreset(presetName, presetOptions);
+          upsertMcpServer(config, server);
+          await this.config.save(config);
+          console.log(`${colors.green}OK Installed MCP preset: ${server.name}${colors.reset}`);
+          console.log(`  ${colors.dim}${server.command} ${server.args.join(' ')}${colors.reset}`);
+          if (!server.args.includes('--headless')) {
+            console.log(`  ${colors.dim}Visible Chrome mode: enabled. Use --headless only for background browser runs.${colors.reset}`);
+          }
+          console.log(`  ${colors.dim}Inspect tools with: winter mcp tools ${server.name}${colors.reset}`);
+        } catch (error) {
+          console.log(`${colors.red}${error.message}${colors.reset}`);
+        }
+        break;
+      }
       case 'remove': {
         const name = rest[0];
         if (!name) {
@@ -868,7 +892,7 @@ EXECUTION CONTRACT:
         break;
       }
       default:
-        console.log(`${colors.yellow}Usage: winter mcp <list|add|remove|allow|tools>${colors.reset}`);
+        console.log(`${colors.yellow}Usage: winter mcp <list|add|preset|install|remove|allow|tools>${colors.reset}`);
     }
   }
 

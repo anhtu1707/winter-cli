@@ -3,13 +3,13 @@ import { pathToFileURL } from 'url';
 import { promises as fs } from 'fs';
 
 const DEFAULT_TOOL_SETS = {
-  general: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'BrowserDebug', 'WebFetch', 'WebSearch', 'Parallel', 'Agent'],
+  general: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'OpenBrowser', 'BrowserDebug', 'WebFetch', 'WebSearch', 'Parallel', 'Agent'],
   plan: ['Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch', 'Parallel'],
   review: ['Read', 'Grep', 'Glob', 'Bash', 'WebFetch'],
-  debug: ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'BrowserDebug', 'WebFetch', 'Parallel'],
-  design: ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'BrowserDebug', 'WebFetch'],
+  debug: ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'OpenBrowser', 'BrowserDebug', 'WebFetch', 'Parallel'],
+  design: ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'OpenBrowser', 'BrowserDebug', 'WebFetch'],
   research: ['Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch', 'Parallel'],
-  swe: ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'BrowserDebug', 'Parallel'],
+  swe: ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'OpenBrowser', 'BrowserDebug', 'Parallel'],
 };
 
 const BUILTIN_AGENTS = [

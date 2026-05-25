@@ -337,6 +337,7 @@ test('mcp and permissions commands update config state', async () => {
 
   try {
     await parser.parse(['mcp', 'add', 'workspace', 'node', '["src/mcp/server.js"]']);
+    await parser.parse(['mcp', 'preset', 'chrome-devtools', '--headless', '--isolated']);
     await parser.parse(['permissions', 'allow', 'tool', 'Bash']);
   } finally {
     console.log = originalLog;
@@ -344,7 +345,16 @@ test('mcp and permissions commands update config state', async () => {
 
   assert(saved.length > 0);
   assert(logs.some(line => line.includes('Added MCP server')));
+  assert(logs.some(line => line.includes('Installed MCP preset: chrome-devtools')));
   assert(logs.some(line => line.includes('Allowed tool')));
+
+  const chromeConfig = saved.find(value => value?.mcp?.servers?.some(server => server.name === 'chrome-devtools'));
+  assert.ok(chromeConfig);
+  const chromeServer = chromeConfig.mcp.servers.find(server => server.name === 'chrome-devtools');
+  assert.ok(chromeServer.args.includes('chrome-devtools-mcp@latest'));
+  assert.ok(chromeServer.args.includes('--headless'));
+  assert.ok(chromeServer.args.includes('--isolated'));
+  assert.ok(chromeConfig.permissions.allowlist.mcpServers.includes('chrome-devtools'));
 });
 
 test('ecc and page-agent slash commands browse bundled resources', async () => {

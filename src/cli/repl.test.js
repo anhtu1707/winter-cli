@@ -51,6 +51,74 @@ test('action detection handles Vietnamese accents without mojibake variants', ()
   assert.equal(repl.actionRequiresTools([{ role: 'user', content: 'đọc lại toàn dự án xem' }]), true);
 });
 
+test('tool routing sends open chrome requests to OpenBrowser, not Bash', () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  const hint = repl.buildToolRoutingHint('mở chrome');
+
+  assert.match(hint, /OpenBrowser/);
+  assert.match(hint, /about:blank/);
+  assert.match(hint, /Do NOT call Bash/);
+});
+
+test('processInputTask opens Chrome directly instead of asking the model', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  const calls = [];
+  const history = [];
+  repl.readlineClosed = true;
+  repl.showSmartTip = () => {};
+  repl.showInputPrompt = () => {};
+  repl.session = {
+    addToHistory: async entry => history.push(entry),
+  };
+  repl.tools = {
+    execute: async (tool, args) => {
+      calls.push({ tool, args });
+      return { success: true, browser: args.browser, url: args.url };
+    },
+  };
+  repl.chat = async () => {
+    throw new Error('chat should not run for direct browser launch intent');
+  };
+
+  await repl.processInputTask('mở chrome đi');
+
+  assert.deepEqual(calls, [{ tool: 'OpenBrowser', args: { browser: 'chrome', url: 'about:blank' } }]);
+  assert.equal(history[0].role, 'user');
+  assert.match(history[1].content, /Đã mở Chrome/);
+});
+
+test('processInputTask opens browser shortcuts and Google searches directly', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  const calls = [];
+  repl.readlineClosed = true;
+  repl.showSmartTip = () => {};
+  repl.showInputPrompt = () => {};
+  repl.session = {
+    addToHistory: async () => {},
+  };
+  repl.tools = {
+    execute: async (tool, args) => {
+      calls.push({ tool, args });
+      return { success: true, browser: args.browser, url: args.url };
+    },
+  };
+  repl.chat = async () => {
+    throw new Error('chat should not run for direct browser shortcuts');
+  };
+
+  await repl.processInputTask('tìm nhạc trên chrome đi');
+  await repl.processInputTask('mở YouTube Music');
+
+  assert.equal(calls[0].tool, 'OpenBrowser');
+  assert.equal(calls[0].args.browser, 'chrome');
+  assert.match(calls[0].args.url, /^https:\/\/www\.google\.com\/search\?/);
+  assert.match(decodeURIComponent(calls[0].args.url), /nhạc/);
+  assert.deepEqual(calls[1], {
+    tool: 'OpenBrowser',
+    args: { browser: 'chrome', url: 'https://music.youtube.com' },
+  });
+});
+
 test('recent work ledger records tool evidence for the next turn', async () => {
   const repl = new WinterREPL({ projectPath: process.cwd() });
   let memoryWrite = null;
@@ -673,6 +741,7 @@ test('getAgentTools scopes tool access by agent role', () => {
   assert(debugTools.includes('Write'));
   assert(debugTools.includes('Bash'));
   assert(debugTools.includes('BrowserDebug'));
+  assert(debugTools.includes('MCP'));
 });
 
 test('parseDataUrlImage supports direct pasted image payloads', () => {
@@ -708,9 +777,25 @@ test('general chat tools stay focused for weaker models', () => {
 
   assert(toolNames.includes('Read'));
   assert(toolNames.includes('Edit'));
+  assert(toolNames.includes('OpenBrowser'));
   assert(toolNames.includes('BrowserDebug'));
+  assert(toolNames.includes('MCP'));
   assert(toolNames.includes('Agent'));
-  assert(!toolNames.includes('MCP'));
+});
+
+test('browser interaction requests require tools and block fake browser claims', () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+
+  assert.equal(repl.actionRequiresTools([{ role: 'user', content: 'Vào xem luôn không cần Đăng ký' }]), true);
+  assert.equal(repl.actionRequiresTools([{ role: 'user', content: 'tự fill form rồi xem dữ liệu từng trang đi' }]), true);
+  assert.equal(repl.detectFakeCompletion('Đã bấm “Vào xem luôn không cần Đăng ký”.'), true);
+  assert.match(repl.buildToolRoutingHint('tự fill form rồi xem dữ liệu từng trang đi'), /live browser interaction/);
+
+  const correction = repl.buildToolEvidenceCorrection([
+    { role: 'user', content: 'tự fill form rồi xem dữ liệu từng trang đi' },
+  ]);
+  assert.match(correction, /chrome-devtools/);
+  assert.match(correction, /WebFetch cannot click/);
 });
 
 test('getProjectContext skips local resource catalog unless task asks for it', async () => {

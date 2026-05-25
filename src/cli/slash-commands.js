@@ -41,7 +41,7 @@ export const SLASH_COMMANDS = [
   { cmd: '/skill', desc: 'Skills management', sub: ['list', 'enable', 'create'] },
   { cmd: '/skills', desc: 'List local Winter/Codex/Claude skills' },
   { cmd: '/plugin', desc: 'Plugin management', sub: ['list', 'install', 'remove'] },
-  { cmd: '/mcp', desc: 'MCP server management', sub: ['list', 'add', 'remove', 'allow'] },
+  { cmd: '/mcp', desc: 'MCP server management', sub: ['list', 'add', 'preset', 'install', 'remove', 'allow', 'tools'] },
   { cmd: '/permissions', desc: 'Permission allowlist', sub: ['list', 'allow', 'prompt'] },
   { cmd: '/stats', desc: 'Tool usage statistics' },
   { cmd: '/replay', desc: 'Replay recent session/tool events', usage: '/replay [count]' },

@@ -25,6 +25,8 @@ export class MCPClient {
     const args = Array.isArray(this.serverConfig.args) ? this.serverConfig.args : [];
     this.process = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: this.serverConfig.cwd || undefined,
+      env: { ...process.env, ...(this.serverConfig.env || {}) },
       shell: false,
       windowsHide: true,
     });

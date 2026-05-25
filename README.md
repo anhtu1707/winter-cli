@@ -162,6 +162,25 @@ Winter reads config from the user profile directory. Typical settings include:
 - MCP servers
 - sandbox / allowlist options
 
+### Chrome DevTools MCP
+
+Winter has a built-in preset for ChromeDevTools/chrome-devtools-mcp:
+
+```bash
+winter mcp preset chrome-devtools --isolated
+winter mcp tools chrome-devtools
+```
+
+In the REPL, use the same flow with slash commands:
+
+```text
+/mcp preset chrome-devtools --isolated
+/mcp tools chrome-devtools
+```
+
+The preset registers the `chrome-devtools` MCP server, allowlists it, and gives Winter runtime hints to use its page navigation, click, fill, snapshot, screenshot, console, network, and performance tools for live browser debugging. Omit `--headless` when you want to watch Winter operate Chrome in a normal visible window.
+It requires Node.js 22.12+ and a current Chrome installation, matching the upstream MCP package requirements.
+
 ### Minimal example
 
 ```json

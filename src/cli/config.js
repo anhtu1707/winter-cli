@@ -7,6 +7,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { homedir } from 'os';
 import { loadEnvFile, stripInlineSecrets } from './secret-env.js';
+import { CHROME_DEVTOOLS_MCP_NAME, createChromeDevtoolsMcpServer } from '../mcp/presets.js';
 
 export class ConfigLoader {
   constructor() {
@@ -61,13 +62,13 @@ export class ConfigLoader {
       permissions: {
         promptByDefault: true,
         allowlist: {
-          tools: ['Read', 'Glob', 'Grep', 'LSP', 'TaskCreate', 'TaskUpdate', 'TaskList', 'WebFetch', 'WebSearch', 'Parallel'],
+          tools: ['Read', 'Glob', 'Grep', 'LSP', 'TaskCreate', 'TaskUpdate', 'TaskList', 'WebFetch', 'WebSearch', 'Parallel', 'MCP'],
           commands: [],
-          mcpServers: [],
+          mcpServers: [CHROME_DEVTOOLS_MCP_NAME],
         },
       },
       mcp: {
-        servers: [],
+        servers: [createChromeDevtoolsMcpServer(['--isolated'])],
       },
       routing: {
         strategy: 'heuristic',

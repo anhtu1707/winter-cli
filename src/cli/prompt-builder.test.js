@@ -225,3 +225,33 @@ test.skip('PromptBuilder system prompt stays compact for small model context', (
   assert(result.includes('## Tool Usage'));
   assert(result.includes('## Project Context'));
 });
+
+test('PromptBuilder tells models to prefer chrome-devtools MCP for live browser debugging', () => {
+  const builder = new PromptBuilder({
+    session: createMockSession(),
+    projectPath: '/test',
+    compactText: (text, maxChars) => String(text).slice(0, maxChars),
+    summarizePrompts: () => '',
+  });
+  const result = builder.buildSystemPrompt('');
+
+  assert.match(result, /chrome-devtools/);
+  assert.match(result, /take_snapshot/);
+  assert.match(result, /list_network_requests/);
+  assert.match(result, /WebFetch is not enough/);
+  assert.match(result, /MCP/);
+});
+
+test('PromptBuilder tells models to use OpenBrowser for visible Chrome launch', () => {
+  const builder = new PromptBuilder({
+    session: createMockSession(),
+    projectPath: '/test',
+    compactText: (text, maxChars) => String(text).slice(0, maxChars),
+    summarizePrompts: () => '',
+  });
+  const result = builder.buildSystemPrompt('');
+
+  assert.match(result, /OpenBrowser/);
+  assert.match(result, /Start-Process/);
+  assert.match(result, /mở chrome/);
+});

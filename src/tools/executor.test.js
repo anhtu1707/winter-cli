@@ -14,6 +14,25 @@ test('Bash validates missing command instead of throwing', async () => {
   assert.equal(result.error, 'command is required');
 });
 
+test('browser launch requests use OpenBrowser instead of shell launch commands', async () => {
+  const tools = new ToolExecutor({ projectPath: process.cwd() });
+
+  const blocked = await tools.execute('Bash', { command: 'Start-Process chrome' });
+  assert.equal(blocked.success, false);
+  assert.match(blocked.error, /OpenBrowser/);
+  assert.match(blocked.recovery, /"browser":"chrome"/);
+
+  const launch = tools.buildBrowserLaunchCommand('about:blank', 'chrome', 'win32');
+  assert.deepEqual(launch, {
+    command: 'cmd',
+    args: ['/c', 'start', '', 'chrome', 'about:blank'],
+  });
+
+  const definition = tools.getToolDefinitions().find(tool => tool.name === 'OpenBrowser');
+  assert.ok(definition);
+  assert.match(definition.description, /mở chrome/);
+});
+
 test('Bash rejects npm run scripts that are not defined in package.json', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'winter-missing-script-'));
   await writeFile(path.join(root, 'package.json'), JSON.stringify({
