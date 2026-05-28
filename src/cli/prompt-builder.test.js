@@ -54,6 +54,11 @@ test('PromptBuilder buildSystemPrompt includes core principles', () => {
   assert(result.includes('Debug Excellence'));
   assert(result.includes('Design Excellence'));
   assert(result.includes('Image Inputs'));
+  assert(result.includes('Coding Mastery Contract'));
+  assert(result.includes('entrypoint, caller, callee'));
+  assert(result.includes('review the diff'));
+  assert(result.includes('Hermes Core Agent Contract'));
+  assert(result.includes('self-improving skills'));
   assert(result.includes('Vietnamese'));
   assert(result.includes('Do not claim completion without a tool result'));
 });
@@ -148,6 +153,10 @@ test('PromptBuilder buildAgentSystemPrompt includes CRITICAL AI RULES', () => {
   assert(result.includes('CODE QUALITY'));
   assert(result.includes('AGENT LOOP'));
   assert(result.includes('IMAGE INPUTS'));
+  assert(result.includes('Coding Mastery Contract'));
+  assert(result.includes('preserve invariants'));
+  assert(result.includes('Hermes Core Agent Contract'));
+  assert(result.includes('Tool gateway discipline'));
 });
 
 test('PromptBuilder buildAgentSystemPrompt includes project context', () => {
@@ -191,6 +200,7 @@ test('PromptBuilder buildSystemPrompt includes memories and plans', () => {
 test('PromptBuilder includes required local resource rules in all prompt modes', () => {
   const session = createMockSession([], [], {
     requiredLocalResources: '[Required Local Resource Rules]\n- karpathy-tools\n- awesome-design-md\n- agents.md',
+    resourceApplicationProfile: '[Auto-loaded Resource Application Profile]\n- hermes-agent-core\n- gsap-skills\n- page-agent\n- codex\n- claude',
   });
   const builder = new PromptBuilder({
     session,
@@ -206,12 +216,17 @@ test('PromptBuilder includes required local resource rules in all prompt modes',
   assert(system.includes('Required Local Resource Rules'));
   assert(system.includes('override generic behavior'));
   assert(system.includes('karpathy-tools'));
+  assert(system.includes('Auto-loaded Resource Application Profile'));
+  assert(system.includes('hermes-agent-core'));
+  assert(system.includes('page-agent'));
   assert(fast.includes('Required Local Resource Rules'));
+  assert(fast.includes('Resource profile tu dong nap'));
   assert(agent.includes('REQUIRED LOCAL RESOURCES'));
   assert(agent.includes('awesome-design-md'));
+  assert(agent.includes('gsap-skills'));
 });
 
-test.skip('PromptBuilder system prompt stays compact for small model context', () => {
+test('PromptBuilder system prompt stays compact for small model context', () => {
   const builder = new PromptBuilder({
     session: createMockSession(),
     projectPath: '/test',
@@ -220,10 +235,11 @@ test.skip('PromptBuilder system prompt stays compact for small model context', (
   });
   const result = builder.buildSystemPrompt('x'.repeat(20000), { projectContextBudget: 1200 });
 
-  assert(result.length > 14000);
+  assert(result.length < 14000);
   assert(result.includes('## Core Principles'));
-  assert(result.includes('## Tool Usage'));
   assert(result.includes('## Project Context'));
+  assert(result.includes('Coding Mastery Contract'));
+  assert(result.includes('Hermes Core Agent Contract'));
 });
 
 test('PromptBuilder tells models to prefer chrome-devtools MCP for live browser debugging', () => {
@@ -239,6 +255,7 @@ test('PromptBuilder tells models to prefer chrome-devtools MCP for live browser 
   assert.match(result, /take_snapshot/);
   assert.match(result, /list_network_requests/);
   assert.match(result, /WebFetch is not enough/);
+  assert.match(result, /VisibleBrowser/);
   assert.match(result, /MCP/);
 });
 

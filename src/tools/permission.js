@@ -15,6 +15,7 @@ export class PermissionManager {
 
     return {
       promptByDefault: permissions.promptByDefault !== false,
+      fullAccess: cfg.sandbox?.enabled === false,
       allowedTools: new Set([...(allowlist.tools || []), ...DEFAULT_ALLOWED]),
       allowedCommands: new Set(allowlist.commands || []),
       allowedServers: new Set(allowlist.mcpServers || []),
@@ -23,6 +24,7 @@ export class PermissionManager {
 
   async isAllowedTool(toolName) {
     const policy = await this.getPolicy();
+    if (policy.fullAccess) return true;
     return policy.allowedTools.has(toolName);
   }
 
@@ -40,6 +42,7 @@ export class PermissionManager {
   async isMcpServerAllowed(serverName) {
     if (!serverName) return false;
     const policy = await this.getPolicy();
+    if (policy.fullAccess) return true;
     return policy.allowedServers.has(serverName);
   }
 

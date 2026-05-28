@@ -18,11 +18,51 @@ const TIER_ORDER = [MODEL_TIERS.TINY, MODEL_TIERS.SMALL, MODEL_TIERS.MEDIUM, MOD
 
 /**
  * Classify a model name into a capability tier.
- * Winter now treats every active model as flagship.
+ * Winter still pushes maximum reasoning for every model, but the real tier matters
+ * for prompt size, tool-result budgets, and small-model guardrails.
  * @returns {string} One of MODEL_TIERS
  */
 export function classifyModelTier(modelName, provider = '') {
-  return MODEL_TIERS.FLAGSHIP;
+  const raw = `${provider || ''} ${modelName || ''}`.toLowerCase();
+  if (!raw.trim()) return MODEL_TIERS.MEDIUM;
+
+  if (/\b(tiny|nano|0\.5b|1b|1\.5b|2b|2\.7b)\b/.test(raw)) {
+    return MODEL_TIERS.TINY;
+  }
+
+  const paramMatch = raw.match(/(?:^|[^0-9])(\d+(?:\.\d+)?)\s*b(?:[^a-z]|$)/);
+  if (paramMatch) {
+    const params = Number(paramMatch[1]);
+    if (Number.isFinite(params)) {
+      if (params < 3) return MODEL_TIERS.TINY;
+      if (params < 15) return MODEL_TIERS.SMALL;
+      if (params < 40) return MODEL_TIERS.MEDIUM;
+      if (params < 120) return MODEL_TIERS.LARGE;
+      return MODEL_TIERS.FLAGSHIP;
+    }
+  }
+
+  if (/\b(mini|small|lite|light|fast|flash|haiku|3b|7b|8b|9b|13b|14b)\b/.test(raw)) {
+    return MODEL_TIERS.SMALL;
+  }
+
+  if (/\b(sonnet|opus|gpt-5|gpt-4\.1|gpt-4o|o3|o4|gemini-2\.5-pro|minimax-m2|m2\.5|deepseek-r1|kimi-k2)\b/.test(raw)) {
+    return MODEL_TIERS.FLAGSHIP;
+  }
+
+  if (/\b(70b|72b|90b|large|pro|command-r|llama3\.1|llama-3\.1)\b/.test(raw)) {
+    return MODEL_TIERS.LARGE;
+  }
+
+  if (/\b(32b|34b|medium|codestral|qwen2\.5-coder)\b/.test(raw)) {
+    return MODEL_TIERS.MEDIUM;
+  }
+
+  if (/\b(ollama|lmstudio|local|llama|qwen|mistral|gemma|phi|yi-coder|deepseek-coder)\b/.test(raw)) {
+    return MODEL_TIERS.SMALL;
+  }
+
+  return MODEL_TIERS.MEDIUM;
 }
 
 /**

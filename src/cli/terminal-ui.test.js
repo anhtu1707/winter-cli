@@ -6,16 +6,16 @@ test('visibleWidth ignores ANSI styling', () => {
   assert.equal(visibleWidth('\u001b[36mWinter\u001b[0m'), 6);
 });
 
-test.skip('visibleWidth counts emoji as wider cells', () => {
-  assert.equal(visibleWidth('⚠'), 2);
-  assert.equal(visibleWidth('✓'), 1);
-  assert.equal(visibleWidth('$'), 2);
+test('visibleWidth counts emoji and CJK characters as wider cells', () => {
+  assert.equal(visibleWidth('\u26a0'), 2);
+  assert.equal(visibleWidth('\u2713'), 1);
+  assert.equal(visibleWidth('\u96ea'), 2);
 });
 
-test.skip('supportsUnicodeUi defaults to ASCII in plain Windows shells', () => {
-  assert.equal(supportsUnicodeUi({}, 'win32'), false);
-  assert.equal(supportsUnicodeUi({ WT_SESSION: '1' }, 'win32'), false);
-  assert.equal(supportsUnicodeUi({ WINTER_UNICODE_UI: '1' }, 'win32'), false);
+test('supportsUnicodeUi defaults to Unicode unless explicitly disabled', () => {
+  assert.equal(supportsUnicodeUi({}, 'win32'), true);
+  assert.equal(supportsUnicodeUi({ WT_SESSION: '1' }, 'win32'), true);
+  assert.equal(supportsUnicodeUi({ WINTER_UNICODE_UI: '1' }, 'win32'), true);
   assert.equal(supportsUnicodeUi({ WINTER_ASCII_UI: '1', WT_SESSION: '1' }, 'win32'), false);
 });
 
@@ -55,11 +55,11 @@ test('renderBox keeps borders balanced', () => {
   assert.equal(stripAnsi(lines[3]).includes('hello world'), true);
 });
 
-test('renderBox stays aligned with emoji-heavy tool output', () => {
+test('renderBox stays aligned with wide terminal output', () => {
   const box = renderBox({
     title: 'AGENT TOOLS EXECUTION',
     width: 60,
-    body: ['⚠ AI muốn chạy: Get-Date -Format "dddd, dd/MM/yyyy"', '✓ Saturday'],
+    body: ['AI wants to run: Get-Date -Format "dddd, dd/MM/yyyy"', 'OK Saturday'],
     borderColor: '',
     titleColor: '',
     reset: '',

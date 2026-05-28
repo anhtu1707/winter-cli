@@ -427,6 +427,7 @@ export class WinterREPL {
     const shouldDrop = (entry) => {
       const text = typeof entry === 'string' ? entry : entry?.text || '';
       return text.startsWith('[Required local resources]')
+        || text.startsWith('[Auto-loaded resource application profile]')
         || text.startsWith('[Auto-applied skills]')
         || text.startsWith('[Project rule file')
         || text.startsWith('[Startup local resource index]')
@@ -442,7 +443,11 @@ export class WinterREPL {
       `awesome-design-md: ${resourcePaths.designs}`,
       `karpathy-tools: ${resourcePaths.karpathy}`,
       `page-agent: ${resourcePaths.pageAgent}`,
+      `hermes-agent-core: ${resourcePaths.hermesAgentCore}`,
+      `gsap-skills: ${resourcePaths.gsapSkills}`,
       `ecc: ${resourcePaths.ecc}`,
+      `codex: ${resourcePaths.codex.root}`,
+      `claude: ${resourcePaths.claude.root}`,
     ];
     await this.session.replaceMemory(
       '[Startup local resource index]',
@@ -671,8 +676,8 @@ export class WinterREPL {
       }
     }
 
-    await this.bootstrapProjectCapabilities();
     await this.compactStartupMemories({ projectInstructionFiles, autoCreateDocs });
+    await this.bootstrapProjectCapabilities();
 
     // Codebase Index is intentionally lazy/on-demand. Top-tier coding agents do
     // not make first-run chat pay for a repo-wide scan, and this also prevents
@@ -718,6 +723,7 @@ export class WinterREPL {
     this._pasteTimer = null;
     this._isPasteChunk = false;
     this._pasteChunkTimer = null;
+    this._pasteCounter = 0;
     const PASTE_DELAY = 80;
 
     process.stdin.on('data', (chunk) => {
@@ -736,7 +742,7 @@ export class WinterREPL {
       }
     });
 
-    const flushPasteBuffer = () => {
+    const flushPasteBuffer = async () => {
       this._pasteTimer = null;
       if (this._pasteBuffer.length === 0) return;
 
@@ -772,6 +778,19 @@ export class WinterREPL {
       this._multilineBuffer.push(...this._pasteBuffer);
       this._pasteBuffer = [];
 
+      if (this.shouldAutoPersistBufferedPaste(this._multilineBuffer, { isPasteChunk: this._isPasteChunk })) {
+        const pastedText = this._multilineBuffer.join('\n').trimEnd();
+        if (this.shouldPersistPastedText(pastedText)) {
+          const paste = await this.persistPastedText(pastedText);
+          this._multilineBuffer = [];
+          this._isPasteChunk = false;
+          const reference = this.formatPastedTextReference(paste);
+          console.log(`${colors.cyan}│ ${colors.dim}${reference}${colors.reset}`);
+          this.submitInputQueue(reference);
+          return;
+        }
+      }
+
       // If they pressed Enter on an empty line, submit the multiline buffer!
       if (isJustEmptyEnter && this._multilineBuffer.length > 1) {
         // Remove the trailing empty line
@@ -788,6 +807,14 @@ export class WinterREPL {
           return;
         }
         
+        if (this.shouldPersistPastedText(combined)) {
+          const paste = await this.persistPastedText(combined);
+          const reference = this.formatPastedTextReference(paste);
+          console.log(`${colors.cyan}│ ${colors.dim}${reference}${colors.reset}`);
+          this.submitInputQueue(reference);
+          return;
+        }
+
         this.submitInputQueue(combined);
         return;
       }
@@ -816,7 +843,14 @@ export class WinterREPL {
     this.rl.on('line', (line) => {
       this._pasteBuffer.push(line);
       if (this._pasteTimer) clearTimeout(this._pasteTimer);
-      this._pasteTimer = setTimeout(flushPasteBuffer, PASTE_DELAY);
+      this._pasteTimer = setTimeout(() => {
+        void flushPasteBuffer().catch((error) => {
+          this._pasteBuffer = [];
+          this._multilineBuffer = [];
+          console.log(`\n${colors.red}? Paste error: ${error.message}${colors.reset}\n`);
+          if (this.running && !this.readlineClosed) this.showInputPrompt();
+        });
+      }, PASTE_DELAY);
     });
 
     this.rl.on('close', async () => {
@@ -861,6 +895,55 @@ export class WinterREPL {
 
   handleDirectClipboardPaste() {
     return this.inputController.handleDirectClipboardPaste();
+  }
+
+  getPasteStorageDir() {
+    return path.join(this.config?.winterDir || path.join(homedir(), '.winter'), 'pastes');
+  }
+
+  normalizePastedText(text = '') {
+    return String(text || '')
+      .replace(/\x1b\[200~/g, '')
+      .replace(/\x1b\[201~/g, '')
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n');
+  }
+
+  getPastedTextLineCount(text = '') {
+    const value = this.normalizePastedText(text);
+    if (!value) return 0;
+    return value.split(/\r\n|\r|\n/).length;
+  }
+
+  shouldPersistPastedText(text = '', { minLines = 8, minChars = 4000 } = {}) {
+    const value = this.normalizePastedText(text);
+    return this.getPastedTextLineCount(value) >= minLines || value.length >= minChars;
+  }
+
+  shouldAutoPersistBufferedPaste(buffer = [], { isPasteChunk = false } = {}) {
+    if (!Array.isArray(buffer) || buffer.length === 0) return false;
+    const manualMultiline = buffer[0] === '';
+    const text = this.normalizePastedText(buffer.join('\n')).trimEnd();
+    return Boolean(text) && this.shouldPersistPastedText(text) && (isPasteChunk || !manualMultiline);
+  }
+
+  async persistPastedText(text = '') {
+    const content = this.normalizePastedText(text);
+    const dir = this.getPasteStorageDir();
+    await fs.mkdir(dir, { recursive: true });
+    this._pasteCounter = Number(this._pasteCounter || 0) + 1;
+    const filePath = path.join(dir, `paste_${this._pasteCounter}_${Date.now()}.txt`);
+    await fs.writeFile(filePath, content, 'utf8');
+    return {
+      index: this._pasteCounter,
+      path: filePath,
+      lines: this.getPastedTextLineCount(content),
+      chars: content.length,
+    };
+  }
+
+  formatPastedTextReference(paste = {}) {
+    return `[Pasted text #${paste.index || 1}: ${paste.lines || 0} lines -> ${paste.path}]`;
   }
 
   buildInputPanel() {
@@ -1744,14 +1827,14 @@ ${colors.reset}
       case 'review':
         return byName(['Read', 'Grep', 'Glob', 'Bash', 'WebFetch']);
       case 'debug':
-        return byName(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'OpenBrowser', 'BrowserDebug', 'WebFetch', 'MCP', 'Parallel']);
+        return byName(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'OpenBrowser', 'VisibleBrowser', 'BrowserDebug', 'WebFetch', 'MCP', 'Parallel']);
       case 'research':
         return byName(['Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch', 'Parallel']);
       case 'design':
       case 'ui':
-        return byName(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'OpenBrowser', 'BrowserDebug', 'WebFetch', 'MCP']);
+        return byName(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'OpenBrowser', 'VisibleBrowser', 'BrowserDebug', 'WebFetch', 'MCP']);
       default:
-        return byName(['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'OpenBrowser', 'BrowserDebug', 'WebFetch', 'WebSearch', 'MCP', 'Parallel', 'Agent']);
+        return byName(['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'OpenBrowser', 'VisibleBrowser', 'BrowserDebug', 'WebFetch', 'WebSearch', 'MCP', 'Parallel', 'Agent', 'DelegateTask', 'ParallelAgent']);
     }
   }
 
@@ -1944,7 +2027,7 @@ ${colors.reset}
         'For browser interaction tasks you MUST use tools, not prose:',
         '1. If chrome-devtools MCP is configured, call MCP {"server":"chrome-devtools","tool":"list"} first if needed.',
         '2. Use chrome-devtools MCP tools such as new_page/navigate_page, take_snapshot, click, fill/fill_form, evaluate_script, list_network_requests, and take_screenshot in visible Chrome.',
-        '3. Use WebFetch only for static text extraction. WebFetch cannot click buttons, fill forms, or preserve page state. BrowserDebug is headless and should be fallback only.',
+        '3. Use WebFetch only for static text extraction. WebFetch cannot click buttons, fill forms, or preserve page state. Use VisibleBrowser when MCP is unavailable and the user needs visible browser control. BrowserDebug is headless and should be fallback only.',
         '4. Do not say "đã bấm", "đã điền", "đã mở", or "đã kiểm tra" until a browser/MCP tool result proves it.',
         '',
         `Original user request: ${request}`,
@@ -1962,7 +2045,7 @@ ${colors.reset}
       'DO NOT say "I have updated/created/fixed" without a tool call proving it.',
       'DO NOT describe what you would do. Actually DO IT with tool calls.',
       '',
-      'Available tools: Read, Write, Edit, Bash, Glob, Grep, OpenBrowser, BrowserDebug, WebFetch, WebSearch, MCP.',
+      'Available tools: Read, Write, Edit, Bash, Glob, Grep, OpenBrowser, VisibleBrowser, BrowserDebug, WebFetch, WebSearch, MCP.',
       '',
       'If native tool calls are not supported, output exactly one fallback tool call:',
       '<invoke name="Read"><parameter name="path">README.md</parameter></invoke>',
@@ -1985,7 +2068,7 @@ ${colors.reset}
     const hints = [];
 
     if (/\b(click|fill|submit|press|select|navigate|bam|dien|chon|nhan|vao|bấm|điền|chọn|nhấn|vào)\b/i.test(text) && /\b(web|website|page|url|http|chrome|browser|form|button|link|trang|nut|nút|dang ky|dang nhap|khach hang|đăng ký|đăng nhập|khách hàng)\b/i.test(text)) {
-      hints.push('TOOL HINT: This is a live browser interaction. Do NOT use WebFetch alone. Prefer visible Chrome via MCP {"server":"chrome-devtools","tool":"list"} then chrome-devtools tools new_page/navigate_page, take_snapshot, click, fill/fill_form, evaluate_script, list_network_requests, and take_screenshot. Only use BrowserDebug as headless fallback. Only claim click/fill/navigation after MCP or BrowserDebug evidence.');
+      hints.push('TOOL HINT: This is a live browser interaction. Do NOT use WebFetch alone. Prefer visible Chrome via MCP {"server":"chrome-devtools","tool":"list"} then chrome-devtools tools new_page/navigate_page, take_snapshot, click, fill/fill_form, evaluate_script, list_network_requests, and take_screenshot. If MCP is unavailable, call VisibleBrowser for real visible Puppeteer control. Only use BrowserDebug as headless fallback. Only claim click/fill/navigation after MCP, VisibleBrowser, or BrowserDebug evidence.');
     }
 
     // Detect file reading requests
@@ -2108,6 +2191,9 @@ ${colors.reset}
       if ((options?.requireToolEvidence && this.responseNeedsToolEvidence(assistantMsg.content)) || isFakeCompletion) {
         return { assistantMsg, toolCalls, finalContent: '', finishReason: 'tool_evidence_required' };
       }
+      if (options?.deferFinalContent) {
+        return { assistantMsg, toolCalls, finalContent: assistantMsg.content, finishReason };
+      }
       this.printAssistantAnswer(assistantMsg.content, startedAt, totalUsage);
       return { assistantMsg, toolCalls, finalContent: assistantMsg.content, finishReason };
     }
@@ -2122,7 +2208,7 @@ ${colors.reset}
     const toolCallParts = [];
     let finishReason = null;
     let printed = false;
-    const bufferToolModeContent = options?.enableTools === true;
+    const bufferToolModeContent = false;
 
     for await (const chunk of this.ai.streamRequest(messages, options)) {
       if (chunk.usage) this.addUsage(totalUsage, chunk.usage);
@@ -2239,6 +2325,14 @@ ${colors.reset}
           finishReason: 'tool_evidence_required',
         };
       }
+      if (options?.deferFinalContent) {
+        return {
+          assistantMsg: { content: visibleContent },
+          toolCalls,
+          finalContent: visibleContent,
+          finishReason,
+        };
+      }
       this.printAssistantAnswer(visibleContent, startedAt, totalUsage);
       return {
         assistantMsg: { content: visibleContent },
@@ -2275,7 +2369,7 @@ ${colors.reset}
           '/provider', '/model', '/models', '/providers',
           '/theme:toggle', '/tui',
           '/auto', '/debug', '/doctor', '/context', '/scorecard', '/swe',
-          '/read', '/write', '/glob', '/grep', '/bash',
+          '/read', '/write', '/glob', '/grep', '/bash', '/browser', '/paste',
         '/codex', '/claude', '/karpathy', '/agents',
         '/resources', '/designs', '/skills',
         '/ecc',
@@ -2374,7 +2468,7 @@ ${colors.reset}
     const executionProfile = this.selectExecutionProfile(messages, { enableTools: false });
     const latestUserText = this.getLatestUserText(messages);
     const browserInteraction = this.isBrowserInteractionRequest(latestUserText);
-    const hasBrowserEvidence = toolSummaries.some(summary => /^(MCP|BrowserDebug|OpenBrowser):/i.test(summary));
+    const hasBrowserEvidence = toolSummaries.some(summary => /^(MCP|VisibleBrowser|BrowserDebug|OpenBrowser):/i.test(summary));
     const finalMessages = [
       ...messages,
       {
@@ -2387,7 +2481,7 @@ ${colors.reset}
           'Start with the actual outcome, then mention only the most relevant files/commands. Avoid broad generic advice.',
           'If a tool failed, explain the concrete failure briefly and answer with the available evidence.',
           'Do not repeat the plan. Do not re-summarize unrelated project context. Do not claim memory/tool state that is not visible in the transcript.',
-          browserInteraction && !hasBrowserEvidence ? 'Important: The user asked for browser interaction, but no MCP/BrowserDebug/OpenBrowser result is available. You must say the browser action was NOT performed; do not claim you clicked, filled, navigated, or inspected pages.' : '',
+          browserInteraction && !hasBrowserEvidence ? 'Important: The user asked for browser interaction, but no MCP/VisibleBrowser/BrowserDebug/OpenBrowser result is available. You must say the browser action was NOT performed; do not claim you clicked, filled, navigated, or inspected pages.' : '',
           toolSummaries.length ? `Tool summary:\n${toolSummaries.join('\n')}` : '',
         ].filter(Boolean).join('\n'),
       },
@@ -2412,7 +2506,7 @@ ${colors.reset}
       this.addUsage(totalUsage, response.usage);
       let content = response.choices?.[0]?.message?.content || '';
       if (browserInteraction && !hasBrowserEvidence && this.detectFakeCompletion(content)) {
-        content = 'Chưa thực hiện được thao tác trên trình duyệt: lượt này không có bằng chứng từ MCP/BrowserDebug/OpenBrowser, nên Winter chặn câu trả lời để tránh báo sai. Hãy bật chrome-devtools MCP hoặc dùng lại yêu cầu để Winter gọi đúng browser tool.';
+        content = 'Chưa thực hiện được thao tác trên trình duyệt: lượt này không có bằng chứng từ MCP/VisibleBrowser/BrowserDebug/OpenBrowser, nên Winter chặn câu trả lời để tránh báo sai. Hãy bật chrome-devtools MCP hoặc dùng VisibleBrowser để Winter gọi đúng browser tool.';
       }
       
       if (this.spinner) this.spinner.stop();
@@ -2457,7 +2551,7 @@ ${colors.reset}
       if (this.spinner) this.spinner.stop();
 
       if (validation.browserInteraction && !validation.hasBrowserEvidence && this.detectFakeCompletion(content)) {
-        content = 'Chưa thực hiện được thao tác trên trình duyệt: lượt này không có bằng chứng từ MCP/BrowserDebug/OpenBrowser, nên Winter chặn câu trả lời để tránh báo sai. Hãy bật chrome-devtools MCP hoặc dùng lại yêu cầu để Winter gọi đúng browser tool.';
+        content = 'Chưa thực hiện được thao tác trên trình duyệt: lượt này không có bằng chứng từ MCP/VisibleBrowser/BrowserDebug/OpenBrowser, nên Winter chặn câu trả lời để tránh báo sai. Hãy bật chrome-devtools MCP hoặc dùng VisibleBrowser để Winter gọi đúng browser tool.';
       }
 
       if (content) {
@@ -2481,7 +2575,7 @@ ${colors.reset}
     this.addUsage(totalUsage, response.usage);
     content = response.choices?.[0]?.message?.content || '';
     if (validation.browserInteraction && !validation.hasBrowserEvidence && this.detectFakeCompletion(content)) {
-      content = 'Chưa thực hiện được thao tác trên trình duyệt: lượt này không có bằng chứng từ MCP/BrowserDebug/OpenBrowser, nên Winter chặn câu trả lời để tránh báo sai. Hãy bật chrome-devtools MCP hoặc dùng lại yêu cầu để Winter gọi đúng browser tool.';
+      content = 'Chưa thực hiện được thao tác trên trình duyệt: lượt này không có bằng chứng từ MCP/VisibleBrowser/BrowserDebug/OpenBrowser, nên Winter chặn câu trả lời để tránh báo sai. Hãy bật chrome-devtools MCP hoặc dùng VisibleBrowser để Winter gọi đúng browser tool.';
     }
     if (content) {
       this.printAssistantAnswer(content, startedAt, totalUsage);
@@ -2889,7 +2983,7 @@ ${colors.reset}
         messages.push({ role: 'system', content: toolHint });
       }
 
-      const { finalContent, usedMutatingTools } = await this.runConversation(messages, 'Thinking', tools);
+      const { finalContent, usedMutatingTools, autoVerified } = await this.runConversation(messages, 'Thinking', tools);
 
       const allToolCalls = [];
       for (const msg of messages) {
@@ -2914,7 +3008,7 @@ ${colors.reset}
       });
 
       // Tự động verify: nếu AI đã dùng tools (sửa code), chạy test/build.
-      if (finalContent && this.shouldAutoVerifyAfterTools(message, usedMutatingTools)) {
+      if (!autoVerified && finalContent && this.shouldAutoVerifyAfterTools(message, usedMutatingTools)) {
         const sessionContext = this.session?.getContext?.() || {};
         const profile = String(sessionContext.workflowProfile || 'general');
         const amplifier = sessionContext.smallModelAmplifier || {};
@@ -2965,7 +3059,7 @@ ${colors.reset}
     ].filter(Boolean).join('\n');
 
     const amplifier = buildSmallModelAmplification({
-      modelTier: this.ai?._modelTier || 'medium',
+      modelTier: this.getActiveModelTier(),
       workflowProfile: workflow.profile,
       depth: workflow.depth,
     });
@@ -3115,35 +3209,10 @@ Do NOT stop until all errors are resolved.`;
   }
 
   async runAgent(role, task) {
-    const agentDefinition = await this.agentRegistry.get(role || 'general');
-    const context = await this.getProjectContext(task);
-    const messages = [
-      { role: 'system', content: this.getAgentDefinitionSystemPrompt(agentDefinition, context) }
-    ];
-
-    const promptHistory = this.getCompressedPromptHistory({
-      limit: 40,
-      keepRecent: 16,
-      maxTotalChars: 16000,
-    });
-    if (promptHistory.summary) {
-      messages.push({ role: 'system', content: `Compressed prior conversation:\n${promptHistory.summary}` });
-    }
-    for (const entry of promptHistory.entries) {
-      messages.push({ role: entry.role, content: entry.content });
-    }
-
-    messages.push({ role: 'user', content: `Task: ${task}` });
-
-    const agentTools = this.getAgentToolsForDefinition(agentDefinition);
-    const { finalContent, usedMutatingTools } = await this.runConversation(messages, `Subagent [${agentDefinition.id}]`, agentTools);
-
-    await this.session.addToHistory({ role: 'user', content: `[subagent:${agentDefinition.id}] ${task}` });
-    await this.session.addToHistory({ role: 'assistant', content: finalContent });
-
-    if (finalContent && this.shouldAutoVerifyAfterTools(task, usedMutatingTools)) {
-      await this.verifyAndHeal(messages, agentTools, 2);
-    }
+    const result = await this.tools.agentTool.run(task, { role: role || 'general' });
+    await this.session.addToHistory({ role: 'user', content: `[subagent:${result.role || role || 'general'}] ${task}` });
+    await this.session.addToHistory({ role: 'assistant', content: result.finalContent || result.summary || result.error || '' });
+    return result;
   }
 
   async listAgentDefinitions() {
@@ -3420,6 +3489,14 @@ Light mode enabled for safety. Heavy codebase, graph, and git context are skippe
       await this.session.replaceMemory('[Required local resources]', requiredLocalResources, 'resource');
     }
 
+    const projectInstructionFiles = await this.readProjectInstructionFiles();
+    const resourceApplicationProfile = await this.contextLoader.getResourceApplicationProfile({ projectInstructionFiles });
+    if (resourceApplicationProfile) {
+      await this.session.updateContext('resourceApplicationProfile', resourceApplicationProfile);
+      await this.session.replaceMemory('[Auto-loaded resource application profile]', resourceApplicationProfile, 'resource');
+      this.startupNotice('resource profile loaded');
+    }
+
     const skillSnapshot = await this.inferStartupSkills();
     await this.session.updateContext('availableSkillCatalog', skillSnapshot.availableSkills);
     await this.session.updateContext('activeSkills', skillSnapshot.activeSkills);
@@ -3431,43 +3508,7 @@ Light mode enabled for safety. Heavy codebase, graph, and git context are skippe
   }
 
   async inferStartupSkills() {
-    const catalog = await this.getStartupSkillCatalog();
-    const signals = await this.getProjectSignals();
-    const normalizedSignals = new Set(signals.map(value => value.toLowerCase()));
-
-    const hasAny = (...items) => items.some(item => normalizedSignals.has(item));
-    const activeSkills = new Set([
-      'coding',
-      'debug',
-      'refactor',
-      'test',
-    ]);
-
-    if (hasAny('react', 'next', 'nextjs', 'tsx', 'jsx', 'vue', 'svelte', 'vite')) {
-      ['vercel-react-best-practices', 'web-design-guidelines', 'frontend-design', 'design'].forEach(skill => activeSkills.add(skill));
-    }
-
-    if (hasAny('design', 'ui', 'ux', 'css', 'tailwind', 'styled-components', 'scss', 'style', 'component')) {
-      ['web-design-guidelines', 'frontend-design', 'design'].forEach(skill => activeSkills.add(skill));
-    }
-
-    if (hasAny('claude', 'agent', 'mcp', 'plugin', 'skill', 'automation', 'workflow')) {
-      ['skill-creator', 'claude-automation-recommender', 'claude-md-improver', 'agent-development', 'hook-development', 'command-development', 'plugin-dev'].forEach(skill => activeSkills.add(skill));
-    }
-
-    if (hasAny('docs', 'markdown', 'md', 'readme', 'documentation')) {
-      ['claude-md-improver', 'docs', 'writing-rules'].forEach(skill => activeSkills.add(skill));
-    }
-
-    if (hasAny('figma', 'design-md', 'brand', 'brand-guidelines', 'style-guide')) {
-      ['vibefigma', 'web-design-guidelines'].forEach(skill => activeSkills.add(skill));
-    }
-
-    const filtered = [...activeSkills].filter(skill => catalog.has(skill));
-    return {
-      availableSkills: [...catalog],
-      activeSkills: filtered,
-    };
+    return this.contextLoader.inferStartupSkills();
   }
 
   async getStartupSkillCatalog() {
@@ -3647,6 +3688,9 @@ Light mode enabled for safety. Heavy codebase, graph, and git context are skippe
       case undefined:
       case 'list':
         console.log(`${colors.cyan}Permission Allowlist:${colors.reset}`);
+        console.log(`  Full access: ${config.sandbox?.enabled === false ? 'on' : 'off'}`);
+        console.log(`  Sandbox enabled: ${config.sandbox?.enabled !== false}`);
+        console.log(`  Restrict workspace: ${config.sandbox?.restrictToWorkspace !== false}`);
         console.log(`  Tools: ${(config.permissions.allowlist.tools || []).join(', ') || 'none'}`);
         console.log(`  Commands: ${(config.permissions.allowlist.commands || []).join(', ') || 'none'}`);
         console.log(`  MCP Servers: ${(config.permissions.allowlist.mcpServers || []).join(', ') || 'none'}`);
@@ -3673,8 +3717,25 @@ Light mode enabled for safety. Heavy codebase, graph, and git context are skippe
         console.log(`${colors.green}✓ Updated prompt policy${colors.reset}`);
         break;
       }
+      case 'full': {
+        const value = String(rest[0] || 'on').toLowerCase();
+        const enabled = !(value === 'off' || value === 'false' || value === '0' || value === 'no');
+        if (typeof this.config.setFullAccess === 'function') {
+          await this.config.setFullAccess(enabled);
+        } else {
+          config.sandbox = {
+            ...(config.sandbox || {}),
+            enabled: !enabled,
+            restrictToWorkspace: !enabled,
+          };
+          config.permissions.promptByDefault = !enabled;
+          await this.config.save(config);
+        }
+        console.log(`${colors.green}Full access ${enabled ? 'enabled' : 'disabled'}${colors.reset}`);
+        break;
+      }
       default:
-        console.log(`${colors.yellow}Usage: /permissions <list|allow|prompt>${colors.reset}`);
+        console.log(`${colors.yellow}Usage: /permissions <list|allow|prompt|full>${colors.reset}`);
     }
   }
 

@@ -13,6 +13,8 @@ test('SkillManager reads packaged skills from the npm package root', async () =>
   assert(packaged.some(skill => skill.name === 'coding'));
   assert(packaged.some(skill => skill.name === 'debug'));
   assert(packaged.some(skill => skill.name === 'test'));
+  assert(packaged.some(skill => skill.name === 'gsap'));
+  assert(packaged.some(skill => skill.name === 'hermes-agent'));
 });
 
 test('SkillManager merges packaged and user skills without duplicating builtin names', async () => {

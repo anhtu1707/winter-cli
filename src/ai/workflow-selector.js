@@ -1,4 +1,5 @@
 import { classifyTask, TASK_CATEGORIES, TASK_TYPES } from './prompts/task-classifier.js';
+import { detectHermesCoreSignals, shouldApplyHermesCore } from './hermes-core.js';
 
 function hasAny(text, keywords) {
   return keywords.some(kw => text.includes(kw));
@@ -20,6 +21,7 @@ function detectTechnology(text, signals) {
     devops: hasAny(text, ['devops', 'ci/cd', 'docker', 'kubernetes', 'helm', 'terraform', 'ansible', 'deployment']) || hasSignal(/(docker|k8s|kubernetes|helm|terraform|github-actions|gitlab-ci)/),
     game: hasAny(text, ['game', 'unity', 'unreal', 'godot', 'multiplayer']) || hasSignal(/(unity|unreal|godot)/),
     ai: hasAny(text, ['ai agent', 'llm', 'rag', 'embedding', 'inference', 'model serving', 'mcp']) || hasSignal(/(langchain|llamaindex|embedding|transformer|onnx|mcp)/),
+    animation: hasAny(text, ['animation', 'animate', 'motion', 'transition', 'timeline', 'scrolltrigger', 'scroll trigger', 'scroll-driven', 'scroll animation', 'parallax', 'draggable', 'flip animation', 'splittext', 'morphsvg', 'greensock', 'gsap']) || hasSignal(/(gsap|greensock|scrolltrigger|framer-motion|motion|animation)/),
   };
 }
 
@@ -33,12 +35,14 @@ function buildTechnologySuggestions(tech) {
   if (tech.devops) suggestions.push('DevOps: Docker + CI/CD + IaC (Terraform), observability/logging');
   if (tech.game) suggestions.push('Game: Unity/Unreal/Godot, profiling, asset pipeline');
   if (tech.ai) suggestions.push('AI: RAG pipeline, vector DB, evals, prompt/version control');
+  if (tech.animation) suggestions.push('Animation: GSAP timelines, ScrollTrigger, framework cleanup, transform/opacity performance');
   return suggestions;
 }
 
 function buildVerificationStrategy(tech, taskInfo) {
   const checks = ['unit tests'];
   if (tech.web || tech.mobile || tech.desktop) checks.push('UI smoke tests');
+  if (tech.animation) checks.push('animation/browser smoke test');
   if (tech.backend) checks.push('API integration tests');
   if (tech.data) checks.push('data quality tests');
   if (tech.devops) checks.push('build + deploy dry-run checks');
@@ -53,6 +57,7 @@ export function selectWorkflow({ taskText = '', projectSignals = [], skillCatalo
 
   const taskInfo = classifyTask(text);
   const tech = detectTechnology(text, signals);
+  const hermesCore = detectHermesCoreSignals({ taskText, projectSignals });
 
   const recommendedSkills = [];
   const recommendedPlugins = [];
@@ -82,6 +87,14 @@ export function selectWorkflow({ taskText = '', projectSignals = [], skillCatalo
     recommendedSkills.push('vercel-react-best-practices');
   }
 
+  if (tech.animation) {
+    recommendedSkills.push('gsap', 'gsap-core', 'gsap-timeline', 'gsap-performance');
+    recommendedResources.push('gsap-skills');
+    if (tech.web) {
+      recommendedSkills.push('gsap-react', 'gsap-scrolltrigger');
+    }
+  }
+
   if (tech.mobile) {
     recommendedSkills.push('debug', 'test', 'performance', 'security');
   }
@@ -102,6 +115,14 @@ export function selectWorkflow({ taskText = '', projectSignals = [], skillCatalo
   if (tech.ai) {
     recommendedSkills.push('coding', 'debug', 'test');
     recommendedResources.push('ecc');
+  }
+
+  if (shouldApplyHermesCore({ taskText, projectSignals })) {
+    recommendedResources.push('hermes-agent-core');
+    recommendedSkills.push('hermes-agent', 'subagent-driven-development', 'systematic-debugging');
+    if (hermesCore.skills) recommendedSkills.push('hermes-agent-skill-authoring');
+    if (hermesCore.mcp) recommendedSkills.push('native-mcp');
+    if (hermesCore.automation) recommendedSkills.push('plan', 'test-driven-development');
   }
 
   // When user mentions browser automation or interacting with websites, point at page-agent
@@ -143,6 +164,7 @@ export function selectWorkflow({ taskText = '', projectSignals = [], skillCatalo
     profile,
     depth,
     detectedTechnologies: tech,
+    hermesCore,
     technologySuggestions: buildTechnologySuggestions(tech),
     verificationStrategy: buildVerificationStrategy(tech, taskInfo),
     recommendedSkills: filteredSkills,
@@ -151,4 +173,3 @@ export function selectWorkflow({ taskText = '', projectSignals = [], skillCatalo
     recommendedResources: uniq(recommendedResources),
   };
 }
-

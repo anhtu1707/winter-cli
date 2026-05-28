@@ -137,6 +137,88 @@ async function handlePageAgentCommand(repl, args = []) {
   console.log(`${colors.dim}Commands: /page-agent search <query>, /page-agent read <path>, /page-agent docs, /page-agent snippet, /page-agent browse <url>${colors.reset}`);
 }
 
+function parseFlagArgs(args = []) {
+  const parsed = { positional: [] };
+  for (let index = 0; index < args.length; index += 1) {
+    const value = args[index];
+    if (!String(value || '').startsWith('--')) {
+      parsed.positional.push(value);
+      continue;
+    }
+    const key = String(value).slice(2).replace(/-([a-z])/g, (_, char) => char.toUpperCase());
+    const next = args[index + 1];
+    if (!next || String(next).startsWith('--')) {
+      parsed[key] = true;
+      continue;
+    }
+    parsed[key] = next;
+    index += 1;
+  }
+  return parsed;
+}
+
+async function handleBrowserCommand(repl, args = []) {
+  const parsed = parseFlagArgs(args);
+  const [rawAction = 'open', maybeUrl, ...rest] = parsed.positional;
+  const actionAliases = {
+    fill: 'type',
+    inspect: 'snapshot',
+    js: 'evaluate',
+    eval: 'evaluate',
+    screen: 'screenshot',
+    shot: 'screenshot',
+  };
+  const action = actionAliases[String(rawAction).toLowerCase()] || String(rawAction).toLowerCase();
+  const url = parsed.url || (/^https?:\/\//i.test(String(maybeUrl || '')) || String(maybeUrl || '').startsWith('data:') ? maybeUrl : undefined);
+  const trailingText = rest.join(' ').trim();
+  const payload = {
+    action,
+    url: url || 'about:blank',
+    selector: parsed.selector || parsed.css || parsed.target,
+    text: parsed.text || parsed.value || trailingText || undefined,
+    script: parsed.script || parsed.code || (action === 'evaluate' ? trailingText : undefined),
+    wait_for: parsed.waitFor || parsed.wait,
+    screenshot_path: parsed.screenshotPath || parsed.output || parsed.out,
+    keep_open: parsed.keepOpen === true || parsed.keep === true,
+    browser: parsed.browser || 'chrome',
+  };
+
+  if (action === 'help' || action === '--help') {
+    console.log(`${colors.cyan}/browser usage:${colors.reset}`);
+    console.log('  /browser open https://example.com --keep-open');
+    console.log('  /browser click https://example.com --selector button');
+    console.log('  /browser type https://example.com --selector input[name=q] --text winter');
+    console.log('  /browser screenshot https://example.com --output .winter/page.png');
+    console.log('  /browser snapshot https://example.com --selector body');
+    return;
+  }
+
+  if ((action === 'click' || action === 'type') && !payload.selector) {
+    console.log(`${colors.yellow}Usage: /browser ${action} <url> --selector <css>${action === 'type' ? ' --text <value>' : ''}${colors.reset}`);
+    return;
+  }
+  if (action === 'evaluate' && !payload.script) {
+    console.log(`${colors.yellow}Usage: /browser eval <url> --script <javascript>${colors.reset}`);
+    return;
+  }
+
+  console.log(`${colors.cyan}VisibleBrowser:${colors.reset} ${action} ${payload.url}`);
+  const result = await repl.tools.execute('VisibleBrowser', payload, { cwd: repl.projectPath });
+  if (result.success) {
+    console.log(`${colors.green}OK ${result.action || action}: ${result.title || result.url || payload.url}${colors.reset}`);
+    if (result.actionResult !== undefined) {
+      const value = typeof result.actionResult === 'string' ? result.actionResult : JSON.stringify(result.actionResult);
+      console.log(value.length > 2000 ? `${value.slice(0, 2000)}...` : value);
+    }
+    if (result.domSnippet) {
+      console.log(`${colors.dim}${String(result.domSnippet).slice(0, 1200)}${colors.reset}`);
+    }
+    return;
+  }
+  console.log(`${colors.red}FAIL VisibleBrowser: ${result.error || 'unknown error'}${colors.reset}`);
+  if (result.recovery) console.log(`${colors.dim}${result.recovery}${colors.reset}`);
+}
+
 /**
  * Handle slash commands in the Winter REPL.
  * Delegated from WinterREPL.handleSlashCommand to reduce file size.
@@ -381,6 +463,10 @@ export async function handleSlashCommand(repl, input) {
       }
       return;
 
+    case '/browser':
+      await handleBrowserCommand(repl, args);
+      return;
+
     // Inline Completion
     case '/complete':
       if (args.length === 0) {
@@ -531,6 +617,35 @@ export async function handleSlashCommand(repl, input) {
     case '/tui':
       repl.showTuiDashboard();
       return;
+    case '/paste': {
+      const payload = await repl.getClipboardPayload();
+      if (!payload) {
+        console.log(`${colors.yellow}Clipboard is empty or unavailable.${colors.reset}`);
+        return;
+      }
+      if (payload.type === 'image') {
+        const prompt = args.join(' ').trim() || 'Analyze this pasted clipboard image.';
+        await repl.chat(prompt, [payload.image]);
+        return;
+      }
+
+      const prefix = args.join(' ').trim();
+      const text = repl.normalizePastedText(payload.text || '').trim();
+      if (!text) {
+        console.log(`${colors.yellow}Clipboard text is empty.${colors.reset}`);
+        return;
+      }
+      const combined = prefix ? `${prefix}\n\n${text}` : text;
+      if (repl.shouldPersistPastedText(combined)) {
+        const paste = await repl.persistPastedText(combined);
+        const reference = repl.formatPastedTextReference(paste);
+        console.log(`${colors.cyan}│ ${colors.dim}${reference}${colors.reset}`);
+        await repl.handleInput(reference);
+        return;
+      }
+      await repl.handleInput(combined);
+      return;
+    }
 
     // Git Auto-Pilot
     case '/commit':

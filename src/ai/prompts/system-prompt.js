@@ -5,7 +5,9 @@
  */
 
 import { formatRuntimeEnvironmentSummary, getRuntimeEnvironment } from '../../cli/runtime-env.js';
+import { buildHermesCoreContract } from '../hermes-core.js';
 import { getModelBudgetMultiplier } from '../model-capabilities.js';
+import { buildCodingMasteryContract, buildSmallModelAmplification } from '../small-model-amplifier.js';
 
 const BASE_PRINCIPLES = [
   'Execute, don\'t describe - Do the work, don\'t write plans about doing the work',
@@ -23,7 +25,7 @@ const TOOL_CATEGORIES = {
   shell: ['Bash', 'Glob', 'Grep'],
   task: ['TaskCreate', 'TaskUpdate', 'TaskList'],
   web: ['WebFetch', 'WebSearch', 'WebArchive'],
-  context: ['LSP', 'MCP', 'Parallel', 'Agent'],
+  context: ['LSP', 'MCP', 'Parallel', 'Agent', 'DelegateTask', 'ParallelAgent'],
   plan: ['TodoWrite', 'TodoList', 'ScheduleWakeup'],
   notebook: ['NotebookRead', 'NotebookEdit'],
 };
@@ -86,8 +88,13 @@ function appendSharedContext(parts, { environment, session, design, resourceCont
 }
 
 function buildStandardSystemPrompt(options = {}) {
-  const { role = 'coding', tools = [], resourceContext, modelTier = '' } = options;
+  const { role = 'coding', tools = [], resourceContext, modelTier = '', context } = options;
   const budgets = getPromptBudgets(modelTier);
+  const amplifier = buildSmallModelAmplification({
+    modelTier,
+    workflowProfile: role,
+    depth: context?.type || 'standard',
+  });
   const projectContextBudget = options.projectContextBudget ?? budgets.projectContextBudget;
   const compactSystemPrompt = options.compactSystemPrompt ?? budgets.compactSystemPrompt;
   const parts = [
@@ -105,6 +112,13 @@ function buildStandardSystemPrompt(options = {}) {
     'For live browser debugging and user-visible Chrome control, prefer MCP server chrome-devtools when configured; use its page, click, fill, snapshot, screenshot, console, network, and performance tools before falling back to headless browser automation.',
     'For design/UI work, inspect the existing interface and design resources first; avoid generic placeholder layouts.',
     'If the user attaches or pastes an image, analyze it as primary evidence.',
+    '',
+    '## Winter Strength Amplifier',
+    amplifier.hint,
+    '',
+    buildCodingMasteryContract(),
+    '',
+    buildHermesCoreContract(),
     '',
   ];
 

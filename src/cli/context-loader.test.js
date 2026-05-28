@@ -44,6 +44,8 @@ test('ContextLoader getResourcePaths returns correct structure', () => {
   assert(paths.localRoot.includes(path.join('resources', 'local')));
   assert(paths.winter.skills.endsWith('skills'));
   assert(paths.winter.memories.endsWith('memories'));
+  assert(paths.gsapSkills.includes(path.join('gsap-skills')));
+  assert(paths.gsapSkillsIndex.includes(path.join('gsap-skills', 'skills', 'llms.txt')));
   assert(paths.codex.skills.includes(path.join('codex', 'skills')));
   assert(paths.claude.plugins.includes(path.join('claude', 'plugins')));
   assert(paths.manifest.includes('manifest.json'));
@@ -121,11 +123,16 @@ test('ContextLoader includes packaged Winter skills and memories for global inst
   const context = await loader.getLocalResourceContext();
   assert.match(context, /Winter packaged skills:/);
   assert.match(context, /Winter packaged memories:/);
+  assert.match(context, /gsap-skills/);
+  assert.match(context, /hermes-agent-core/);
 
   const summary = await loader.getRequiredLocalResourceSummary();
   assert.match(summary, /Winter packaged skills:/);
   assert.match(summary, /Winter packaged memories:/);
+  assert.match(summary, /GSAP skills:/);
+  assert.match(summary, /Hermes Agent core:/);
   assert.match(summary, /packaged coding skill/);
+  assert.match(summary, /self-improving agent loops/);
 });
 
 test('ContextLoader inferStartupSkills detects React projects', async () => {
@@ -141,6 +148,41 @@ test('ContextLoader inferStartupSkills detects React projects', async () => {
   assert(result.activeSkills.includes('coding'));
   assert(result.activeSkills.includes('design'), 'React project should activate design skills');
   assert(result.availableSkills.includes('coding'));
+});
+
+test('ContextLoader inferStartupSkills detects GSAP animation projects', async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), 'winter-gsap-test-'));
+  await writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({
+    name: 'my-react-animation-app',
+    dependencies: { react: '^18.0.0', gsap: '^3.0.0' },
+  }));
+
+  const loader = new ContextLoader({ projectPath: tmpDir });
+  const result = await loader.inferStartupSkills();
+
+  assert(result.availableSkills.includes('gsap-core'));
+  assert(result.activeSkills.includes('gsap'));
+  assert(result.activeSkills.includes('gsap-core'));
+  assert(result.activeSkills.includes('gsap-react'));
+});
+
+test('ContextLoader inferStartupSkills detects Hermes agent core projects', async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), 'winter-hermes-test-'));
+  await writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({
+    name: 'winter-agent-tui',
+    dependencies: { '@modelcontextprotocol/sdk': '^1.0.0' },
+    scripts: { start: 'node gateway.js', schedule: 'node cron.js' },
+    keywords: ['agent', 'tui', 'webhook', 'memory'],
+  }));
+  await writeFile(path.join(tmpDir, 'gateway.js'), 'console.log("gateway")\n');
+
+  const loader = new ContextLoader({ projectPath: tmpDir });
+  const result = await loader.inferStartupSkills();
+
+  assert(result.availableSkills.includes('hermes-agent'));
+  assert(result.availableSkills.includes('subagent-driven-development'));
+  assert(result.activeSkills.includes('hermes-agent'));
+  assert(result.activeSkills.includes('subagent-driven-development'));
 });
 
 test('ContextLoader inferStartupSkills returns filtered active skills', async () => {
@@ -219,6 +261,29 @@ test('ContextLoader getRequiredLocalResourceSummary recognizes page-agent AGENTS
   assert.match(summary, /\[Required Local Resource Rules\]/);
   assert.match(summary, /page-agent/);
   assert.match(summary, /AGENTS\.md/);
+});
+
+test('ContextLoader getResourceApplicationProfile auto-loads every bundled resource family', async () => {
+  const loader = new ContextLoader({ projectPath: process.cwd() });
+  const profile = await loader.getResourceApplicationProfile({
+    projectInstructionFiles: [
+      { relativePath: 'rule.md', filePath: path.join(process.cwd(), 'rule.md'), content: 'Always verify with tests.' },
+    ],
+  });
+
+  assert.match(profile, /\[Auto-loaded Resource Application Profile\]/);
+  assert.match(profile, /karpathy-tools/);
+  assert.match(profile, /agents\.md/);
+  assert.match(profile, /page-agent/);
+  assert.match(profile, /hermes-agent-core/);
+  assert.match(profile, /gsap-skills/);
+  assert.match(profile, /ecc/);
+  assert.match(profile, /codex/);
+  assert.match(profile, /claude/);
+  assert.match(profile, /awesome-design-md/);
+  assert.match(profile, /winter packaged skills and memories/);
+  assert.match(profile, /Project rules loaded/);
+  assert.match(profile, /Always verify with tests/);
 });
 
 test('ContextLoader compactText truncates long text', () => {

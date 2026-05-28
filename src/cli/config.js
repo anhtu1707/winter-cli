@@ -7,7 +7,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { homedir } from 'os';
 import { loadEnvFile, stripInlineSecrets } from './secret-env.js';
-import { CHROME_DEVTOOLS_MCP_NAME, createChromeDevtoolsMcpServer } from '../mcp/presets.js';
+import { CHROME_DEVTOOLS_MCP_NAME, createChromeDevtoolsMcpServer, ensureMcpConfigShape } from '../mcp/presets.js';
 
 export class ConfigLoader {
   constructor() {
@@ -22,12 +22,27 @@ export class ConfigLoader {
       await loadEnvFile(this.envFile);
       const data = await fs.readFile(this.configFile, 'utf8');
       const config = JSON.parse(data.replace(/^\uFEFF/, ''));
-      return this.applyEnv(config);
+      return this.applyEnv(this.ensureBundledDefaults(config));
     } catch {
       // Return defaults
       await loadEnvFile(this.envFile);
-      return this.applyEnv(this.getDefaults());
+      return this.applyEnv(this.ensureBundledDefaults(this.getDefaults()));
     }
+  }
+
+  ensureBundledDefaults(config = {}) {
+    const next = structuredClone(config || {});
+    ensureMcpConfigShape(next);
+    if (!next.mcp.servers.some(server => server?.name === CHROME_DEVTOOLS_MCP_NAME)) {
+      next.mcp.servers.push(createChromeDevtoolsMcpServer(['--isolated']));
+    }
+    next.permissions.allowlist.tools = [
+      ...new Set([...(next.permissions.allowlist.tools || []), 'MCP']),
+    ];
+    next.permissions.allowlist.mcpServers = [
+      ...new Set([...(next.permissions.allowlist.mcpServers || []), CHROME_DEVTOOLS_MCP_NAME]),
+    ];
+    return next;
   }
 
   applyEnv(config) {
@@ -105,7 +120,13 @@ export class ConfigLoader {
       sandbox: {
         enabled: true,
         restrictToWorkspace: true,
-        allowedCommands: ['git', 'npm', 'node', 'python'],
+        allowedCommands: [
+          'git', 'npm', 'npx', 'node', 'python',
+          'ping', 'test-connection', 'curl', 'wget', 'iwr', 'irm',
+          'invoke-webrequest', 'invoke-restmethod', 'nslookup', 'resolve-dnsname',
+          'tracert', 'traceroute', 'pathping', 'dig', 'ipconfig', 'ifconfig',
+          'ip', 'netstat', 'speedtest', 'speedtest-cli', 'measure-command',
+        ],
       },
       session: {
         autoSave: true,
@@ -238,6 +259,23 @@ export class ConfigLoader {
       config.permissions.promptByDefault = Boolean(allowlist.promptByDefault);
     }
     await this.save(config);
+  }
+
+  async setFullAccess(enabled = true) {
+    const config = await this.load();
+    const defaults = this.getDefaults();
+    const fullAccess = Boolean(enabled);
+    config.sandbox = {
+      ...(config.sandbox || {}),
+      enabled: !fullAccess,
+      restrictToWorkspace: !fullAccess,
+      allowedCommands: config.sandbox?.allowedCommands || defaults.sandbox.allowedCommands,
+    };
+    config.permissions = config.permissions || { allowlist: {} };
+    config.permissions.allowlist = config.permissions.allowlist || { tools: [], commands: [], mcpServers: [] };
+    config.permissions.promptByDefault = !fullAccess;
+    await this.save(config);
+    return config;
   }
 
   async setMcpServers(servers = []) {

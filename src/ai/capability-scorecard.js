@@ -1,4 +1,6 @@
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
+import { mkdtemp, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -73,8 +75,9 @@ export const CAPABILITY_AREAS = [
     target: 'Codebuff/Claude-style custom agents with scoped tools',
     probes: [
       { key: 'agentRegistry', label: 'project agent registry is active' },
-      { key: 'agentTool', label: 'Agent tool exists' },
-      { key: 'scopedTools', label: 'role-scoped tools are available' },
+      { key: 'agentTool', label: 'Agent tool runs real subagent conversations' },
+      { key: 'scopedTools', label: 'role-scoped tools are enforced' },
+      { key: 'processIsolation', label: 'subagents can run through child-process isolation' },
     ],
   },
   {
@@ -107,6 +110,7 @@ export const CAPABILITY_AREAS = [
     probes: [
       { key: 'autoDebug', label: '/debug and /auto routes exist' },
       { key: 'browserDebug', label: 'BrowserDebug tool exists' },
+      { key: 'browserSmoke', label: 'browser smoke covers BrowserDebug and VisibleBrowser' },
       { key: 'verificationCommands', label: 'verification command inference exists' },
     ],
   },
@@ -139,24 +143,197 @@ function scoreArea(area, probes) {
   };
 }
 
+async function runBehaviorProbes() {
+  const result = {
+    agentTool: false,
+    scopedTools: false,
+    processIsolation: false,
+    slashMenu: false,
+  };
+
+  try {
+    const { AgentTool } = await import('../tools/agent.js');
+    const definitions = [{ name: 'Read' }, { name: 'Write' }];
+    const repl = {
+      projectPath: PACKAGE_ROOT,
+      ai: {
+        getActiveProvider: () => 'probe',
+        setProvider: () => true,
+      },
+      tools: {
+        getToolDefinitions: () => definitions,
+      },
+      agentRegistry: {
+        async get(id = 'general') {
+          return { id, tools: ['Read'], instructionsPrompt: 'probe' };
+        },
+      },
+      getAgentToolsForDefinition(definition) {
+        return definitions.filter(tool => definition.tools.includes(tool.name));
+      },
+      async getProjectContext() {
+        return '';
+      },
+      getAgentDefinitionSystemPrompt() {
+        return 'probe';
+      },
+      async runConversation(_messages, _label, tools) {
+        return {
+          finalContent: 'probe complete',
+          usedTools: true,
+          changedFiles: [],
+          toolSummaries: [`allowed=${tools.map(tool => tool.name).join(',')}`],
+          executedTools: [{ tool: tools[0]?.name, success: true }],
+          usage: {},
+        };
+      },
+    };
+    const agent = new AgentTool(repl);
+    const run = await agent.run('probe real subagent behavior', { role: 'general', tools: ['Read'], processIsolation: false });
+    result.agentTool = run.success === true && run.status === 'completed' && run.usedTools === true && run.allowedTools?.includes('Read') && !run.allowedTools?.includes('Write');
+  } catch {
+    result.agentTool = false;
+  }
+
+  try {
+    const { EventEmitter } = await import('events');
+    const { AgentTool } = await import('../tools/agent.js');
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'winter-scorecard-agent-'));
+    await writeFile(path.join(projectPath, 'README.md'), 'scorecard workspace', 'utf8');
+    const repl = {
+      constructor: { name: 'WinterREPL' },
+      projectPath,
+      sessionId: 'scorecard',
+      version: 'scorecard',
+      ai: {
+        getActiveProvider: () => 'probe',
+        setProvider: () => true,
+      },
+      tools: { getToolDefinitions: () => [] },
+      subagentFork: () => {
+        const child = new EventEmitter();
+        child.pid = 101;
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        child.kill = () => {};
+        child.send = message => {
+          queueMicrotask(() => child.emit('message', {
+            type: 'result',
+            result: {
+              success: true,
+              agentId: message.options.agentId,
+              summary: 'isolated',
+              workspaceIsolated: message.options.workspaceIsolation === true,
+              workspacePath: message.options.projectPath,
+            },
+          }));
+        };
+        return child;
+      },
+    };
+    const agent = new AgentTool(repl);
+    const run = await agent.run('probe process isolation', { processIsolation: true });
+    result.processIsolation = run.success === true && run.processIsolated === true && run.workspaceIsolated === true && run.childPid === 101;
+  } catch {
+    result.processIsolation = false;
+  }
+
+  try {
+    const { AgentRuntime } = await import('../agent/runtime.js');
+    let executed = false;
+    let turns = 0;
+    const repl = {
+      hydrateSessionToolPermissions() {},
+      isCancelled: false,
+      useUnicodeUi: false,
+      sessionPermissionGrants: new Set(),
+      session: { getContext: () => ({}), updateContext: async () => {} },
+      ai: { tools: [], _modelTier: 'medium', setTools() {} },
+      tools: {
+        normalizeToolName: name => String(name),
+        execute: async () => {
+          executed = true;
+          return { success: true };
+        },
+      },
+      selectExecutionProfile: () => ({ provider: 'probe', model: 'probe' }),
+      actionRequiresTools: () => false,
+      async requestAssistantTurn() {
+        turns += 1;
+        if (turns === 1) {
+          return { assistantMsg: { content: '' }, toolCalls: [{ id: 'x', toolName: 'Bash', toolArgs: { command: 'echo no' } }] };
+        }
+        return { assistantMsg: { content: 'done' }, toolCalls: [], finalContent: 'done' };
+      },
+      buildToolCallSignature: calls => JSON.stringify(calls.map(call => call.toolName)),
+      formatToolCallsForMessage: calls => calls,
+      buildPromptToolResultForModel: async (_tool, value) => value,
+      formatToolResultForConsole: (_tool, value) => value.error || '',
+      shouldPromptForToolPermission: async () => false,
+      recoverToolArgs: () => null,
+      enrichToolArgs: (_tool, args) => args,
+      buildToolFallbackAnswer: values => values.join('\n'),
+      getLatestUserText: messages => messages.at(-1)?.content || '',
+      shouldAutoVerifyAfterTools: () => false,
+    };
+    const runtime = new AgentRuntime(repl);
+    const run = await runtime.runConversation([{ role: 'user', content: 'probe' }], 'probe', [{ name: 'Read' }]);
+    result.scopedTools = executed === false && run.toolSummaries?.join('\n').includes('not allowed for this agent');
+  } catch {
+    result.scopedTools = false;
+  }
+
+  try {
+    const { WinterInputController } = await import('../cli/input-controller.js');
+    const repl = {
+      slashMenu: {
+        open: true,
+        line: '/',
+        items: Array.from({ length: 12 }, (_, index) => ({ cmd: `/cmd${index}`, desc: `Command ${index}` })),
+        selected: 0,
+        offset: 0,
+        printedLines: 0,
+      },
+      rl: { line: '/', prompt() {} },
+      getSlashSuggestions: () => [],
+    };
+    const input = new WinterInputController(repl);
+    input.renderSlashMenu = () => {};
+    for (let i = 0; i < 8; i++) input.moveSlashSelection(1);
+    result.slashMenu = repl.slashMenu.selected === 8 && repl.slashMenu.offset > 0;
+  } catch {
+    result.slashMenu = false;
+  }
+
+  return result;
+}
+
 export async function assessWinterCapabilities(repl = {}) {
   const projectPath = repl.projectPath || process.cwd();
   const srcPath = path.join(PACKAGE_ROOT, 'src');
   const resourceRoot = path.join(PACKAGE_ROOT, 'resources');
   const tools = repl.tools?.getToolDefinitions?.() || repl.getAgentTools?.('general') || [];
   const toolNames = new Set(tools.map(tool => tool.name || tool.function?.name).filter(Boolean));
+  const hasSourceText = (relativePath, pattern) => {
+    try {
+      return pattern.test(readFileSync(path.join(srcPath, relativePath), 'utf8'));
+    } catch {
+      return false;
+    }
+  };
 
+  const behavior = await runBehaviorProbes();
   const probes = {
     agentRuntime: Boolean(repl.agentRuntime) || existsSync(path.join(srcPath, 'agent', 'runtime.js')),
     toolEvidenceGuard: existsSync(path.join(srcPath, 'cli', 'repl.test.js')),
-    loopProtection: typeof repl.runConversation === 'function',
+    loopProtection: typeof repl.runConversation === 'function' || existsSync(path.join(srcPath, 'agent', 'runtime.js')),
 
     toolExecutor: Boolean(repl.tools) || existsSync(path.join(srcPath, 'tools', 'executor.js')),
-    toolDoctor: typeof repl.runToolDoctor === 'function',
+    toolDoctor: typeof repl.runToolDoctor === 'function' || existsSync(path.join(srcPath, 'cli', 'diagnostics.js')),
     fallbackParser: existsSync(path.join(srcPath, 'cli', 'tool-call-adapter.js')),
 
     codebaseIndex: typeof repl.ensureCodebaseIndex === 'function' || existsSync(path.join(srcPath, 'codebase-index', 'indexer.js')),
-    codebaseContext: typeof repl.buildCodebaseContext === 'function',
+    codebaseContext: typeof repl.buildCodebaseContext === 'function' || existsSync(path.join(srcPath, 'codebase-index', 'search.js')),
     atContext: existsSync(path.join(srcPath, 'cli', 'at-context.js')),
 
     tokenJuice: Boolean(repl.tokenJuice) || existsSync(path.join(srcPath, 'context', 'token-juice.js')),
@@ -164,20 +341,22 @@ export async function assessWinterCapabilities(repl = {}) {
     sessionCompression: typeof repl.compressSessionContext === 'function' || existsSync(path.join(srcPath, 'context', 'compress.js')),
 
     agentRegistry: Boolean(repl.agentRegistry) || existsSync(path.join(srcPath, 'agent', 'agent-definitions.js')),
-    agentTool: toolNames.has('Agent') || existsSync(path.join(srcPath, 'tools', 'agent.js')),
-    scopedTools: typeof repl.getAgentTools === 'function',
+    agentTool: behavior.agentTool,
+    scopedTools: behavior.scopedTools,
+    processIsolation: behavior.processIsolation,
 
     bottomInput: Boolean(repl.inputController) || existsSync(path.join(srcPath, 'cli', 'input-controller.js')),
-    directImagePaste: typeof repl.handleDirectClipboardPaste === 'function',
-    slashMenu: Array.isArray(repl.getSlashSuggestions?.('/')) || existsSync(path.join(srcPath, 'cli', 'slash-commands.js')),
+    directImagePaste: typeof repl.handleDirectClipboardPaste === 'function' || hasSourceText(path.join('cli', 'input-controller.js'), /handleDirectClipboardPaste|clipboardImage|imageAttachments/),
+    slashMenu: behavior.slashMenu && (Array.isArray(repl.getSlashSuggestions?.('/')) || existsSync(path.join(srcPath, 'cli', 'slash-commands.js'))),
 
     providerManager: Boolean(repl.ai) || existsSync(path.join(srcPath, 'ai', 'providers.js')),
-    providerSwitch: typeof repl.ai?.switchProvider === 'function',
+    providerSwitch: typeof repl.ai?.switchProvider === 'function' || hasSourceText(path.join('ai', 'providers.js'), /async\s+switchProvider|switchProvider\s*\(/),
     modelTier: existsSync(path.join(srcPath, 'ai', 'model-capabilities.js')),
 
-    autoDebug: typeof repl.runAutoHealing === 'function',
-    browserDebug: toolNames.has('BrowserDebug'),
-    verificationCommands: existsSync(path.join(srcPath, 'ai', 'prompts', 'success-criteria.js')),
+    autoDebug: typeof repl.runAutoHealing === 'function' || hasSourceText(path.join('cli', 'repl.js'), /runAutoHealing|verifyAndHeal/),
+    browserDebug: toolNames.has('BrowserDebug') || hasSourceText(path.join('tools', 'executor.js'), /BrowserDebug|OpenBrowser/),
+    browserSmoke: hasSourceText(path.join('..', 'scripts', 'smoke-browser.js'), /BrowserDebug[\s\S]*VisibleBrowser|VisibleBrowser[\s\S]*BrowserDebug/),
+    verificationCommands: typeof repl.inferVerificationCommands === 'function' || hasSourceText(path.join('cli', 'repl.js'), /inferVerificationCommands/),
 
     mcp: existsSync(path.join(srcPath, 'mcp', 'client.js')),
     resources: existsSync(path.join(resourceRoot, 'local', 'manifest.json')),

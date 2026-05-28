@@ -2,7 +2,7 @@ process.env.NODE_ENV = 'test';
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -117,6 +117,95 @@ test('processInputTask opens browser shortcuts and Google searches directly', as
     tool: 'OpenBrowser',
     args: { browser: 'chrome', url: 'https://music.youtube.com' },
   });
+});
+
+test('/browser slash command calls VisibleBrowser with concrete actions', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  const calls = [];
+  repl.tools = {
+    execute: async (tool, args) => {
+      calls.push({ tool, args });
+      return {
+        success: true,
+        action: args.action,
+        url: args.url,
+        title: 'Example',
+        actionResult: { ok: true },
+      };
+    },
+  };
+
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+  try {
+    await handleSlashCommand(repl, '/browser click https://example.com --selector button.buy --keep-open');
+    await handleSlashCommand(repl, '/browser type https://example.com --selector input[name=q] --text winter');
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert.equal(calls[0].tool, 'VisibleBrowser');
+  assert.deepEqual(calls[0].args, {
+    action: 'click',
+    url: 'https://example.com',
+    selector: 'button.buy',
+    text: undefined,
+    script: undefined,
+    wait_for: undefined,
+    screenshot_path: undefined,
+    keep_open: true,
+    browser: 'chrome',
+  });
+  assert.equal(calls[1].tool, 'VisibleBrowser');
+  assert.equal(calls[1].args.action, 'type');
+  assert.equal(calls[1].args.selector, 'input[name=q]');
+  assert.equal(calls[1].args.text, 'winter');
+  assert.match(logs.join('\n'), /VisibleBrowser:/);
+});
+
+test('/paste slash command reads clipboard text and image payloads', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  const handledInputs = [];
+  const chats = [];
+  let payload = { type: 'text', text: 'clipboard text' };
+  repl.getClipboardPayload = async () => payload;
+  repl.handleInput = async value => handledInputs.push(value);
+  repl.chat = async (prompt, images) => chats.push({ prompt, images });
+
+  await handleSlashCommand(repl, '/paste summarize this');
+  payload = { type: 'image', image: { mime: 'image/png', base64: 'AAAA' } };
+  await handleSlashCommand(repl, '/paste explain image');
+
+  assert.deepEqual(handledInputs, ['summarize this\n\nclipboard text']);
+  assert.deepEqual(chats, [{
+    prompt: 'explain image',
+    images: [{ mime: 'image/png', base64: 'AAAA' }],
+  }]);
+});
+
+test('/paste slash command persists large clipboard text', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-slash-paste-'));
+  const repl = new WinterREPL({ projectPath: root });
+  repl.config.winterDir = path.join(root, '.winter');
+  const handledInputs = [];
+  repl.getClipboardPayload = async () => ({
+    type: 'text',
+    text: Array.from({ length: 8 }, (_, index) => `line ${index + 1}`).join('\n'),
+  });
+  repl.handleInput = async value => handledInputs.push(value);
+
+  await handleSlashCommand(repl, '/paste');
+
+  assert.equal(handledInputs.length, 1);
+  assert.match(handledInputs[0], /^\[Pasted text #1: 8 lines -> .*paste_1_\d+\.txt\]$/);
+});
+
+test('slash suggestions expose direct browser control command', () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  const commands = repl.getSlashSuggestions('/browser').map(item => item.cmd);
+
+  assert(commands.includes('/browser'));
 });
 
 test('recent work ledger records tool evidence for the next turn', async () => {
@@ -493,6 +582,40 @@ test('direct Ctrl+V clipboard image sends image without requiring a file path', 
   assert.equal(repl.isProcessing, false);
 });
 
+test('large pasted text is stored as a paste file reference', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-paste-'));
+  const repl = new WinterREPL({ projectPath: root });
+  repl.config.winterDir = path.join(root, '.winter');
+
+  const text = Array.from({ length: 14 }, (_, index) => `line ${index + 1}`).join('\n');
+  assert.equal(repl.shouldPersistPastedText(text), true);
+  assert.equal(repl.shouldAutoPersistBufferedPaste(text.split('\n'), { isPasteChunk: false }), true);
+  assert.equal(repl.shouldAutoPersistBufferedPaste(['', ...text.split('\n')], { isPasteChunk: false }), false);
+  assert.equal(repl.shouldAutoPersistBufferedPaste(['', ...text.split('\n')], { isPasteChunk: true }), true);
+
+  const paste = await repl.persistPastedText(text);
+  const reference = repl.formatPastedTextReference(paste);
+
+  assert.equal(paste.index, 1);
+  assert.equal(paste.lines, 14);
+  assert.match(paste.path, /paste_1_\d+\.txt$/);
+  assert.equal(await readFile(paste.path, 'utf8'), text);
+  assert.match(reference, /^\[Pasted text #1: 14 lines -> .*paste_1_\d+\.txt\]$/);
+});
+
+test('bracketed pasted text markers are stripped before storage', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-bracketed-paste-'));
+  const repl = new WinterREPL({ projectPath: root });
+  repl.config.winterDir = path.join(root, '.winter');
+  const text = `\x1b[200~${Array.from({ length: 8 }, (_, index) => `line ${index + 1}`).join('\r\n')}\x1b[201~`;
+
+  assert.equal(repl.shouldPersistPastedText(text), true);
+  const paste = await repl.persistPastedText(text);
+
+  assert.equal(paste.lines, 8);
+  assert.equal(await readFile(paste.path, 'utf8'), Array.from({ length: 8 }, (_, index) => `line ${index + 1}`).join('\n'));
+});
+
 test('assistant markdown tables render inside a box instead of raw pipe rows', () => {
   const repl = new WinterREPL({ projectPath: 'E:\\dev\\app\\winter' });
   const logs = [];
@@ -644,6 +767,8 @@ test('bootstrapProjectCapabilities creates a startup plan and stores skills', as
   repl.contextLoader.getStartupSkillCatalog = async () => new Set(['coding', 'debug', 'refactor', 'test']);
   repl.contextLoader.getProjectSignals = async () => ['node', 'cli'];
   repl.contextLoader.getRequiredLocalResourceSummary = async () => '[Required Local Resource Rules]\n- karpathy-tools\n- awesome-design-md\n- agents.md';
+  repl.contextLoader.getResourceApplicationProfile = async () => '[Auto-loaded Resource Application Profile]\n- hermes-agent-core\n- gsap-skills';
+  repl.readProjectInstructionFiles = async () => [];
 
   const contextStore = {};
   const plans = [];
@@ -670,8 +795,10 @@ test('bootstrapProjectCapabilities creates a startup plan and stores skills', as
   assert.equal(plans.length, 1);
   assert.equal(contextStore.bootstrapPlan.title, 'Bootstrap project context');
   assert.match(contextStore.requiredLocalResources, /karpathy-tools/);
+  assert.match(contextStore.resourceApplicationProfile, /hermes-agent-core/);
   assert.deepEqual(contextStore.activeSkills, ['coding', 'debug', 'refactor', 'test']);
   assert(memoryWrites.some(write => write.prefix === '[Required local resources]' && /awesome-design-md/.test(write.content)));
+  assert(memoryWrites.some(write => write.prefix === '[Auto-loaded resource application profile]' && /gsap-skills/.test(write.content)));
   assert(memoryWrites.some(write => /Auto-applied skills/.test(write.content)));
 });
 
@@ -740,6 +867,7 @@ test('getAgentTools scopes tool access by agent role', () => {
   assert(!reviewTools.includes('Write'));
   assert(debugTools.includes('Write'));
   assert(debugTools.includes('Bash'));
+  assert(debugTools.includes('VisibleBrowser'));
   assert(debugTools.includes('BrowserDebug'));
   assert(debugTools.includes('MCP'));
 });
@@ -778,6 +906,7 @@ test('general chat tools stay focused for weaker models', () => {
   assert(toolNames.includes('Read'));
   assert(toolNames.includes('Edit'));
   assert(toolNames.includes('OpenBrowser'));
+  assert(toolNames.includes('VisibleBrowser'));
   assert(toolNames.includes('BrowserDebug'));
   assert(toolNames.includes('MCP'));
   assert(toolNames.includes('Agent'));
@@ -833,8 +962,15 @@ test('extractModelIdsFromCache reads model slugs without service tier ids', () =
   ]);
 });
 
-test('system prompt compresses oversized memories and project context', () => {
+test('system prompt compresses oversized memories and project context for small models', () => {
   const repl = new WinterREPL({ projectPath: process.cwd() });
+  repl.ai = {
+    _modelTier: 'small',
+    getActiveProvider: () => 'ollama',
+    providers: {
+      ollama: { model: 'llama3.2:3b' },
+    },
+  };
   repl.session = {
     getSessionId: () => 'test-session',
     getMemory: () => Array.from({ length: 24 }, (_, index) => ({
@@ -846,11 +982,12 @@ test('system prompt compresses oversized memories and project context', () => {
 
   const prompt = repl.getSystemPrompt('Project context ' + 'z'.repeat(18000));
 
-  assert(prompt.length > 14000);
+  assert(prompt.length < 14000);
+  assert.match(prompt, /Small Model Operating Contract/);
   assert.match(prompt, /Memories \(Important Context\)/);
   assert.match(prompt, /project context/i);
-  assert.match(prompt, /## Core Principles/);
-  assert.match(prompt, /## Tool Usage/);
+  assert.match(prompt, /Rules: operate as an agent/);
+  assert.match(prompt, /CRITICAL: You MUST call tools/);
 });
 
 test('system prompt expands for flagship models instead of staying compact', () => {
@@ -894,7 +1031,7 @@ test('buildPromptToolResult caps large tool outputs before final answer prompt',
   assert.equal(result.success, true);
   assert.equal(result.path, 'big-file.js');
   assert.equal(result.lines, 1000);
-  assert(result.content.length > 6000);
+  assert(result.content.length < 6000);
   assert.match(result.content, /x{100}/);
 });
 
@@ -1180,6 +1317,68 @@ test('runConversation blocks action completion claims without tool evidence and 
     assert.equal(answer.finalContent, 'Đã kiểm tra README.md bằng tool.');
     assert.equal(streamOptions[1]?.toolPromptOnly, true);
     assert.deepEqual(executed, [{ name: 'Read', args: { file_path: 'README.md' } }]);
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+});
+
+test('runConversation verifies mutating work before allowing final answer', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+
+  let streamCount = 0;
+  const streamOptions = [];
+  const executed = [];
+  const originalWrite = process.stdout.write;
+  repl.shouldPromptForToolPermission = async () => false;
+  repl.inferVerificationCommands = async () => ['npm test'];
+  repl.ai = {
+    tools: [],
+    providers: { custom: { model: 'test-model' } },
+    getActiveProvider: () => 'custom',
+    setTools(tools) {
+      this.tools = tools;
+    },
+    async *streamRequest(_messages, options = {}) {
+      streamOptions.push(options);
+      streamCount++;
+      if (streamCount === 1) {
+        yield {
+          content: '<invoke name="Edit"><parameter name="file_path">README.md</parameter><parameter name="old_string">old</parameter><parameter name="new_string">new</parameter></invoke>',
+        };
+        return;
+      }
+      if (streamCount === 2) {
+        yield { content: 'Da sua xong.' };
+        return;
+      }
+      yield { content: 'Da sua README.md va npm test da pass.' };
+    },
+  };
+  repl.tools = {
+    normalizeToolName: name => name,
+    normalizeToolInput: (_name, input) => input,
+    async execute(name, args) {
+      executed.push({ name, args });
+      if (name === 'Bash') return { success: true, stdout: 'tests passed' };
+      return { success: true, file_path: args.file_path };
+    },
+  };
+
+  process.stdout.write = () => true;
+
+  try {
+    const answer = await repl.runConversation(
+      [{ role: 'user', content: 'sua README.md roi chay test' }],
+      'Test',
+      [{ name: 'Edit' }, { name: 'Bash' }]
+    );
+
+    assert.equal(answer.finalContent, 'Da sua README.md va npm test da pass.');
+    assert.equal(answer.autoVerified, true);
+    assert.equal(answer.autoVerificationPassed, true);
+    assert.equal(streamOptions[1]?.deferFinalContent, true);
+    assert.deepEqual(executed.map(call => call.name), ['Edit', 'Bash']);
+    assert.equal(executed[1].args.command, 'npm test');
   } finally {
     process.stdout.write = originalWrite;
   }
@@ -1838,6 +2037,7 @@ test('runConversation executes inline XML tool calls without printing pseudo syn
 
     assert.equal(answer.finalContent, 'Đã đọc xong');
     assert.deepEqual(executed, [{ name: 'Read', args: { path: 'README.md' } }]);
+    assert.doesNotMatch(writes.join(''), /Để tôi đọc file/);
     assert.doesNotMatch(writes.join(''), /minimax:tool_call/);
   } finally {
     process.stdout.write = originalWrite;

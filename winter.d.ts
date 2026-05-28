@@ -159,6 +159,94 @@ declare module './src/cli/tui.js' {
   }): string;
 }
 
+declare module './src/ai/capability-scorecard.js' {
+  export interface CapabilityProbe {
+    key: string;
+    label: string;
+    ok?: boolean;
+  }
+
+  export interface CapabilityArea {
+    id: string;
+    label: string;
+    weight: number;
+    target: string;
+    passed: number;
+    total: number;
+    score: number;
+    percent: number;
+    probes: CapabilityProbe[];
+    checks: CapabilityProbe[];
+  }
+
+  export interface CapabilityGap {
+    id: string;
+    label: string;
+    missing: string[];
+  }
+
+  export interface CapabilityScorecard {
+    target: number;
+    overall: number;
+    score: number;
+    maxScore: number;
+    status: 'ready' | 'below-target';
+    competitors: Array<{
+      name: string;
+      strengths: string[];
+    }>;
+    areas: CapabilityArea[];
+    gaps: CapabilityGap[];
+  }
+
+  export const WINTER_CAPABILITY_TARGET: number;
+  export function assessWinterCapabilities(repl?: Record<string, unknown>): Promise<CapabilityScorecard>;
+  export function formatCapabilityScorecard(
+    report: CapabilityScorecard,
+    options?: { colors?: Record<string, string> }
+  ): string;
+}
+
+declare module './src/ai/hermes-core.js' {
+  export interface HermesCoreSignals {
+    agent: boolean;
+    skills: boolean;
+    memory: boolean;
+    automation: boolean;
+    gateway: boolean;
+    tui: boolean;
+    mcp: boolean;
+  }
+
+  export const HERMES_CORE_RESOURCE: string;
+  export function detectHermesCoreSignals(input?: {
+    taskText?: string;
+    projectSignals?: string[];
+  }): HermesCoreSignals;
+  export function shouldApplyHermesCore(input?: {
+    taskText?: string;
+    projectSignals?: string[];
+  }): boolean;
+  export function buildHermesCoreContract(options?: { compact?: boolean }): string;
+}
+
+declare module './src/ai/small-model-amplifier.js' {
+  export interface SmallModelAmplification {
+    weak: boolean;
+    maxToolTurns: number;
+    enforceSelfCritique: boolean;
+    hint: string;
+  }
+
+  export function isWeakTier(modelTier?: string): boolean;
+  export function buildCodingMasteryContract(options?: { compact?: boolean }): string;
+  export function buildSmallModelAmplification(options?: {
+    modelTier?: string;
+    workflowProfile?: string;
+    depth?: string;
+  }): SmallModelAmplification;
+}
+
 declare module './src/cli/repl.js' {
   export interface WinterREPLOptions {
     projectPath?: string;
@@ -178,6 +266,20 @@ declare module './src/cli/repl.js' {
     showTuiDashboard(): void;
     showInputPrompt(): void;
     closeInputBox(): void;
+    chat(message: string, imageAttachments?: unknown[]): Promise<void>;
+    runConversation(messages: unknown[], label?: string, tools?: unknown[] | null): Promise<{
+      finalContent: string;
+      usedTools: boolean;
+      usedMutatingTools: boolean;
+      autoVerified?: boolean;
+      autoVerificationPassed?: boolean;
+    }>;
+    inferVerificationCommands(task?: string): Promise<string[]>;
+    runVerification(commands?: string[] | null): Promise<{
+      passed: boolean;
+      details: Array<{ cmd: string; passed: boolean; output: string }>;
+    }>;
+    runAutoHealing(task: string): Promise<void>;
     buildInputPanel(): {
       top: string;
       status: string;

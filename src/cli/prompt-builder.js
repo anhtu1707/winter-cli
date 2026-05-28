@@ -1,5 +1,7 @@
 import { formatRuntimeEnvironmentSummary, getRuntimeEnvironment } from './runtime-env.js';
+import { buildHermesCoreContract } from '../ai/hermes-core.js';
 import { getModelBudgetMultiplier } from '../ai/model-capabilities.js';
+import { buildCodingMasteryContract } from '../ai/small-model-amplifier.js';
 
 /**
  * PromptBuilder — Builds system prompts for Winter CLI agents.
@@ -44,18 +46,26 @@ export class PromptBuilder {
     return typeof value === 'string' ? value : '';
   }
 
+  getResourceApplicationProfile() {
+    const sessionContext = this.session?.getContext?.() || {};
+    const value = sessionContext.resourceApplicationProfile?.value ?? sessionContext.resourceApplicationProfile;
+    return typeof value === 'string' ? value : '';
+  }
+
   buildSystemPrompt(context = '', options = {}) {
     const memories = this.session?.getMemory?.() || [];
     const plans = this.session?.getPlans?.() || [];
     const sessionContext = this.session?.getContext?.() || {};
     const environmentSummary = this.tools?.getRuntimeEnvironmentSummary?.() || this._defaultEnvironmentSummary();
     const requiredLocalResources = this.getRequiredLocalResources();
+    const resourceApplicationProfile = this.getResourceApplicationProfile();
     const scale = getModelBudgetMultiplier(options.modelTier);
     const projectContextBudget = options.projectContextBudget || Math.round(3200 * scale);
     const compactSystemPrompt = options.compactSystemPrompt ?? (scale <= 0.75);
     const memoryBudget = Math.round(1200 * scale);
     const planBudget = Math.round(1200 * scale);
     const requiredResourcesBudget = Math.round((compactSystemPrompt ? 1200 : 1600) * scale);
+    const resourceProfileBudget = Math.round((compactSystemPrompt ? 1800 : 2600) * scale);
     const workflowBudget = Math.round(900 * scale);
     const blueprintBudget = Math.round(700 * scale);
 
@@ -64,6 +74,9 @@ export class PromptBuilder {
       : '';
     const requiredResourcesStr = requiredLocalResources
       ? `\n## Required Local Resource Rules\n${this._compactText(requiredLocalResources, requiredResourcesBudget, 'required local resources')}`
+      : '';
+    const resourceProfileStr = resourceApplicationProfile
+      ? `\n## Auto-loaded Resource Application Profile\n${this._compactText(resourceApplicationProfile, resourceProfileBudget, 'resource application profile')}`
       : '';
     const plansStr = plans.length > 0
       ? this._formatPlans(plans, { maxTotalChars: planBudget })
@@ -77,6 +90,11 @@ export class PromptBuilder {
     const blueprintStr = sessionContext.workflowBlueprint
       ? `\n## Profile Blueprint\n${this._compactText(sessionContext.workflowBlueprint, blueprintBudget, 'workflow blueprint')}`
       : '';
+    const smallModelContractStr = compactSystemPrompt
+      ? '\n## Small Model Operating Contract\n- Use a private checklist: goal, files/state to inspect, next tool, verification.\n- For action tasks, make one concrete tool call before claiming progress.\n- If unsure, Read/Grep/Glob/Bash instead of guessing.\n- Do not claim files changed, browser checked, tests passed, or commands ran without tool output from this turn.\n- Keep context reads small and high-signal; verify after changes.'
+      : '';
+    const codingMasteryStr = `\n${buildCodingMasteryContract({ compact: compactSystemPrompt })}`;
+    const hermesCoreStr = `\n${buildHermesCoreContract({ compact: compactSystemPrompt })}`;
     const startupPlanStr = sessionContext.bootstrapPlan?.title
       ? `\n## Startup Plan\n- ${sessionContext.bootstrapPlan.title}: ${sessionContext.bootstrapPlan.description}`
       : '';
@@ -93,7 +111,7 @@ export class PromptBuilder {
         `CRITICAL: You MUST call tools (Read/Write/Edit/Bash) to do real work. NEVER write code in markdown and claim done. Winter blocks fake completions.`,
         `Tool fallback when native calls are unavailable: <invoke name="Read"><parameter name="path">README.md</parameter></invoke> OR {"tool":"Read","arguments":{"path":"README.md"}} OR CALL_TOOL Read {"path":"README.md"}.`,
         `Session: cwd=${this.projectPath}; id=${this.session?.getSessionId?.()?.substring(0, 8) || 'unknown'}`,
-        `${requiredResourcesStr}${memoryStr}${plansStr}${skillsStr}${workflowStr}${blueprintStr}${startupPlanStr}${sessionSignalsStr}`,
+        `${smallModelContractStr}${codingMasteryStr}${hermesCoreStr}${requiredResourcesStr}${resourceProfileStr}${memoryStr}${plansStr}${skillsStr}${workflowStr}${blueprintStr}${startupPlanStr}${sessionSignalsStr}`,
         context ? `\n## Project Context\n${this._compactText(context, projectContextBudget, 'project context')}` : '',
       ].filter(Boolean).join('\n');
     }
@@ -118,10 +136,14 @@ export class PromptBuilder {
       `CRITICAL: When the user asks you to fix/create/edit/run/modify anything, you MUST call tools (Read, Write, Edit, Bash, etc.) to actually do it. NEVER just write code in a markdown code block and claim it is done. Winter will detect and block fake completions. If you say "đã sửa/đã tạo/done/fixed" without a tool call, your response will be rejected.`,
       `Tool call compatibility: if native tool calls are unavailable, output exactly one of these forms and no prose: <invoke name="Read"><parameter name="path">README.md</parameter></invoke> OR {"tool":"Read","arguments":{"path":"README.md"}} OR CALL_TOOL Read {"path":"README.md"}.`,
       `Open browser requests: if the user asks to "mở chrome", "open Chrome", or open a URL in a visible browser, use OpenBrowser. Do NOT use Bash, Get-Command, Start-Process, cmd start, or shell app launch commands for this.`,
-      `Browser capability: You CAN browse URLs! Use WebFetch only for static page text extraction. For live Chrome debugging and visible browser control, prefer MCP server "chrome-devtools" when configured: use MCP tool "new_page" or "navigate_page", then "take_snapshot", "click", "fill"/"fill_form", "take_screenshot", "evaluate_script", "list_console_messages", "list_network_requests", or performance trace tools. BrowserDebug is headless fallback only when chrome-devtools MCP is unavailable or the user explicitly asks for headless smoke/debug.`,
-      `Browser interaction rule: if the user asks to click, press, fill, select, submit, open a web app path, or inspect page-by-page data, WebFetch is not enough and BrowserDebug is not user-visible. Use chrome-devtools MCP so the user can watch the normal Chrome client. Never claim "đã bấm/đã điền/đã mở/đã kiểm tra" from prose alone.`,
+      `Browser capability: You CAN browse URLs! Use WebFetch only for static page text extraction. For live Chrome debugging and visible browser control, prefer MCP server "chrome-devtools" when configured: use MCP tool "new_page" or "navigate_page", then "take_snapshot", "click", "fill"/"fill_form", "take_screenshot", "evaluate_script", "list_console_messages", "list_network_requests", or performance trace tools. If MCP is unavailable, use VisibleBrowser for real visible Puppeteer control. BrowserDebug is headless fallback only when visible control is unnecessary.`,
+      `Browser interaction rule: if the user asks to click, press, fill, select, submit, open a web app path, or inspect page-by-page data, WebFetch is not enough and BrowserDebug is not user-visible. Use chrome-devtools MCP or VisibleBrowser so the user can watch a normal browser. Never claim "đã bấm/đã điền/đã mở/đã kiểm tra" from prose alone.`,
       `When a task touches coding, agents, UI, brand, or design, inspect the relevant required local resource in depth before deciding.`,
       `If the user asks you to modify, run, inspect, check, publish, commit, or otherwise act on the project, you MUST use tools. Do not claim completion without a tool result from this turn.`,
+      ``,
+      buildCodingMasteryContract(),
+      ``,
+      buildHermesCoreContract(),
       ``,
       `## Debug Excellence`,
       `For bugs, crashes, test failures, or "not working": identify the first hard failure, reproduce or inspect logs, trace the exact runtime path, patch the smallest root cause, and verify with the closest command. For frontend/runtime UI issues with a URL/dev server, prefer chrome-devtools MCP in visible Chrome; use BrowserDebug only as a headless fallback.`,
@@ -135,7 +157,7 @@ export class PromptBuilder {
       `## Session`,
       `Working directory: ${this.projectPath}`,
       `Current session: ${this.session?.getSessionId?.()?.substring(0, 8) || 'unknown'}`,
-      `${requiredResourcesStr}${memoryStr}${plansStr}${skillsStr}${workflowStr}${blueprintStr}${startupPlanStr}${sessionSignalsStr}`,
+      `${requiredResourcesStr}${resourceProfileStr}${memoryStr}${plansStr}${skillsStr}${workflowStr}${blueprintStr}${startupPlanStr}${sessionSignalsStr}`,
       context ? `\n## Project Context\n${this._compactText(context, projectContextBudget, 'project context')}` : '',
       ``,
       `Be helpful, be precise, and get things done. Always respond in Vietnamese.`,
@@ -145,8 +167,12 @@ export class PromptBuilder {
   buildFastSystemPrompt() {
     const memories = this.session?.getMemory?.() || [];
     const requiredLocalResources = this.getRequiredLocalResources();
+    const resourceApplicationProfile = this.getResourceApplicationProfile();
     const requiredResourcesStr = requiredLocalResources
       ? `\nQuy tac resource bat buoc:\n${this._compactText(requiredLocalResources, 900, 'required local resources')}`
+      : '';
+    const resourceProfileStr = resourceApplicationProfile
+      ? `\nResource profile tu dong nap:\n${this._compactText(resourceApplicationProfile, 1100, 'resource application profile')}`
       : '';
     const memoryStr = memories.length > 0
       ? `\nContext nhớ ngắn:\n${this._summarizePrompts(memories.slice(-8), {
@@ -166,6 +192,7 @@ export class PromptBuilder {
       'Nếu có ảnh/screenshot đính kèm hoặc paste từ clipboard, phân tích trực tiếp ảnh đó.',
       'Luôn tuân thủ Required Local Resource Rules nếu có; không hạ chất lượng theo model.',
       requiredResourcesStr,
+      resourceProfileStr,
       memoryStr,
     ].filter(Boolean).join('\n');
   }
@@ -175,12 +202,16 @@ export class PromptBuilder {
     const plans = this.session?.getPlans?.() || [];
     const sessionContext = this.session?.getContext?.() || {};
     const requiredLocalResources = this.getRequiredLocalResources();
+    const resourceApplicationProfile = this.getResourceApplicationProfile();
     const scale = getModelBudgetMultiplier(this.ai?._modelTier || '');
     const projectContextBudget = Math.round(3200 * (scale || 1));
 
     const memoryStr = memories.length > 0 ? this._formatMemories(memories, { maxTotalChars: Math.round(900 * (scale || 1)) }) : '';
     const requiredResourcesStr = requiredLocalResources
       ? `\n## Required Local Resource Rules\n${this._compactText(requiredLocalResources, Math.round(1600 * (scale || 1)), 'required local resources')}`
+      : '';
+    const resourceProfileStr = resourceApplicationProfile
+      ? `\n## Auto-loaded Resource Application Profile\n${this._compactText(resourceApplicationProfile, Math.round(2200 * (scale || 1)), 'resource application profile')}`
       : '';
     const plansStr = plans.length > 0 ? this._formatPlans(plans, { maxTotalChars: Math.round(900 * (scale || 1)) }) : '';
     const skillsStr = Array.isArray(sessionContext.activeSkills) && sessionContext.activeSkills.length > 0
@@ -195,7 +226,7 @@ export class PromptBuilder {
       review: 'You are a Winter review subagent. Critique the request or implementation with specific issues, edge cases, and concrete improvements.',
       debug: 'You are a Winter debugging subagent. Reproduce or inspect the exact failing path, isolate the first hard blocker, patch the smallest root cause, and verify with the closest test/build/browser smoke.',
       research: 'You are a Winter research subagent. Gather the important facts, compare options, and summarize only what matters.',
-      browser: `You are a Winter browser subagent. Bạn CÓ QUYỀN sử dụng chrome-devtools MCP để thao tác Chrome visible cho user xem: mở URL, click, fill form, snapshot, screenshot, đọc console/network. Dùng BrowserDebug chỉ khi cần headless fallback.`,
+      browser: `You are a Winter browser subagent. Bạn CÓ QUYỀN sử dụng chrome-devtools MCP hoặc VisibleBrowser để thao tác browser visible cho user xem: mở URL, click, fill form, snapshot, screenshot, đọc console/network. Dùng BrowserDebug chỉ khi cần headless fallback.`,
     };
 
     const rolePrompt = rolePrompts[role] || 'You are a Winter coding subagent. Solve the task directly, use tools when needed, and return a concise result.';
@@ -210,14 +241,15 @@ export class PromptBuilder {
       '3. [DEBUG EXCELLENCE]: Reproduce or inspect the failing path first, isolate the first hard blocker, patch root cause, and verify with the closest test/build/browser smoke.',
       '4. [DESIGN EXCELLENCE]: Use rich aesthetics. Default to modern UI frameworks if applicable. Never output plain, ugly HTML/CSS. Ensure responsive, premium feel with micro-animations.',
       '5. [CODE QUALITY]: Write clean, modular, SOLID code. Check for syntax errors carefully. Do not generate incomplete code blocks.',
-      '6. [NO HALLUCINATION]: If you don\'t know, use tools (Grep/Read/Web/chrome-devtools MCP/BrowserDebug) to find out. Do not guess file paths or APIs.',
+      '6. [NO HALLUCINATION]: If you don\'t know, use tools (Grep/Read/Web/chrome-devtools MCP/VisibleBrowser/BrowserDebug) to find out. Do not guess file paths or APIs.',
       '7. [TOOL EXECUTION FIRST]: You DO have file tools. Use Write to create/overwrite files and Edit to patch files. Never say there is no write tool.',
       '8. [IMAGE INPUTS]: If an image is attached or pasted, analyze it directly and use it as evidence for UI/debug/design decisions.',
       '',
       rolePrompt,
       '',
       '## Tool Rules',
-      '- Canonical tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, OpenBrowser, BrowserDebug, WebFetch, WebSearch, MCP.',
+      '- Canonical tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, OpenBrowser, VisibleBrowser, BrowserDebug, WebFetch, WebSearch, MCP, Agent, DelegateTask, ParallelAgent.',
+      '- For multi-agent work, use DelegateTask for one isolated subagent or ParallelAgent for independent concurrent subagents; do not pretend delegation happened without tool evidence.',
       '- If native tool calls are unavailable, output exactly one fallback tool call and no prose: <invoke name="Read"><parameter name="path">README.md</parameter></invoke> OR {"tool":"Read","arguments":{"path":"README.md"}} OR CALL_TOOL Read {"path":"README.md"}.',
       '- Treat skills, memories, bundled resources, local project rules, and the tool list as operational context. Use them proactively when relevant.',
       `- Runtime environment:\n${runtimeSummary}`,
@@ -225,11 +257,16 @@ export class PromptBuilder {
       '- For action requests, use tools before claiming anything is done. Never claim files changed, tests ran, or checks passed unless this conversation contains the matching tool result.',
       '- If a tool call fails because of an unknown alias, call the canonical tool name next.',
       '- Always start with a brief plan, then refine it when new facts appear.',
+      '- Coding mastery: inspect entrypoint/callers/callees/tests first, preserve invariants, patch minimally, review the diff, and verify with the closest command.',
+      '',
+      buildCodingMasteryContract({ compact: true }),
+      '',
+      buildHermesCoreContract({ compact: true }),
       '',
       '## Project',
       `Working directory: ${this.projectPath}`,
       `Current session: ${this.session?.getSessionId?.()?.substring(0, 8) || 'unknown'}`,
-      `${requiredResourcesStr}${memoryStr}${plansStr}${skillsStr}${startupPlanStr}`,
+      `${requiredResourcesStr}${resourceProfileStr}${memoryStr}${plansStr}${skillsStr}${startupPlanStr}`,
       context ? `\n## Project Context\n${this._compactText(context, projectContextBudget, 'project context')}` : '',
     ].join('\n');
   }

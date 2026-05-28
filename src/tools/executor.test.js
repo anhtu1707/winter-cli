@@ -33,6 +33,28 @@ test('browser launch requests use OpenBrowser instead of shell launch commands',
   assert.match(definition.description, /mở chrome/);
 });
 
+test('VisibleBrowser is exposed for real visible browser control', async () => {
+  const tools = new ToolExecutor({ projectPath: process.cwd() });
+
+  const definition = tools.getToolDefinitions().find(tool => tool.name === 'VisibleBrowser');
+  assert.ok(definition);
+  assert.match(definition.description, /real visible/);
+  assert.equal(tools.normalizeToolName('browser_control'), 'VisibleBrowser');
+  assert.equal(tools.normalizeToolName('chromecontrol'), 'VisibleBrowser');
+  assert.deepEqual(tools.normalizeToolInput('VisibleBrowser', 'https://example.com'), { url: 'https://example.com' });
+
+  const preflight = await tools.preflightValidateToolArgs('VisibleBrowser', {
+    href: 'https://example.com',
+    action: 'click',
+    selector: 'button',
+  }, { cwd: process.cwd() });
+
+  assert.equal(preflight.success, true);
+  assert.equal(preflight.args.url, 'https://example.com');
+  assert.equal(preflight.args.action, 'click');
+  assert.equal(preflight.args.selector, 'button');
+});
+
 test('Bash rejects npm run scripts that are not defined in package.json', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'winter-missing-script-'));
   await writeFile(path.join(root, 'package.json'), JSON.stringify({
@@ -120,6 +142,68 @@ test('unknown tools return recovery guidance instead of a bare failure', async (
   assert.equal(result.error, 'Unknown tool: bad_tool_name');
   assert(result.availableTools.includes('Write'));
   assert.match(result.recovery, /Write/);
+});
+
+test('agent delegation tools are exposed and preflight aliases normalize goals', async () => {
+  const tools = new ToolExecutor({ projectPath: process.cwd() });
+  const names = tools.getToolDefinitions().map(tool => tool.name);
+
+  assert.ok(names.includes('Agent'));
+  assert.ok(names.includes('DelegateTask'));
+  assert.ok(names.includes('ParallelAgent'));
+  assert.equal(tools.normalizeToolName('delegate'), 'DelegateTask');
+  assert.equal(tools.normalizeToolName('multi_agent'), 'ParallelAgent');
+  assert.deepEqual(tools.normalizeToolInput('DelegateTask', 'inspect bug'), { task: 'inspect bug' });
+
+  const delegated = await tools.preflightValidateToolArgs('DelegateTask', { goal: 'inspect bug' }, { cwd: process.cwd() });
+  assert.equal(delegated.success, true);
+  assert.equal(delegated.args.task, 'inspect bug');
+
+  const parallel = await tools.preflightValidateToolArgs('ParallelAgent', { tasks: [{ goal: 'a' }] }, { cwd: process.cwd() });
+  assert.equal(parallel.success, true);
+});
+
+test('MCP timeout returns targeted recovery and resets cached client', async () => {
+  const config = {
+    async load() {
+      return {
+        mcp: { servers: [{ name: 'chrome-devtools', command: 'node', args: ['server.js'] }] },
+        permissions: { allowlist: { mcpServers: ['chrome-devtools'] } },
+        reliability: { retryAttempts: 3, retryBaseDelayMs: 0 },
+      };
+    },
+  };
+  const tools = new ToolExecutor({ projectPath: process.cwd(), config });
+  let calls = 0;
+  let closed = false;
+  tools.mcpClients.set('chrome-devtools', {
+    async callTool() {
+      calls += 1;
+      const error = new Error('MCP request timed out after 30000ms: tools/call on chrome-devtools');
+      error.code = 'MCP_REQUEST_TIMEOUT';
+      error.timeoutMs = 30000;
+      throw error;
+    },
+    async close() {
+      closed = true;
+    },
+  });
+
+  const result = await tools.execute('MCP', {
+    server: 'chrome-devtools',
+    tool: 'take_snapshot',
+    arguments: {},
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(closed, true);
+  assert.equal(tools.mcpClients.has('chrome-devtools'), false);
+  assert.equal(result.success, false);
+  assert.equal(result.code, 'MCP_REQUEST_TIMEOUT');
+  assert.equal(result.server, 'chrome-devtools');
+  assert.equal(result.tool, 'take_snapshot');
+  assert.match(result.recovery, /Do not blindly retry/);
+  assert.match(result.recovery, /\/mcp tools chrome-devtools/);
 });
 
 test('tool names accept common model aliases', () => {
@@ -218,9 +302,8 @@ test('Bash supports model-style heredoc file writes', async () => {
   assert.equal(read.content, 'const ok = true;\n');
 });
 
-test('Windows Bash runs PowerShell commands and translates ls flags', async (t) => {
+test('Windows Bash runs PowerShell commands and translates ls flags', async () => {
   if (process.platform !== 'win32') {
-    t.skip('Windows-only shell behavior');
     return;
   }
 
@@ -238,9 +321,8 @@ test('Windows Bash runs PowerShell commands and translates ls flags', async (t) 
   assert.match(ps.stdout, /a\.txt/);
 });
 
-test('Windows Bash accepts explicit cmd and PowerShell shells', async (t) => {
+test('Windows Bash accepts explicit cmd and PowerShell shells', async () => {
   if (process.platform !== 'win32') {
-    t.skip('Windows-only shell behavior');
     return;
   }
 
@@ -264,9 +346,8 @@ test('Windows Bash accepts explicit cmd and PowerShell shells', async (t) => {
   assert.equal(ps.shell, 'powershell');
 });
 
-test('Windows Bash auto-detects cmd chaining syntax', async (t) => {
+test('Windows Bash auto-detects cmd chaining syntax', async () => {
   if (process.platform !== 'win32') {
-    t.skip('Windows-only shell behavior');
     return;
   }
 
@@ -280,9 +361,8 @@ test('Windows Bash auto-detects cmd chaining syntax', async (t) => {
   assert.match(result.stdout, /auto/);
 });
 
-test('Windows Bash allows PowerShell -Format arguments', async (t) => {
+test('Windows Bash allows PowerShell -Format arguments', async () => {
   if (process.platform !== 'win32') {
-    t.skip('Windows-only shell behavior');
     return;
   }
 
@@ -413,17 +493,12 @@ test('WebSearch returns parsed search results', async () => {
   }
 });
 
-test('BrowserDebug can inspect a simple data URL', async (t) => {
+test('BrowserDebug can inspect a simple data URL', async () => {
   const tools = new ToolExecutor({ projectPath: process.cwd() });
   const result = await tools.execute('BrowserDebug', {
     url: 'data:text/html,<html><body><h1 id="title">Winter</h1><script>console.error("boom")</script></body></html>',
     action: 'document.querySelector("#title").textContent',
   });
-
-  if (result.success === false) {
-    t.skip(`BrowserDebug unavailable in this environment: ${result.error}`);
-    return;
-  }
 
   assert.equal(result.success, true);
   assert.equal(result.actionResult, 'Winter');

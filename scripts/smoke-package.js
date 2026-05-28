@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -14,7 +14,7 @@ const MAX_BUFFER = 50 * 1024 * 1024;
 
 function run(command, args, options = {}) {
   const label = [path.basename(command), ...args].join(' ');
-  console.log(`\n› ${label}`);
+  console.log(`\n> ${label}`);
   return execFileSync(command, args, {
     cwd: root,
     encoding: 'utf8',
@@ -27,7 +27,7 @@ function run(command, args, options = {}) {
 function runNpm(args) {
   if (!isWin) return run('npm', args);
   const commandLine = ['npm', ...args].join(' ');
-  console.log(`\n› ${commandLine}`);
+  console.log(`\n> ${commandLine}`);
   return execFileSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', commandLine], {
     cwd: root,
     encoding: 'utf8',
@@ -39,6 +39,12 @@ function runNpm(args) {
 function assertIncludes(output, expected, label) {
   if (!output.includes(expected)) {
     throw new Error(`${label} did not include ${JSON.stringify(expected)}. Output:\n${output}`);
+  }
+}
+
+function assertExists(filePath, label) {
+  if (!existsSync(filePath)) {
+    throw new Error(`${label} is missing from installed package: ${filePath}`);
   }
 }
 
@@ -75,6 +81,34 @@ try {
     throw new Error(`npm pack dry-run did not return a package filename. Output:\n${packOutput}`);
   }
   console.log(`\nPackage dry-run passed: ${pack.filename} (${pack.files?.length || 0} files)`);
+
+  const tempRoot = mkdtempSync(path.join(tmpdir(), 'winter-package-smoke-'));
+  try {
+    const realPackOutput = runNpm(['pack', '--json', '--pack-destination', tempRoot]);
+    const [realPack] = JSON.parse(realPackOutput);
+    const tarball = path.join(tempRoot, realPack.filename);
+    assertExists(tarball, 'packed tarball');
+
+    const installRoot = path.join(tempRoot, 'install');
+    printOutput(runNpm(['install', '--prefix', installRoot, tarball, '--ignore-scripts']));
+    const installedRoot = path.join(installRoot, 'node_modules', 'winter-super-cli');
+    const installedBin = path.join(installedRoot, 'bin', 'winter.js');
+
+    assertExists(installedBin, 'installed CLI entrypoint');
+    assertExists(path.join(installedRoot, 'resources', 'local', 'gsap-skills'), 'gsap skills resource');
+    assertExists(path.join(installedRoot, 'resources', 'local', 'hermes-agent-core'), 'Hermes core resource');
+    assertExists(path.join(installedRoot, 'resources', 'local', 'page-agent'), 'Page Agent resource');
+    assertExists(path.join(installedRoot, 'resources', 'local', 'ecc'), 'ECC resource');
+    assertExists(path.join(installedRoot, 'skills', 'coding.md'), 'packaged coding skill');
+    assertExists(path.join(installedRoot, 'rules', 'default.md'), 'packaged rule');
+
+    const installedVersion = run(nodeCmd, [installedBin, '--version'], { cwd: installRoot });
+    printOutput(installedVersion);
+    assertIncludes(installedVersion, 'Winter CLI v', 'installed package version smoke');
+    console.log('\nInstalled package smoke passed.');
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
 
   console.log('\nSmoke package gate passed.');
 } catch (error) {

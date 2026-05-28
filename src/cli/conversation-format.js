@@ -93,6 +93,11 @@ export function formatToolResultForConsole(toolName, result) {
       return `Fetched ${result.url} (${result.length} chars)`;
     case 'WebSearch':
       return `Found ${result.count} result(s)`;
+    case 'Agent':
+    case 'DelegateTask':
+      return `${result.status || 'completed'} ${result.agentId || ''}: ${result.summary || result.finalContent || ''}`.trim();
+    case 'ParallelAgent':
+      return `${result.status || 'completed'} ${result.count || 0} agent(s): ${result.summary || ''}`.trim();
     default:
       return result.message || '';
   }

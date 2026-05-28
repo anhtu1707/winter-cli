@@ -40,3 +40,26 @@ test('PermissionManager can persist tool and MCP allowlists', async () => {
   assert(savedConfig.permissions.allowlist.tools.includes('Bash'));
   assert(savedConfig.permissions.allowlist.mcpServers.includes('workspace'));
 });
+
+test('PermissionManager full access allows tools and MCP servers without allowlist', async () => {
+  const config = {
+    load: async () => ({
+      sandbox: { enabled: false, restrictToWorkspace: false },
+      permissions: {
+        promptByDefault: false,
+        allowlist: {
+          tools: [],
+          commands: [],
+          mcpServers: [],
+        },
+      },
+    }),
+    save: async () => {},
+  };
+
+  const manager = new PermissionManager(config);
+
+  assert.equal(await manager.isAllowedTool('Bash'), true);
+  assert.equal(await manager.shouldPromptForToolPermission('Bash'), false);
+  assert.equal(await manager.isMcpServerAllowed('unlisted-server'), true);
+});

@@ -68,3 +68,36 @@ test('Bash allows configured command allowlist entries', async () => {
   assert.equal(result.success, true);
   assert.match(result.stdout, /ok/);
 });
+
+test('Bash safe mode allows common network diagnostics', async () => {
+  const tools = createTools();
+
+  assert.equal((await tools.validateBashCommandSafety('ping 127.0.0.1')).success, true);
+  assert.equal((await tools.validateBashCommandSafety('Test-Connection 127.0.0.1 -Count 1')).success, true);
+  assert.equal((await tools.validateBashCommandSafety('curl https://example.com')).success, true);
+  assert.equal((await tools.validateBashCommandSafety('Invoke-WebRequest https://example.com')).success, true);
+  assert.equal((await tools.validateBashCommandSafety('speedtest')).success, true);
+  assert.equal((await tools.validateBashCommandSafety('Measure-Command { Test-Connection 1.1.1.1 -Count 1 }')).success, true);
+});
+
+test('Bash full access disables command allowlist but keeps destructive blocks', async () => {
+  const tools = createTools({
+    sandbox: {
+      enabled: false,
+      restrictToWorkspace: false,
+      allowedCommands: ['node'],
+    },
+    permissions: {
+      allowlist: {
+        commands: [],
+      },
+    },
+  });
+
+  assert.equal((await tools.validateBashCommandSafety('whoami')).success, true);
+  assert.equal((await tools.validateBashCommandSafety('Test-Connection 127.0.0.1 -Count 1')).success, true);
+
+  const destructive = await tools.validateBashCommandSafety('git reset --hard HEAD');
+  assert.equal(destructive.success, false);
+  assert.match(destructive.error, /git reset --hard/);
+});

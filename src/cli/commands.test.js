@@ -181,7 +181,8 @@ test('tui command renders dashboard in slash and plain command modes', async () 
   }
 
   const output = logs.join('\n');
-  assert.match(output, /Winter will run commands on your behalf/);
+  assert.match(output, /Winter dashboard/);
+  assert.match(output, /Hermes-style agent core/);
   assert.match(output, /gpt-test/);
   assert.doesNotMatch(output, /Unknown slash command/);
 });
@@ -324,9 +325,11 @@ test('mcp and permissions commands update config state', async () => {
     load: async () => ({
       mcp: { servers: [] },
       permissions: { promptByDefault: true, allowlist: { tools: [], commands: [], mcpServers: [] } },
+      sandbox: { enabled: true, restrictToWorkspace: true },
     }),
     save: async value => saved.push(value),
     setPermissionAllowlist: async value => saved.push(value),
+    setFullAccess: async value => saved.push({ fullAccess: value }),
   };
   const parser = createParser();
   parser.config = config;
@@ -339,6 +342,8 @@ test('mcp and permissions commands update config state', async () => {
     await parser.parse(['mcp', 'add', 'workspace', 'node', '["src/mcp/server.js"]']);
     await parser.parse(['mcp', 'preset', 'chrome-devtools', '--headless', '--isolated']);
     await parser.parse(['permissions', 'allow', 'tool', 'Bash']);
+    await parser.parse(['permissions', 'full', 'on']);
+    await parser.parse(['permissions', 'list']);
   } finally {
     console.log = originalLog;
   }
@@ -347,6 +352,8 @@ test('mcp and permissions commands update config state', async () => {
   assert(logs.some(line => line.includes('Added MCP server')));
   assert(logs.some(line => line.includes('Installed MCP preset: chrome-devtools')));
   assert(logs.some(line => line.includes('Allowed tool')));
+  assert(logs.some(line => line.includes('Full access enabled')));
+  assert(logs.some(line => line.includes('Full access: off')));
 
   const chromeConfig = saved.find(value => value?.mcp?.servers?.some(server => server.name === 'chrome-devtools'));
   assert.ok(chromeConfig);
@@ -355,6 +362,7 @@ test('mcp and permissions commands update config state', async () => {
   assert.ok(chromeServer.args.includes('--headless'));
   assert.ok(chromeServer.args.includes('--isolated'));
   assert.ok(chromeConfig.permissions.allowlist.mcpServers.includes('chrome-devtools'));
+  assert(saved.some(value => value?.fullAccess === true));
 });
 
 test('ecc and page-agent slash commands browse bundled resources', async () => {

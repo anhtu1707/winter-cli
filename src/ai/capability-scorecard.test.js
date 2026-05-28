@@ -50,8 +50,12 @@ test('capability scorecard formatting exposes target and area names', async () =
   const report = await assessWinterCapabilities({ projectPath: process.cwd() });
   const output = formatCapabilityScorecard(report);
 
+  assert.equal(report.status, 'ready');
+  assert.equal(report.gaps.length, 0);
   assert.match(output, /Winter capability scorecard/);
   assert.match(output, /target/);
   assert.match(output, /Agent runtime loop/);
   assert.match(output, /Codebase intelligence/);
+  assert.match(output, /Debug workflow/);
+  assert.match(output, /All tracked capability gates are present/);
 });

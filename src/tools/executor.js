@@ -30,7 +30,14 @@ export class ToolExecutor {
   constructor(repl) {
     this.repl = repl;
     this.projectPath = repl?.projectPath || process.cwd();
-    this.allowedCommands = ['git', 'npm', 'node', 'python', 'code', 'pnpm', 'yarn', 'bun', 'pip', 'cargo', 'rustc', 'echo', 'printf', 'cat', 'ls', 'dir', 'type', 'copy', 'mkdir', 'get-childitem', 'set-content', 'get-content', 'test-path', 'get-date'];
+    this.allowedCommands = [
+      'git', 'npm', 'npx', 'node', 'python', 'code', 'pnpm', 'yarn', 'bun', 'pip', 'cargo', 'rustc',
+      'echo', 'printf', 'cat', 'ls', 'dir', 'type', 'copy', 'mkdir', 'get-childitem', 'set-content',
+      'get-content', 'test-path', 'get-date',
+      'ping', 'test-connection', 'curl', 'wget', 'iwr', 'irm', 'invoke-webrequest', 'invoke-restmethod',
+      'nslookup', 'resolve-dnsname', 'tracert', 'traceroute', 'pathping', 'dig', 'ipconfig', 'ifconfig',
+      'ip', 'netstat', 'speedtest', 'speedtest-cli', 'measure-command',
+    ];
     this.blockedPatterns = [
       { pattern: /\brm\s+-[^\n;|&]*r[^\n;|&]*f\b|\brm\s+-[^\n;|&]*f[^\n;|&]*r\b/i, label: 'rm -rf' },
       { pattern: /\bremove-item\b[^\n;|&]*(?:-recurse\b[^\n;|&]*-force\b|-force\b[^\n;|&]*-recurse\b)/i, label: 'Remove-Item -Recurse -Force' },
@@ -334,16 +341,66 @@ export class ToolExecutor {
       {
         type: 'function',
         name: 'Agent',
-        description: 'Spawn a subagent to execute a complex task with planning, execution, and verification workflow.',
+        description: 'Spawn and await a real isolated subagent conversation with scoped tools, timeout, execution, verification, and result passing.',
         parameters: {
           type: 'object',
           properties: {
             task: { type: 'string', description: 'Task description for the agent' },
+            role: { type: 'string', description: 'Agent role/profile, e.g. general, debug, review, design, research, swe' },
+            context: { type: 'string', description: 'Parent context to pass into the subagent' },
+            tools: { type: 'array', items: { type: 'string' }, description: 'Optional restricted tool allowlist for this subagent' },
+            process_isolation: { type: 'boolean', description: 'Run subagent in a child process. Defaults true in live REPL.' },
             max_steps: { type: 'number', description: 'Maximum execution steps (default: 10, max: 25)' },
+            timeout_ms: { type: 'number', description: 'Timeout for the subagent run' },
             provider: { type: 'string', description: 'AI provider to use for this agent' },
             cwd: { type: 'string', description: 'Working directory' },
           },
           required: ['task']
+        }
+      },
+      {
+        type: 'function',
+        name: 'DelegateTask',
+        description: 'Delegate a task to a real subagent and wait for summary, changed files, tool evidence, usage, and errors. Alias of Agent with clearer delegation semantics.',
+        parameters: {
+          type: 'object',
+          properties: {
+            goal: { type: 'string', description: 'Goal or task for the delegated subagent' },
+            task: { type: 'string', description: 'Task description for the delegated subagent' },
+            role: { type: 'string', description: 'Agent role/profile' },
+            context: { type: 'string', description: 'Parent context to pass into the subagent' },
+            tools: { type: 'array', items: { type: 'string' }, description: 'Restricted tool allowlist' },
+            process_isolation: { type: 'boolean', description: 'Run subagent in a child process. Defaults true in live REPL.' },
+            max_steps: { type: 'number', description: 'Maximum execution steps' },
+            timeout_ms: { type: 'number', description: 'Timeout for the delegated run' },
+            provider: { type: 'string', description: 'AI provider to use for this subagent' },
+            cwd: { type: 'string', description: 'Working directory' },
+          }
+        }
+      },
+      {
+        type: 'function',
+        name: 'ParallelAgent',
+        description: 'Run multiple real delegated subagents concurrently and aggregate their summaries, changed files, tool evidence, and failures.',
+        parameters: {
+          type: 'object',
+          properties: {
+            tasks: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  goal: { type: 'string' },
+                  task: { type: 'string' },
+                  role: { type: 'string' },
+                  tools: { type: 'array', items: { type: 'string' } },
+                }
+              }
+            },
+            concurrency: { type: 'number', description: 'Maximum subagents to run at once, capped at 6' },
+            timeout_ms: { type: 'number', description: 'Timeout per subagent' },
+          },
+          required: ['tasks']
         }
       },
       {
@@ -386,6 +443,25 @@ export class ToolExecutor {
             action: { type: 'string', description: 'Optional JS to evaluate (e.g. document.querySelector("button").click())' }
           },
           required: ['url']
+        }
+      },
+      {
+        type: 'function',
+        name: 'VisibleBrowser',
+        description: 'Launch and control a real visible Chrome/Chromium browser with Puppeteer. Use when the user asks Winter to actually click, type, navigate, inspect, or screenshot a page and chrome-devtools MCP is unavailable. Actions: open, navigate, click, type, evaluate, screenshot, snapshot.',
+        parameters: {
+          type: 'object',
+          properties: {
+            url: { type: 'string', description: 'URL to open or navigate to. Defaults to about:blank.' },
+            action: { type: 'string', description: 'open, navigate, click, type, evaluate, screenshot, or snapshot' },
+            selector: { type: 'string', description: 'CSS selector for click/type/snapshot targeting' },
+            text: { type: 'string', description: 'Text to type for action=type' },
+            script: { type: 'string', description: 'JavaScript expression/function body for action=evaluate' },
+            wait_for: { type: 'string', description: 'Optional CSS selector to wait for after navigation/action' },
+            screenshot_path: { type: 'string', description: 'Optional output PNG path for action=screenshot' },
+            keep_open: { type: 'boolean', description: 'Leave the browser open after action. Default false.' },
+            browser: { type: 'string', description: 'chrome or chromium. Defaults to chrome.' }
+          }
         }
       },
       {
@@ -544,6 +620,8 @@ export class ToolExecutor {
         return await this.parallelExecute(input.tools ?? input.calls ?? [], { cwd });
       case 'BrowserDebug':
         return await this.browserDebug(input.url ?? input.uri, input.action);
+      case 'VisibleBrowser':
+        return await this.visibleBrowser(input, cwd);
       case 'OpenBrowser':
         return await this.openBrowser(input.url ?? input.uri ?? input.href, input.browser);
       case 'WebFetch':
@@ -563,7 +641,35 @@ export class ToolExecutor {
       case 'AskUserQuestion':
         return await this.interactiveTool.askQuestion(input.questions ?? input.question);
       case 'Agent':
-        return await this.agentTool.run(input.task, { maxSteps: input.max_steps ?? input.maxSteps, provider: input.provider, cwd: input.cwd });
+        return await this.agentTool.run(input.task, {
+          role: input.role ?? input.agent,
+          context: input.context,
+          tools: input.tools,
+          processIsolation: input.process_isolation ?? input.processIsolation,
+          maxSteps: input.max_steps ?? input.maxSteps,
+          timeoutMs: input.timeout_ms ?? input.timeoutMs,
+          provider: input.provider,
+          cwd: input.cwd,
+        });
+      case 'DelegateTask':
+        return await this.agentTool.run(input.task ?? input.goal, {
+          role: input.role ?? input.agent,
+          context: input.context,
+          tools: input.tools,
+          processIsolation: input.process_isolation ?? input.processIsolation,
+          maxSteps: input.max_steps ?? input.maxSteps,
+          timeoutMs: input.timeout_ms ?? input.timeoutMs,
+          provider: input.provider,
+          cwd: input.cwd,
+        });
+      case 'ParallelAgent':
+        return await this.agentTool.runParallel(input.tasks, {
+          concurrency: input.concurrency,
+          timeoutMs: input.timeout_ms ?? input.timeoutMs,
+          processIsolation: input.process_isolation ?? input.processIsolation,
+          provider: input.provider,
+          cwd: input.cwd,
+        });
       case 'InsertText':
         return await this.insertTextTool.insert(this.resolveInputPath(input.file_path ?? input.path ?? input.file, cwd), input.insert_text ?? input.text ?? input.content, input);
       case 'StrReplaceAll':
@@ -586,7 +692,7 @@ export class ToolExecutor {
         return {
           success: false,
           error: `Unknown tool: ${toolName}`,
-          availableTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'TaskCreate', 'TaskUpdate', 'TaskList', 'MCP', 'Parallel', 'OpenBrowser', 'BrowserDebug', 'WebFetch', 'WebSearch', 'WebArchive', 'HtmlEffectiveness', 'NotebookRead', 'NotebookEdit', 'TodoWrite', 'TodoList', 'ScheduleWakeup', 'AskUserQuestion', 'Agent', 'InsertText', 'StrReplaceAll'],
+          availableTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'TaskCreate', 'TaskUpdate', 'TaskList', 'MCP', 'Parallel', 'OpenBrowser', 'VisibleBrowser', 'BrowserDebug', 'WebFetch', 'WebSearch', 'WebArchive', 'HtmlEffectiveness', 'NotebookRead', 'NotebookEdit', 'TodoWrite', 'TodoList', 'ScheduleWakeup', 'AskUserQuestion', 'Agent', 'DelegateTask', 'ParallelAgent', 'InsertText', 'StrReplaceAll'],
           recovery: 'Call one of the available tools. For file writes use Write with { "file_path": "...", "content": "..." }. For shell commands use Bash with { "command": "..." }.',
         };
     }
@@ -730,9 +836,9 @@ export class ToolExecutor {
       return { success: true, coerced: true, args: { notebook_path: notebookPath, cell_id: cellId, new_source: newSource } };
     }
 
-    if (toolName === 'WebFetch' || toolName === 'WebArchive' || toolName === 'BrowserDebug') {
+    if (toolName === 'WebFetch' || toolName === 'WebArchive' || toolName === 'BrowserDebug' || toolName === 'VisibleBrowser') {
       const url = pick('url', 'uri', 'href');
-      if (!url) {
+      if (!url && toolName !== 'VisibleBrowser') {
         return { success: false, error: 'url is required', recovery: `Example: ${toolName} {"url":"https://example.com"}` };
       }
       const next = { ...args, url };
@@ -743,6 +849,21 @@ export class ToolExecutor {
       const url = pick('url', 'uri', 'href') || 'about:blank';
       const browser = pick('browser', 'app') || 'chrome';
       return { success: true, coerced: true, args: { ...args, url, browser } };
+    }
+
+    if (toolName === 'Agent' || toolName === 'DelegateTask') {
+      const task = pick('task', 'goal', 'prompt', 'description');
+      if (!task) {
+        return { success: false, error: 'task is required', recovery: `Example: ${toolName} {"task":"Inspect the failing test and report the first blocker"}` };
+      }
+      return { success: true, coerced: true, args: { ...args, task } };
+    }
+
+    if (toolName === 'ParallelAgent') {
+      if (!Array.isArray(args.tasks) || args.tasks.length === 0) {
+        return { success: false, error: 'tasks array is required', recovery: 'Example: ParallelAgent {"tasks":[{"goal":"Review auth"},{"goal":"Inspect tests"}]}' };
+      }
+      return { success: true, coerced: true, args };
     }
 
     if (toolName === 'WebSearch') {
@@ -783,6 +904,9 @@ export class ToolExecutor {
     const cfg = await this.getRuntimeConfig();
     const permissionCommands = cfg.permissions?.allowlist?.commands || [];
     const sandbox = cfg.sandbox || {};
+    if (sandbox.enabled === false) {
+      return { success: true };
+    }
     const sandboxCommands = sandbox.enabled === false ? [] : (sandbox.allowedCommands || this.allowedCommands);
     const allowed = new Set([
       ...this.allowedCommands,
@@ -842,14 +966,19 @@ export class ToolExecutor {
     const summary = {
       success: result.success !== false,
     };
-    for (const key of ['error', 'path', 'count', 'exitCode', 'server', 'tool']) {
+    for (const key of ['error', 'path', 'count', 'exitCode', 'server', 'tool', 'url', 'title', 'action', 'visible', 'controlled', 'keptOpen', 'agentId', 'role', 'status', 'summary', 'processIsolated', 'childPid']) {
       if (result[key] !== undefined) summary[key] = result[key];
     }
     if (typeof result.stdout === 'string') summary.stdout = result.stdout.slice(0, 1000);
     if (typeof result.stderr === 'string') summary.stderr = result.stderr.slice(0, 1000);
     if (typeof result.content === 'string') summary.content = result.content.slice(0, 1000);
+    if (typeof result.domSnippet === 'string') summary.domSnippet = result.domSnippet.slice(0, 1000);
+    if (Array.isArray(result.consoleErrors)) summary.consoleErrors = result.consoleErrors.slice(-10);
+    if (Array.isArray(result.networkErrors)) summary.networkErrors = result.networkErrors.slice(-10);
     if (Array.isArray(result.files)) summary.files = result.files.slice(0, 20);
     if (Array.isArray(result.matches)) summary.matches = result.matches.slice(0, 20);
+    if (Array.isArray(result.changedFiles)) summary.changedFiles = result.changedFiles.slice(0, 20);
+    if (Array.isArray(result.toolSummaries)) summary.toolSummaries = result.toolSummaries.slice(0, 20);
     return summary;
   }
 
@@ -907,10 +1036,32 @@ export class ToolExecutor {
 
     const retryPolicy = await this.getRetryPolicy();
     try {
-      const result = await withRetry(() => client.callTool(toolName, argumentsObject), retryPolicy);
+      const result = await withRetry(() => client.callTool(toolName, argumentsObject), {
+        ...retryPolicy,
+        retryable: error => error?.code !== 'MCP_REQUEST_TIMEOUT',
+      });
       return { success: true, server: serverName, tool: toolName, result };
     } catch (error) {
-      return { success: false, error: error.message, server: serverName, tool: toolName, recovery: 'Inspect the MCP server error, verify the tool name and arguments, then retry with corrected arguments.' };
+      if (error?.code === 'MCP_REQUEST_TIMEOUT') {
+        await client.close();
+        this.mcpClients.delete(serverName);
+        return {
+          success: false,
+          error: error.message,
+          code: error.code,
+          server: serverName,
+          tool: toolName,
+          timeoutMs: error.timeoutMs,
+          recovery: `MCP server "${serverName}" did not answer "${toolName}" before the timeout. Do not blindly retry the same call. First run /mcp tools ${serverName} to confirm the server responds, narrow the tool arguments, or increase this server's requestTimeoutMs if the tool is expected to be slow.`,
+        };
+      }
+      return {
+        success: false,
+        error: error.message,
+        server: serverName,
+        tool: toolName,
+        recovery: `MCP tool "${toolName}" failed on server "${serverName}". Check the server stderr/logs and compare the arguments with /mcp tools ${serverName}; retry only after correcting the failing input.`,
+      };
     }
   }
 
@@ -1007,6 +1158,15 @@ export class ToolExecutor {
       browseropen: 'OpenBrowser',
       openchrome: 'OpenBrowser',
       launchchrome: 'OpenBrowser',
+      visiblebrowser: 'VisibleBrowser',
+      visible_browser: 'VisibleBrowser',
+      browsercontrol: 'VisibleBrowser',
+      browser_control: 'VisibleBrowser',
+      browseraction: 'VisibleBrowser',
+      chromecontrol: 'VisibleBrowser',
+      chrome_control: 'VisibleBrowser',
+      clickbrowser: 'VisibleBrowser',
+      browserclick: 'VisibleBrowser',
       browserdebug: 'BrowserDebug',
       browser: 'BrowserDebug',
       browserinspect: 'BrowserDebug',
@@ -1049,6 +1209,13 @@ export class ToolExecutor {
       agent: 'Agent',
       subagent: 'Agent',
       agentrun: 'Agent',
+      delegatetask: 'DelegateTask',
+      delegate: 'DelegateTask',
+      taskdelegate: 'DelegateTask',
+      spawnagent: 'DelegateTask',
+      parallelagent: 'ParallelAgent',
+      multiagent: 'ParallelAgent',
+      parallelagents: 'ParallelAgent',
     };
     return aliases[normalized] || raw;
   }
@@ -1078,6 +1245,7 @@ export class ToolExecutor {
       case 'WebFetch':
       case 'WebArchive':
       case 'BrowserDebug':
+      case 'VisibleBrowser':
         return { url: value };
       case 'TaskCreate':
       case 'TodoWrite':
@@ -1085,6 +1253,7 @@ export class ToolExecutor {
       case 'ScheduleWakeup':
         return { prompt: value };
       case 'Agent':
+      case 'DelegateTask':
         return { task: value };
       default:
         return { input: value };
@@ -2106,6 +2275,138 @@ export class ToolExecutor {
       };
     } catch (e) {
       return { success: false, error: e.message, url, recovery: 'Check that the dev server/page is reachable, then retry BrowserDebug with a valid URL and smaller action.' };
+    }
+  }
+
+  async visibleBrowser(input = {}, cwd = this.projectPath) {
+    const url = String(input.url ?? input.uri ?? input.href ?? 'about:blank');
+    const action = String(input.action || (url ? 'open' : 'snapshot')).toLowerCase();
+    const selector = input.selector || input.css || input.target;
+    const text = input.text ?? input.value ?? input.input;
+    const script = input.script ?? input.js ?? input.code;
+    const waitFor = input.wait_for ?? input.waitFor;
+    const keepOpen = input.keep_open === true || input.keepOpen === true;
+    const browserName = String(input.browser || 'chrome').toLowerCase();
+    const screenshotPath = input.screenshot_path ?? input.screenshotPath;
+
+    let puppeteer;
+    try {
+      puppeteer = (await import('puppeteer')).default;
+    } catch {
+      return {
+        success: false,
+        error: 'Thư viện puppeteer chưa được cài đặt.',
+        recovery: 'Run Bash {"command":"npm install puppeteer --no-save"} or configure chrome-devtools MCP, then retry VisibleBrowser.',
+      };
+    }
+
+    let browser;
+    try {
+      const launchOptions = {
+        headless: false,
+        defaultViewport: null,
+        args: ['--start-maximized'],
+      };
+      if (browserName === 'chrome') {
+        launchOptions.channel = 'chrome';
+      }
+
+      browser = await puppeteer.launch(launchOptions).catch(async error => {
+        if (launchOptions.channel) {
+          const fallbackOptions = { ...launchOptions };
+          delete fallbackOptions.channel;
+          return await puppeteer.launch(fallbackOptions);
+        }
+        throw error;
+      });
+
+      const page = await browser.newPage();
+      const consoleLogs = [];
+      const networkErrors = [];
+      page.on('console', msg => {
+        if (['error', 'warning'].includes(msg.type())) {
+          consoleLogs.push(`[${msg.type()}] ${msg.text()}`);
+        }
+      });
+      page.on('requestfailed', request => {
+        networkErrors.push(`${request.method()} ${request.url()} - ${request.failure()?.errorText}`);
+      });
+
+      if (url && url !== 'about:blank') {
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      } else {
+        await page.goto('about:blank', { waitUntil: 'domcontentloaded', timeout: 30000 });
+      }
+
+      let actionResult = null;
+      if (waitFor) {
+        await page.waitForSelector(waitFor, { timeout: 15000 });
+      }
+
+      if (action === 'navigate' || action === 'open') {
+        actionResult = { navigated: page.url() };
+      } else if (action === 'click') {
+        if (!selector) throw new Error('selector is required for VisibleBrowser action=click');
+        await page.waitForSelector(selector, { timeout: 15000 });
+        await page.click(selector);
+        actionResult = { clicked: selector };
+      } else if (action === 'type' || action === 'fill') {
+        if (!selector) throw new Error('selector is required for VisibleBrowser action=type');
+        await page.waitForSelector(selector, { timeout: 15000 });
+        await page.click(selector, { clickCount: 3 });
+        await page.type(selector, String(text ?? ''), { delay: 10 });
+        actionResult = { typed: selector, text: String(text ?? '') };
+      } else if (action === 'evaluate' || action === 'eval') {
+        if (!script) throw new Error('script is required for VisibleBrowser action=evaluate');
+        actionResult = await page.evaluate(source => (0, eval)(source), String(script));
+      } else if (action === 'screenshot') {
+        const outputPath = screenshotPath
+          ? this.resolveInputPath(screenshotPath, cwd)
+          : path.join(cwd, '.winter', `visible-browser-${Date.now()}.png`);
+        await fs.mkdir(path.dirname(outputPath), { recursive: true });
+        await page.screenshot({ path: outputPath, fullPage: true });
+        actionResult = { screenshotPath: outputPath };
+      } else if (action === 'snapshot') {
+        actionResult = selector
+          ? await page.$eval(selector, el => el.outerHTML.slice(0, 3000))
+          : await page.evaluate(() => document.body?.innerHTML?.slice(0, 3000) || '');
+      } else {
+        throw new Error(`Unsupported VisibleBrowser action: ${action}`);
+      }
+
+      const title = await page.title().catch(() => '');
+      const currentUrl = page.url();
+      const domSnippet = await page.evaluate(() => document.body?.innerText?.slice(0, 1600) || '').catch(() => '');
+
+      if (!keepOpen) {
+        await browser.close();
+      }
+
+      return {
+        success: true,
+        visible: true,
+        controlled: true,
+        browser: browserName,
+        action,
+        url: currentUrl,
+        title,
+        actionResult,
+        consoleErrors: consoleLogs.slice(-10),
+        networkErrors: networkErrors.slice(-10),
+        domSnippet,
+        keptOpen: keepOpen,
+      };
+    } catch (error) {
+      if (browser && !keepOpen) {
+        await browser.close().catch(() => {});
+      }
+      return {
+        success: false,
+        error: error.message,
+        url,
+        action,
+        recovery: 'Use a valid URL and CSS selector. If Chrome launch fails, install Chrome or retry with browser:"chromium"; for persistent live control use chrome-devtools MCP.',
+      };
     }
   }
 

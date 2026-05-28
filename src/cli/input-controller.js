@@ -141,8 +141,16 @@ export class WinterInputController {
     if (repl._handlingDirectClipboardPaste || repl.readlineClosed || !repl.running) return false;
     repl._handlingDirectClipboardPaste = true;
     try {
-      const image = await repl.getClipboardImage();
-      if (!image) return false;
+      const payload = typeof repl.getClipboardPayload === 'function'
+        ? await repl.getClipboardPayload()
+        : { type: 'image', image: await repl.getClipboardImage() };
+      if (!payload) return false;
+
+      if (payload.type === 'text') {
+        return await this.handleClipboardText(payload.text);
+      }
+
+      if (!payload.image) return false;
 
       const prompt = (repl.rl?.line || '').trim() || 'Analyze this pasted clipboard image.';
       this.closeSlashMenu();
@@ -153,7 +161,7 @@ export class WinterInputController {
       repl.inputQueue = repl.inputQueue
         .then(async () => {
           repl.closeInputBox?.();
-          await this.processPastedImageTask(prompt, image);
+          await this.processPastedImageTask(prompt, payload.image);
         })
         .catch((error) => {
           repl.closeInputBox?.();
@@ -164,6 +172,52 @@ export class WinterInputController {
     } finally {
       repl._handlingDirectClipboardPaste = false;
     }
+  }
+
+  async handleClipboardText(text = '') {
+    const repl = this.repl;
+    const normalized = repl.normalizePastedText ? repl.normalizePastedText(text) : String(text || '');
+    if (!normalized.trim()) return false;
+
+    const currentLine = String(repl.rl?.line || '');
+    const isLargeOrMultiline = /\r|\n/.test(normalized) || repl.shouldPersistPastedText?.(normalized);
+
+    if (!isLargeOrMultiline) {
+      repl.rl?.write?.(normalized);
+      return true;
+    }
+
+    this.closeSlashMenu();
+    repl.rl?.write?.(null, { ctrl: true, name: 'u' });
+
+    const combined = [currentLine, normalized].filter(value => String(value || '').trim()).join('\n').trim();
+    repl.inputQueue = repl.inputQueue
+      .then(async () => {
+        repl.closeInputBox?.();
+        await this.processPastedTextTask(combined);
+      })
+      .catch((error) => {
+        repl.closeInputBox?.();
+        console.log(`\n${colors.red}✖ Paste text error: ${error.message}${colors.reset}\n`);
+        if (repl.running && !repl.readlineClosed) repl.showInputPrompt?.();
+      });
+    return true;
+  }
+
+  async processPastedTextTask(text = '') {
+    const repl = this.repl;
+    const content = repl.normalizePastedText ? repl.normalizePastedText(text).trim() : String(text || '').trim();
+    if (!content) return;
+
+    if (repl.shouldPersistPastedText?.(content)) {
+      const paste = await repl.persistPastedText(content);
+      const reference = repl.formatPastedTextReference(paste);
+      console.log(`${colors.cyan}│ ${colors.dim}${reference}${colors.reset}`);
+      await repl.handleInput(reference);
+      return;
+    }
+
+    await repl.handleInput(content);
   }
 
   async processPastedImageTask(prompt, image) {
@@ -195,14 +249,14 @@ export class WinterInputController {
     }
     if (repl.slashMenu.open && repl.slashMenu.line === line) return;
 
-    repl.slashMenu = { open: true, line, items: matches, selected: 0, printedLines: repl.slashMenu?.printedLines || 0 };
+    repl.slashMenu = { open: true, line, items: matches, selected: 0, offset: 0, printedLines: repl.slashMenu?.printedLines || 0 };
     this.renderSlashMenu();
   }
 
   closeSlashMenu() {
     const repl = this.repl;
     this.clearSlashMenuRender();
-    repl.slashMenu = { open: false, line: '', items: [], selected: 0, printedLines: 0 };
+    repl.slashMenu = { open: false, line: '', items: [], selected: 0, offset: 0, printedLines: 0 };
   }
 
   clearSlashMenuRender() {
@@ -242,7 +296,19 @@ export class WinterInputController {
     if (!repl.slashMenu.items.length) return;
     const count = repl.slashMenu.items.length;
     repl.slashMenu.selected = (repl.slashMenu.selected + delta + count) % count;
+    this.ensureSlashSelectionVisible();
     this.renderSlashMenu();
+  }
+
+  ensureSlashSelectionVisible(maxDisplay = 7) {
+    const menu = this.repl.slashMenu;
+    if (!menu?.items?.length) return;
+    const selected = Math.max(0, Math.min(menu.selected || 0, menu.items.length - 1));
+    let offset = Math.max(0, Number(menu.offset || 0));
+    if (selected < offset) offset = selected;
+    if (selected >= offset + maxDisplay) offset = selected - maxDisplay + 1;
+    const maxOffset = Math.max(0, menu.items.length - maxDisplay);
+    menu.offset = Math.max(0, Math.min(offset, maxOffset));
   }
 
   acceptSlashSelection() {
@@ -268,20 +334,23 @@ export class WinterInputController {
     const matches = repl.slashMenu.items;
     if (!matches.length) return;
 
-    const maxDisplay = 5;
-    const displayedMatches = matches.slice(0, maxDisplay);
+    const maxDisplay = 7;
+    this.ensureSlashSelectionVisible(maxDisplay);
+    const offset = Math.max(0, Number(repl.slashMenu.offset || 0));
+    const displayedMatches = matches.slice(offset, offset + maxDisplay);
     const body = [
-      `${colors.dim}Tab selects. Esc closes. Enter sends the current line.${colors.reset}`,
+      `${colors.dim}Tab selects. Esc closes. Enter sends the current line. Up/Down scroll.${colors.reset}`,
       '',
       ...displayedMatches.map((item, index) => {
       const usage = item.usage ? ` ${colors.dim}${item.usage}${colors.reset}` : '';
-      const pointer = index === repl.slashMenu.selected ? `${colors.green}>${colors.reset}` : ' ';
+      const absoluteIndex = offset + index;
+      const pointer = absoluteIndex === repl.slashMenu.selected ? `${colors.green}>${colors.reset}` : ' ';
         return `${pointer} ${colors.cyan}${padVisible(item.cmd, 16)}${colors.reset} ${colors.dim}${item.desc}${colors.reset}${usage}`;
       }),
     ];
 
     if (matches.length > maxDisplay) {
-      body.push(`  ${colors.dim}... ${matches.length - maxDisplay} more. Keep typing to filter.${colors.reset}`);
+      body.push(`  ${colors.dim}${offset + 1}-${Math.min(offset + maxDisplay, matches.length)} / ${matches.length}${colors.reset}`);
     }
 
     this.clearSlashMenuRender();

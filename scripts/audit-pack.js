@@ -30,6 +30,8 @@ const blockedPrefixes = [
   'resources/local/claude/tasks/',
   'resources/local/claude/todos/',
   'resources/local/ecc/node_modules/',
+  'resources/local/gsap-skills/.git/',
+  'resources/local/hermes-agent-core/.git/',
 ];
 const blockedPatterns = [
   /(^|\/)src\/.*\.test\.js$/,
@@ -57,8 +59,11 @@ const requiredPrefixes = [
   'resources/local/karpathy-tools/',
   'resources/local/page-agent/',
   'resources/local/ecc/',
+  'resources/local/gsap-skills/',
+  'resources/local/hermes-agent-core/',
   'docs/',
   'rules/',
+  'scripts/smoke-browser.js',
   'extensions/vscode/',
   'skills/',
   'memories/',

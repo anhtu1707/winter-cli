@@ -30,6 +30,8 @@ File này là contract vận hành cho Winter trong project này.
 - **karpathy-tools**: 2 files, 5.9 KB
 - **page-agent**: 238 files, 1.3 MB
 - **ecc**: 320 files, 11.9 MB
+- **gsap-skills**: 44 files, 144.8 KB
+- **hermes-agent-core**: 44 files, 415.7 KB
 - **manifest.json**: 1 files, 2.9 KB
 
 ## Extra Rule Files

@@ -1,6 +1,21 @@
 import { spawn } from 'child_process';
 import { encodeMcpMessage, decodeMcpMessages, createNotification, createRequest } from './protocol.js';
 
+export class MCPRequestTimeoutError extends Error {
+  constructor({ method, timeoutMs, requestId, serverName, lastStderr } = {}) {
+    const serverText = serverName ? ` on ${serverName}` : '';
+    const stderrText = lastStderr ? `; stderr: ${lastStderr}` : '';
+    super(`MCP request timed out after ${timeoutMs}ms: ${method}${serverText}${stderrText}`);
+    this.name = 'MCPRequestTimeoutError';
+    this.code = 'MCP_REQUEST_TIMEOUT';
+    this.method = method;
+    this.timeoutMs = timeoutMs;
+    this.requestId = requestId;
+    this.serverName = serverName;
+    this.lastStderr = lastStderr;
+  }
+}
+
 export class MCPClient {
   constructor(serverConfig = {}) {
     this.serverConfig = serverConfig;
@@ -94,7 +109,15 @@ export class MCPClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`MCP request timed out: ${method}`));
+        const error = new MCPRequestTimeoutError({
+          method,
+          timeoutMs: this.requestTimeoutMs,
+          requestId: id,
+          serverName: this.serverConfig.name,
+          lastStderr: this.lastStderr,
+        });
+        reject(error);
+        this.closeAfterTimeout(error);
       }, this.requestTimeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       this.process.stdin.write(packet, error => {
@@ -135,6 +158,24 @@ export class MCPClient {
       this.process = null;
       this.initialized = false;
       this.pending.clear();
+    }
+  }
+
+  closeAfterTimeout(error) {
+    this.rejectAllPending(error || new Error('MCP server timed out'));
+    if (!this.process) return;
+    const processRef = this.process;
+    this.process = null;
+    this.initialized = false;
+    try {
+      processRef.stdin?.destroy?.();
+    } catch {
+      // Best-effort cleanup after a timed-out request.
+    }
+    try {
+      processRef.kill();
+    } catch {
+      // Process may already be gone.
     }
   }
 

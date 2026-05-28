@@ -54,6 +54,37 @@ It is especially useful for:
 - inspecting large local contexts
 - working with tools, sessions, and background tasks
 
+## Agent Runtime Guarantees
+
+Winter is not a prompt-only wrapper. The REPL runtime enforces several behavior gates before an assistant answer is allowed through:
+
+- **Tool evidence guard:** action requests must use real tools before claiming progress.
+- **Fake completion guard:** claims such as "fixed", "created", "opened", or "checked" are blocked when no matching tool result exists.
+- **Verification before final answer:** after mutating work such as `Edit`, `Write`, or replacement tools, Winter runs inferred verification commands before the final response when the task implies tests/build/lint/debugging.
+- **Repair loop:** failed verification output is sent back into the agent loop so the model debugs the first hard failure instead of pretending the work is complete.
+- **Provider-agnostic tool calls:** native tool calls, legacy function calls, XML fallback calls, JSON fallback calls, and `CALL_TOOL` text calls are normalized into the same executor path.
+- **Real subagents:** `Agent` and `DelegateTask` run separate message contexts with role-scoped tools, child-process isolation in live REPL runs, timeout/error isolation, result passing, changed-file summaries, and `ParallelAgent` aggregation for independent subtasks.
+
+## Debug Workflow
+
+Use `/debug` or `/auto` when you want Winter to run the inspect -> patch -> verify loop with stronger constraints:
+
+```text
+/debug failing npm test
+/auto fix provider timeout --verify "npm test;npm run pack:audit"
+```
+
+For browser-visible issues, configure Chrome DevTools MCP and ask Winter to inspect the live page. Winter prefers visible Chrome MCP tools for click/fill/screenshot/console/network work and uses headless browser debugging only as a fallback.
+
+```text
+/mcp preset chrome-devtools --isolated
+/mcp tools chrome-devtools
+```
+
+## Multimodal Input
+
+Winter supports direct clipboard image paste in the interactive input controller. Press `Ctrl+V` while the REPL is focused to attach a clipboard image to the next message. Screenshots are treated as primary evidence for UI, browser, and visual debugging tasks.
+
 ## Provider Support
 
 Winter supports a flexible provider model:
@@ -128,6 +159,14 @@ winter models
 winter config
 ```
 
+Inside the REPL, use the slash forms:
+
+```text
+/providers
+/provider custom
+/model qwen3-coder-plus
+```
+
 ### Project workflow
 
 ```bash
@@ -181,6 +220,16 @@ In the REPL, use the same flow with slash commands:
 The preset registers the `chrome-devtools` MCP server, allowlists it, and gives Winter runtime hints to use its page navigation, click, fill, snapshot, screenshot, console, network, and performance tools for live browser debugging. Omit `--headless` when you want to watch Winter operate Chrome in a normal visible window.
 It requires Node.js 22.12+ and a current Chrome installation, matching the upstream MCP package requirements.
 
+### Browser control tools
+
+Winter exposes three browser paths:
+
+- `OpenBrowser` opens Chrome/default browser visibly for the user.
+- `VisibleBrowser` launches a real visible Chrome/Chromium session with Puppeteer and can navigate, click, type, evaluate JavaScript, snapshot DOM, and capture screenshots.
+- `BrowserDebug` runs headless Puppeteer for console/network/DOM diagnostics when visible control is not needed.
+
+For live page interaction, Winter should prefer `chrome-devtools` MCP when configured, then `VisibleBrowser`, then `BrowserDebug` as the headless fallback.
+
 ### Minimal example
 
 ```json
@@ -216,6 +265,23 @@ npm run prepublish:gate
 npm run pack:audit
 npm run smoke:package
 ```
+
+## Quality Gates
+
+Winter ships with Node's built-in test runner and package-audit checks:
+
+```bash
+npm test
+npm run pack:audit
+```
+
+The capability scorecard is available from the CLI:
+
+```bash
+winter /scorecard
+```
+
+Tracked areas include agent loop, tool reliability, codebase intelligence, memory compression, subagents, terminal UX, provider routing, debug workflow, and ecosystem resources.
 
 ## Repository Structure
 

@@ -906,6 +906,9 @@ EXECUTION CONTRACT:
       case undefined:
       case 'list':
         console.log(`\n${colors.cyan}Permission Allowlist:${colors.reset}`);
+        console.log(`  Full access: ${config.sandbox?.enabled === false ? 'on' : 'off'}`);
+        console.log(`  Sandbox enabled: ${config.sandbox?.enabled !== false}`);
+        console.log(`  Restrict workspace: ${config.sandbox?.restrictToWorkspace !== false}`);
         console.log(`  Tools: ${(config.permissions.allowlist.tools || []).join(', ') || 'none'}`);
         console.log(`  Commands: ${(config.permissions.allowlist.commands || []).join(', ') || 'none'}`);
         console.log(`  MCP Servers: ${(config.permissions.allowlist.mcpServers || []).join(', ') || 'none'}`);
@@ -934,8 +937,25 @@ EXECUTION CONTRACT:
         console.log(`${colors.green}✓ promptByDefault = ${config.permissions.promptByDefault}${colors.reset}`);
         break;
       }
+      case 'full': {
+        const value = String(rest[0] || 'on').toLowerCase();
+        const enabled = !(value === 'off' || value === 'false' || value === '0' || value === 'no');
+        if (typeof this.config.setFullAccess === 'function') {
+          await this.config.setFullAccess(enabled);
+        } else {
+          config.sandbox = {
+            ...(config.sandbox || {}),
+            enabled: !enabled,
+            restrictToWorkspace: !enabled,
+          };
+          config.permissions.promptByDefault = !enabled;
+          await this.config.save(config);
+        }
+        console.log(`${colors.green}Full access ${enabled ? 'enabled' : 'disabled'}${colors.reset}`);
+        break;
+      }
       default:
-        console.log(`${colors.yellow}Usage: winter permissions <list|allow|prompt>${colors.reset}`);
+        console.log(`${colors.yellow}Usage: winter permissions <list|allow|prompt|full>${colors.reset}`);
     }
   }
 

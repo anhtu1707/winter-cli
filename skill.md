@@ -16,23 +16,55 @@ File này định nghĩa cách Winter chọn và áp dụng skill. Không chỉ 
 - **security**: Protect secrets, validate inputs, avoid unsafe shell/file operations.
 - **performance**: Measure or reason from the hot path before optimizing.
 
-## Available Local Skills (16)
+## Available Local Skills (48)
+- claude-code
+- codebase-inspection
+- codex
 - codex-primary-runtime
 - coding
-- coding.md
 - debug
-- debug.md
+- debugging-hermes-tui-commands
+- DESCRIPTION
 - design
+- github-auth
+- github-code-review
+- github-issues
+- github-pr-workflow
+- github-repo-management
+- gsap
+- gsap-core
+- gsap-frameworks
+- gsap-performance
+- gsap-plugins
+- gsap-react
+- gsap-scrolltrigger
+- gsap-timeline
+- gsap-utils
+- hermes-agent
+- hermes-agent-skill-authoring
+- hermes-s6-container-supervision
+- kanban-codex-lane
 - learned
+- llms.txt
+- native-mcp
+- node-inspect-debugger
+- opencode
 - performance
+- plan
+- python-debugpy
 - refactor
+- requesting-code-review
 - security
 - skill-creator
+- spike
+- subagent-driven-development
+- systematic-debugging
 - test
-- test.md
+- test-driven-development
 - vercel-react-best-practices
 - vibefigma
 - web-design-guidelines
+- writing-plans
 
 ## When To Apply
 - Code change: coding + test, thêm debug nếu có lỗi cụ thể.

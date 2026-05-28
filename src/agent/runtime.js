@@ -23,9 +23,17 @@ export class AgentRuntime {
     let reachedToolLimit = true;
     let usedTools = false;
     let usedMutatingTools = false;
+    let autoVerified = false;
+    let autoVerificationPassed = false;
+    let autoVerificationFailures = 0;
     const toolSummaries = [];
+    const executedTools = [];
+    const changedFiles = new Set();
     const totalUsage = {};
     const toolSignatureHistory = [];
+    const allowedToolNames = Array.isArray(tools) && tools.length > 0
+      ? new Set(tools.map(tool => tool.name || tool.function?.name).filter(Boolean).map(name => repl.tools.normalizeToolName(name)))
+      : null;
     const executionProfile = repl.selectExecutionProfile(messages, { enableTools: true });
     const requireToolEvidence = repl.actionRequiresTools(messages);
     let noToolActionRetries = 0;
@@ -57,14 +65,11 @@ export class AgentRuntime {
           toolPromptOnly: forceTextToolFallback,
           requireToolEvidence: requireToolEvidence && !usedTools,
           usedMutatingTools: usedMutatingTools,
+          deferFinalContent: this.shouldVerifyBeforeFinal(messages, usedMutatingTools, autoVerificationPassed),
         }, startedAt, totalUsage);
 
         const assistantMsg = turn.assistantMsg || {};
         const toolCalls = turn.toolCalls || [];
-
-        if (turn.finalContent && toolCalls.length === 0) {
-          finalContent = turn.finalContent;
-        }
 
         if (toolCalls.length === 0) {
           if (turn.finishReason === 'tool_evidence_required') {
@@ -89,6 +94,54 @@ export class AgentRuntime {
             forceTextToolFallback = true;
             finalContent = '';
             continue;
+          }
+          if (turn.finalContent && this.shouldVerifyBeforeFinal(messages, usedMutatingTools, autoVerificationPassed)) {
+            autoVerified = true;
+            const verification = await this.runVerificationTools({
+              messages,
+              toolSummaries,
+              startedAt,
+              totalUsage,
+            });
+            autoVerificationPassed = verification.passed;
+
+            if (!verification.passed) {
+              autoVerificationFailures++;
+              if (autoVerificationFailures >= 3) {
+                messages.push({
+                  role: 'user',
+                  content: [
+                    'Verification is still failing after multiple repair attempts.',
+                    'Stop making unsupported success claims. Give the user a concise status with the exact failing commands and remaining blocker.',
+                  ].join('\n'),
+                });
+                finalContent = await repl.requestFinalAnswer(messages, toolSummaries, startedAt, totalUsage);
+                reachedToolLimit = false;
+                break;
+              }
+
+              messages.push({
+                role: 'assistant',
+                content: assistantMsg.content || '',
+              });
+              messages.push({
+                role: 'user',
+                content: this.buildVerificationRepairPrompt(verification, autoVerificationFailures),
+              });
+              finalContent = '';
+              continue;
+            }
+
+            messages.push({
+              role: 'assistant',
+              content: assistantMsg.content || '',
+            });
+            finalContent = await repl.requestFinalAnswer(messages, toolSummaries, startedAt, totalUsage);
+            reachedToolLimit = false;
+            break;
+          }
+          if (turn.finalContent) {
+            finalContent = turn.finalContent;
           }
           if (turn.finishReason === 'length') {
             console.log(`\n${colors.yellow}ℹ Phản hồi bị cắt cụt do hết token. Đang tự động tiếp tục...${colors.reset}`);
@@ -136,6 +189,24 @@ export class AgentRuntime {
         for (const tc of toolCalls) {
           const { toolName, toolArgs } = tc;
           const canonicalToolName = repl.tools.normalizeToolName(toolName);
+          if (allowedToolNames && !allowedToolNames.has(canonicalToolName)) {
+            const result = {
+              success: false,
+              error: `Tool ${canonicalToolName} is not allowed for this agent.`,
+              recovery: `Allowed tools: ${[...allowedToolNames].join(', ')}`,
+            };
+            const promptToolResult = await repl.buildPromptToolResultForModel(canonicalToolName, result);
+            messages.push({
+              role: 'tool',
+              tool_call_id: tc.id || `tool-${Date.now()}`,
+              content: JSON.stringify(promptToolResult),
+            });
+            const summary = repl.formatToolResultForConsole(canonicalToolName, result);
+            if (summary) {
+              toolSummaries.push(`${canonicalToolName}: ${summary}`);
+            }
+            continue;
+          }
           if (getMutatingToolNames().has(canonicalToolName)) {
             usedMutatingTools = true;
           }
@@ -201,6 +272,15 @@ export class AgentRuntime {
               : { success: false, error: 'Tool call is missing a tool name' };
             if (repl.spinner) repl.spinner.stop();
           }
+          executedTools.push({ tool: canonicalToolName, args: enrichedArgs, success: result?.success !== false });
+          if (getMutatingToolNames().has(canonicalToolName)) {
+            for (const key of ['file_path', 'filePath', 'path', 'file', 'notebook_path']) {
+              if (typeof enrichedArgs?.[key] === 'string' && enrichedArgs[key].trim()) {
+                changedFiles.add(enrichedArgs[key]);
+                break;
+              }
+            }
+          }
           const promptToolResult = await repl.buildPromptToolResultForModel(canonicalToolName, result);
           messages.push({
             role: 'tool',
@@ -254,6 +334,100 @@ export class AgentRuntime {
       console.log(`\n${colors.yellow}${finalContent}${colors.reset}\n`);
     }
 
-    return { finalContent, usedTools, usedMutatingTools };
+    return {
+      finalContent,
+      usedTools,
+      usedMutatingTools,
+      autoVerified,
+      autoVerificationPassed,
+      toolSummaries,
+      executedTools,
+      changedFiles: [...changedFiles],
+      usage: totalUsage,
+      messages,
+    };
+  }
+
+  shouldVerifyBeforeFinal(messages = [], usedMutatingTools = false, verificationPassed = false) {
+    if (!usedMutatingTools || verificationPassed) return false;
+    return this.repl.shouldAutoVerifyAfterTools?.(this.repl.getLatestUserText(messages), true) === true;
+  }
+
+  async runVerificationTools({ messages, toolSummaries, startedAt, totalUsage }) {
+    const repl = this.repl;
+    const commands = await repl.inferVerificationCommands?.(repl.getLatestUserText(messages));
+    const uniqueCommands = [...new Set((commands || []).filter(Boolean))].slice(0, 3);
+    if (uniqueCommands.length === 0) {
+      return { passed: true, details: [] };
+    }
+
+    if (repl.spinner) repl.spinner.stop();
+    console.log(`\n${colors.cyan}=== Auto verification before final answer ===${colors.reset}`);
+
+    const details = [];
+    for (const command of uniqueCommands) {
+      if (repl.spinner) {
+        repl.spinner.update(`Verifying: ${command}`);
+        repl.spinner.start();
+      }
+      const result = await repl.tools.execute('Bash', { command }, { cwd: repl.projectPath });
+      if (repl.spinner) repl.spinner.stop();
+
+      const passed = result?.success !== false;
+      details.push({
+        cmd: command,
+        passed,
+        output: result?.stdout || result?.stderr || result?.error || '',
+      });
+
+      messages.push({
+        role: 'user',
+        content: [
+          '[Winter auto-verification tool result]',
+          `Tool: Bash`,
+          `Command: ${command}`,
+          `Status: ${passed ? 'passed' : 'failed'}`,
+          String(result?.stdout || result?.stderr || result?.error || '').slice(0, 6000),
+        ].filter(Boolean).join('\n'),
+      });
+
+      const summary = repl.formatToolResultForConsole('Bash', result) || `${command}: ${passed ? 'passed' : 'failed'}`;
+      toolSummaries.push(`Bash: ${summary}`);
+      console.log(renderToolPanel({
+        toolName: '$ Bash',
+        summary,
+        success: passed,
+        colors,
+        title: 'Auto Verification',
+      }));
+    }
+
+    if (startedAt && totalUsage) {
+      // Keep the parameters intentionally used: callers pass the same timing and
+      // usage objects as normal tool turns so future instrumentation can attach here.
+    }
+
+    return {
+      passed: details.every(item => item.passed),
+      details,
+    };
+  }
+
+  buildVerificationRepairPrompt(verification, failureCount = 1) {
+    const failures = (verification?.details || [])
+      .filter(item => !item.passed)
+      .map(item => [
+        `Command: ${item.cmd}`,
+        String(item.output || '').slice(0, 5000),
+      ].join('\n'))
+      .join('\n\n---\n\n');
+
+    return [
+      `RUNTIME VERIFICATION FAILED before final answer (repair attempt ${failureCount}/3).`,
+      '',
+      failures || 'Verification failed, but no output was captured.',
+      '',
+      'Fix the first hard failure now with tools. Inspect the error path, patch the smallest root cause, and do not provide a final success answer until verification passes.',
+    ].join('\n');
   }
 }

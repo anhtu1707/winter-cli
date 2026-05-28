@@ -32,7 +32,7 @@ function createReplStub(overrides = {}) {
   };
 }
 
-test.skip('WinterInputController builds stable bottom input panel', () => {
+test('WinterInputController builds stable bottom input panel', () => {
   const repl = createReplStub();
   const input = new WinterInputController(repl);
   const panel = input.buildInputPanel();
@@ -71,6 +71,57 @@ test('WinterInputController direct clipboard paste sends image attachment', asyn
   }]);
   assert(writes.some(entry => entry.value === null && entry.options?.ctrl === true && entry.options?.name === 'u'));
   assert.equal(repl.isProcessing, false);
+});
+
+test('WinterInputController direct clipboard paste inserts short text', async () => {
+  const writes = [];
+  const repl = createReplStub({
+    getClipboardPayload: async () => ({ type: 'text', text: 'hello clipboard' }),
+    rl: {
+      line: '',
+      write(value, options) {
+        writes.push({ value, options });
+      },
+      prompt() {},
+      setPrompt() {},
+    },
+  });
+  const input = new WinterInputController(repl);
+
+  const handled = await input.handleDirectClipboardPaste();
+
+  assert.equal(handled, true);
+  assert.deepEqual(writes, [{ value: 'hello clipboard', options: undefined }]);
+});
+
+test('WinterInputController direct clipboard paste persists large text', async () => {
+  const writes = [];
+  const handledInputs = [];
+  const text = Array.from({ length: 9 }, (_, index) => `line ${index + 1}`).join('\n');
+  const repl = createReplStub({
+    getClipboardPayload: async () => ({ type: 'text', text }),
+    normalizePastedText: value => String(value).replace(/\r\n/g, '\n'),
+    shouldPersistPastedText: value => String(value).split(/\n/).length >= 8,
+    persistPastedText: async value => ({ index: 1, lines: String(value).split(/\n/).length, path: 'paste.txt' }),
+    formatPastedTextReference: paste => `[Pasted text #${paste.index}: ${paste.lines} lines -> ${paste.path}]`,
+    handleInput: async value => handledInputs.push(value),
+    rl: {
+      line: '',
+      write(value, options) {
+        writes.push({ value, options });
+      },
+      prompt() {},
+      setPrompt() {},
+    },
+  });
+  const input = new WinterInputController(repl);
+
+  const handled = await input.handleDirectClipboardPaste();
+  await repl.inputQueue;
+
+  assert.equal(handled, true);
+  assert(writes.some(entry => entry.value === null && entry.options?.ctrl === true && entry.options?.name === 'u'));
+  assert.deepEqual(handledInputs, ['[Pasted text #1: 9 lines -> paste.txt]']);
 });
 
 test('WinterInputController slash selection preserves suffix', () => {
@@ -147,4 +198,44 @@ test('WinterInputController redraws slash menu in place on TTY', () => {
   assert.match(output, /\x1b\[[0-9]+A/);
   assert.match(output, /\x1b\[0J/);
   assert.equal(prompted, 2);
+});
+
+test('WinterInputController slash menu scrolls selected item into view', () => {
+  const repl = createReplStub({
+    slashMenu: {
+      open: true,
+      line: '/',
+      items: Array.from({ length: 12 }, (_, index) => ({ cmd: `/cmd${index}`, desc: `Command ${index}` })),
+      selected: 0,
+      offset: 0,
+      printedLines: 0,
+    },
+    rl: {
+      line: '/',
+      prompt() {},
+    },
+  });
+  const input = new WinterInputController(repl);
+  input.renderSlashMenu = () => {};
+
+  for (let i = 0; i < 8; i++) {
+    input.moveSlashSelection(1);
+  }
+
+  assert.equal(repl.slashMenu.selected, 8);
+  assert.equal(repl.slashMenu.offset, 2);
+
+  input.moveSlashSelection(-1);
+  input.moveSlashSelection(-1);
+  input.moveSlashSelection(-1);
+
+  assert.equal(repl.slashMenu.selected, 5);
+  assert.equal(repl.slashMenu.offset, 2);
+
+  for (let i = 0; i < 7; i++) {
+    input.moveSlashSelection(-1);
+  }
+
+  assert.equal(repl.slashMenu.selected, 10);
+  assert.equal(repl.slashMenu.offset, 5);
 });

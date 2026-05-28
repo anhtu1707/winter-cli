@@ -74,6 +74,73 @@ test('ConfigLoader load accepts UTF-8 BOM winter.json files', async () => {
   assert.equal(loaded.custom2.baseURL, 'https://api.example.test/v1');
 });
 
+test('ConfigLoader load always includes bundled chrome-devtools MCP preset', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-config-'));
+  const config = new ConfigLoader();
+  config.winterDir = root;
+  config.configFile = path.join(root, 'winter.json');
+  config.envFile = path.join(root, 'secrets.env');
+
+  await writeFile(config.configFile, JSON.stringify({
+    defaultProvider: 'custom',
+    permissions: {
+      promptByDefault: true,
+      allowlist: {
+        tools: ['Read'],
+        commands: [],
+        mcpServers: [],
+      },
+    },
+    mcp: {
+      servers: [],
+    },
+  }, null, 2));
+
+  const loaded = await config.load();
+  const chrome = loaded.mcp.servers.find(server => server.name === 'chrome-devtools');
+
+  assert.ok(chrome);
+  assert.equal(chrome.enabled, true);
+  assert.equal(chrome.command, process.platform === 'win32' ? 'cmd' : 'npx');
+  assert(loaded.permissions.allowlist.tools.includes('MCP'));
+  assert(loaded.permissions.allowlist.mcpServers.includes('chrome-devtools'));
+});
+
+test('ConfigLoader load preserves existing chrome-devtools MCP server settings', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-config-'));
+  const config = new ConfigLoader();
+  config.winterDir = root;
+  config.configFile = path.join(root, 'winter.json');
+  config.envFile = path.join(root, 'secrets.env');
+
+  await writeFile(config.configFile, JSON.stringify({
+    mcp: {
+      servers: [
+        {
+          name: 'chrome-devtools',
+          enabled: true,
+          command: 'custom-cmd',
+          args: ['custom-arg'],
+        },
+      ],
+    },
+    permissions: {
+      allowlist: {
+        tools: [],
+        commands: [],
+        mcpServers: [],
+      },
+    },
+  }, null, 2));
+
+  const loaded = await config.load();
+
+  assert.equal(loaded.mcp.servers.length, 1);
+  assert.equal(loaded.mcp.servers[0].command, 'custom-cmd');
+  assert.deepEqual(loaded.mcp.servers[0].args, ['custom-arg']);
+  assert(loaded.permissions.allowlist.mcpServers.includes('chrome-devtools'));
+});
+
 test('applyEnv falls back to raw apiKeyEnv value when no matching env variable exists', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'winter-config-'));
   const config = new ConfigLoader();
@@ -134,4 +201,24 @@ test('applyEnv prefers process.env[apiKeyEnv] over raw apiKeyEnv fallback', asyn
       delete process.env['TEST_WINTER_API_KEY'];
     }
   }
+});
+
+test('ConfigLoader setFullAccess toggles sandbox and prompt policy', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-config-'));
+  const config = new ConfigLoader();
+  config.winterDir = root;
+  config.configFile = path.join(root, 'winter.json');
+  config.envFile = path.join(root, 'secrets.env');
+
+  await config.save(config.getDefaults());
+
+  const enabled = await config.setFullAccess(true);
+  assert.equal(enabled.sandbox.enabled, false);
+  assert.equal(enabled.sandbox.restrictToWorkspace, false);
+  assert.equal(enabled.permissions.promptByDefault, false);
+
+  const disabled = await config.setFullAccess(false);
+  assert.equal(disabled.sandbox.enabled, true);
+  assert.equal(disabled.sandbox.restrictToWorkspace, true);
+  assert.equal(disabled.permissions.promptByDefault, true);
 });

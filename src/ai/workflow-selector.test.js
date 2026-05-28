@@ -25,6 +25,34 @@ test('selectWorkflow recommends webapp UI skills for resort review app idea', ()
   assert(workflow.recommendedResources.includes('awesome-design-md'));
 });
 
+test('selectWorkflow recommends GSAP resources for animation work', () => {
+  const workflow = selectWorkflow({
+    taskText: 'Lam React landing page co scroll animation va parallax bang GSAP',
+    projectSignals: ['react', 'tsx'],
+    skillCatalog: [
+      'coding',
+      'test',
+      'design',
+      'frontend-design',
+      'web-design-guidelines',
+      'vercel-react-best-practices',
+      'gsap',
+      'gsap-core',
+      'gsap-timeline',
+      'gsap-scrolltrigger',
+      'gsap-react',
+      'gsap-performance',
+    ],
+  });
+
+  assert.equal(workflow.detectedTechnologies.animation, true);
+  assert(workflow.recommendedSkills.includes('gsap'));
+  assert(workflow.recommendedSkills.includes('gsap-react'));
+  assert(workflow.recommendedSkills.includes('gsap-scrolltrigger'));
+  assert(workflow.recommendedResources.includes('gsap-skills'));
+  assert(workflow.verificationStrategy.includes('animation/browser smoke test'));
+});
+
 test('selectWorkflow recommends mobile profile for react native apps', () => {
   const workflow = selectWorkflow({
     taskText: 'Làm app mobile review resort bằng React Native (Expo), cần plan + debug tốt',
@@ -85,3 +113,29 @@ test('selectWorkflow supports ai engineering tasks', () => {
   assert(workflow.technologySuggestions.some(item => item.includes('RAG')));
 });
 
+test('selectWorkflow recommends Hermes core for agent UI and automation work', () => {
+  const workflow = selectWorkflow({
+    taskText: 'Dua hermes agent vao core Winter UI TUI gateway, skill learning loop, memory search, subagent va cron automation',
+    projectSignals: ['agent', 'tui', 'mcp'],
+    skillCatalog: [
+      'coding',
+      'debug',
+      'test',
+      'hermes-agent',
+      'subagent-driven-development',
+      'systematic-debugging',
+      'hermes-agent-skill-authoring',
+      'native-mcp',
+      'plan',
+      'test-driven-development',
+    ],
+  });
+
+  assert.equal(workflow.hermesCore.agent, true);
+  assert.equal(workflow.hermesCore.tui, true);
+  assert.equal(workflow.hermesCore.automation, true);
+  assert(workflow.recommendedResources.includes('hermes-agent-core'));
+  assert(workflow.recommendedSkills.includes('hermes-agent'));
+  assert(workflow.recommendedSkills.includes('subagent-driven-development'));
+  assert(workflow.recommendedSkills.includes('native-mcp'));
+});

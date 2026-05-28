@@ -1083,6 +1083,10 @@ test('small model system prompt uses full-strength instructions and real tool na
   assert(prompt.length > 2500);
   assert.match(prompt, /Read, Write, Bash/);
   assert.match(prompt, /Core Principles/);
+  assert.match(prompt, /Coding Mastery Contract/);
+  assert.match(prompt, /entrypoint, caller, callee/);
+  assert.match(prompt, /Hermes Core Agent Contract/);
+  assert.match(prompt, /self-improving skills/);
   assert.match(prompt, /Always respond in Vietnamese/);
   assert.match(prompt, /MANDATORY DEEP REASONING|maximum reasoning/i);
 });

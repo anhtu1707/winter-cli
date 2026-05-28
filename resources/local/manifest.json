@@ -45,6 +45,18 @@
       "bytes": 12488896
     },
     {
+      "name": "gsap-skills",
+      "path": "resources/local/gsap-skills",
+      "files": 44,
+      "bytes": 148324
+    },
+    {
+      "name": "hermes-agent-core",
+      "path": "resources/local/hermes-agent-core",
+      "files": 44,
+      "bytes": 425718
+    },
+    {
       "name": "manifest.json",
       "path": "resources/local/manifest.json",
       "files": 1,

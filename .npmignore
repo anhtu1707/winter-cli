@@ -19,6 +19,8 @@ resources/local/**
 !resources/local/karpathy-tools/**
 !resources/local/page-agent/**
 !resources/local/ecc/**
+!resources/local/gsap-skills/**
+!resources/local/hermes-agent-core/**
 resources/local/codex/config.toml
 resources/local/codex/memories/
 resources/local/claude/settings.json
