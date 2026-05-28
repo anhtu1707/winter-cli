@@ -49,6 +49,8 @@ test('action detection handles Vietnamese accents without mojibake variants', ()
 
   assert.equal(repl.actionRequiresTools([{ role: 'user', content: 'sửa lỗi trong README.md rồi chạy test' }]), true);
   assert.equal(repl.actionRequiresTools([{ role: 'user', content: 'đọc lại toàn dự án xem' }]), true);
+  assert.equal(repl.actionRequiresTools([{ role: 'user', content: 'ok bắt đầu' }]), true);
+  assert.equal(repl.actionRequiresTools([{ role: 'user', content: 'bat dau di' }]), true);
 });
 
 test('tool routing sends open chrome requests to OpenBrowser, not Bash', () => {
@@ -199,6 +201,50 @@ test('/paste slash command persists large clipboard text', async () => {
 
   assert.equal(handledInputs.length, 1);
   assert.match(handledInputs[0], /^\[Pasted text #1: 8 lines -> .*paste_1_\d+\.txt\]$/);
+});
+
+test('/plan slash command generates a plan and /plans lists existing plans', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  const generated = [];
+  repl.generateInteractivePlan = async task => generated.push(task);
+  repl.session = {
+    getPlans: () => [{ status: 'pending', title: 'Existing plan' }],
+  };
+
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+  try {
+    await handleSlashCommand(repl, '/plan build auth flow');
+    await handleSlashCommand(repl, '/plans');
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert.deepEqual(generated, ['build auth flow']);
+  assert(logs.some(line => line.includes('Existing plan')));
+});
+
+test('/plan without a task shows usage instead of listing plans', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  repl.generateInteractivePlan = async () => {
+    throw new Error('generateInteractivePlan should not run without a task');
+  };
+  repl.session = {
+    getPlans: () => [{ status: 'pending', title: 'Existing plan' }],
+  };
+
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+  try {
+    await handleSlashCommand(repl, '/plan');
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert(logs.some(line => line.includes('Usage: /plan <task>')));
+  assert(!logs.some(line => line.includes('Existing plan')));
 });
 
 test('slash suggestions expose direct browser control command', () => {
@@ -1317,6 +1363,121 @@ test('runConversation blocks action completion claims without tool evidence and 
     assert.equal(answer.finalContent, 'Đã kiểm tra README.md bằng tool.');
     assert.equal(streamOptions[1]?.toolPromptOnly, true);
     assert.deepEqual(executed, [{ name: 'Read', args: { file_path: 'README.md' } }]);
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+});
+
+test('runConversation blocks start-progress answers without tool evidence', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+
+  let streamCount = 0;
+  const streamOptions = [];
+  const executed = [];
+  const originalWrite = process.stdout.write;
+  repl.ai = {
+    tools: [],
+    providers: { custom: { model: 'test-model' } },
+    getActiveProvider: () => 'custom',
+    setTools(tools) {
+      this.tools = tools;
+    },
+    async *streamRequest(_messages, options = {}) {
+      streamOptions.push(options);
+      streamCount++;
+      if (streamCount === 1) {
+        yield { content: 'Bắt đầu Phase 5! Cài pdfjs-dist + tạo PDF viewer component.' };
+        return;
+      }
+      if (streamCount === 2) {
+        yield { content: '<invoke name="Bash"><parameter name="command">npm install pdfjs-dist</parameter></invoke>' };
+        return;
+      }
+      yield { content: 'Đã bắt đầu bằng tool.' };
+    },
+  };
+  repl.tools = {
+    normalizeToolName: name => name,
+    normalizeToolInput: (_name, input) => input,
+    async execute(name, args) {
+      executed.push({ name, args });
+      return { success: true, stdout: 'installed' };
+    },
+  };
+
+  process.stdout.write = () => true;
+
+  try {
+    const answer = await repl.runConversation(
+      [{ role: 'user', content: 'ok bắt đầu' }],
+      'Test',
+      [{ name: 'Bash' }]
+    );
+
+    assert.equal(answer.finalContent, 'Đã bắt đầu bằng tool.');
+    assert.equal(streamOptions[1]?.toolPromptOnly, true);
+    assert.deepEqual(executed, [
+      { name: 'Bash', args: { command: 'npm install pdfjs-dist' } },
+      { name: 'Bash', args: { command: 'npm test' } },
+    ]);
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+});
+
+test('runConversation keeps going when model only reports progress after inspection', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+
+  let streamCount = 0;
+  const streamOptions = [];
+  const executed = [];
+  const originalWrite = process.stdout.write;
+  repl.ai = {
+    tools: [],
+    providers: { custom: { model: 'test-model' } },
+    getActiveProvider: () => 'custom',
+    setTools(tools) {
+      this.tools = tools;
+    },
+    async *streamRequest(_messages, options = {}) {
+      streamOptions.push(options);
+      streamCount++;
+      if (streamCount === 1) {
+        yield { content: '<invoke name="Read"><parameter name="file_path">src/ui.js</parameter></invoke>' };
+        return;
+      }
+      if (streamCount === 2) {
+        yield { content: 'Đúng rồi, backend thiếu translate endpoint và frontend thiếu api.runTranslation(). Đang làm tiếp.' };
+        return;
+      }
+      if (streamCount === 3) {
+        yield { content: '<invoke name="Edit"><parameter name="file_path">src/ui.js</parameter><parameter name="old_string">old</parameter><parameter name="new_string">new</parameter></invoke>' };
+        return;
+      }
+      yield { content: 'Đã sửa src/ui.js.' };
+    },
+  };
+  repl.tools = {
+    normalizeToolName: name => name,
+    normalizeToolInput: (_name, input) => input,
+    async execute(name, args) {
+      executed.push({ name, args });
+      return { success: true, file_path: args.file_path, path: args.file_path, content: 'ok' };
+    },
+  };
+
+  process.stdout.write = () => true;
+
+  try {
+    const answer = await repl.runConversation(
+      [{ role: 'user', content: 'tiếp đi' }],
+      'Test',
+      [{ name: 'Read' }, { name: 'Edit' }]
+    );
+
+    assert.equal(answer.finalContent, 'Đã sửa src/ui.js.');
+    assert.deepEqual(executed.map(call => call.name), ['Read', 'Edit', 'Bash']);
+    assert.equal(streamOptions[2]?.toolPromptOnly, true);
   } finally {
     process.stdout.write = originalWrite;
   }

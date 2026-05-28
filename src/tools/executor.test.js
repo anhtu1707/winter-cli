@@ -361,6 +361,39 @@ test('Windows Bash auto-detects cmd chaining syntax', async () => {
   assert.match(result.stdout, /auto/);
 });
 
+test('Windows Bash runs quoted cmd directory listings without breaking path quotes', async () => {
+  if (process.platform !== 'win32') {
+    return;
+  }
+
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-quoted-dir-'));
+  await writeFile(path.join(root, 'a.txt'), 'hello');
+  const tools = new ToolExecutor({ projectPath: root });
+  const result = await tools.execute('Bash', {
+    command: `dir /b "${root}"`,
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.shell, 'cmd');
+  assert.match(result.stdout, /a\.txt/);
+});
+
+test('Windows Bash treats where as an allowlisted cmd command', async () => {
+  if (process.platform !== 'win32') {
+    return;
+  }
+
+  const root = await mkdtemp(path.join(tmpdir(), 'winter-where-'));
+  const tools = new ToolExecutor({ projectPath: root });
+  const result = await tools.execute('Bash', {
+    command: 'where cmd',
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.shell, 'cmd');
+  assert.match(result.stdout, /cmd\.exe/i);
+});
+
 test('Windows Bash allows PowerShell -Format arguments', async () => {
   if (process.platform !== 'win32') {
     return;

@@ -37,6 +37,7 @@ export class AgentRuntime {
     const executionProfile = repl.selectExecutionProfile(messages, { enableTools: true });
     const requireToolEvidence = repl.actionRequiresTools(messages);
     let noToolActionRetries = 0;
+    let unfinishedActionRetries = 0;
     const sessionContext = repl.session?.getContext?.() || {};
     const profile = sessionContext.workflowProfile || 'general';
     const depth = /deep/i.test(profile) ? 'deep' : 'standard';
@@ -139,6 +140,32 @@ export class AgentRuntime {
             finalContent = await repl.requestFinalAnswer(messages, toolSummaries, startedAt, totalUsage);
             reachedToolLimit = false;
             break;
+          }
+          if (
+            turn.finalContent &&
+            requireToolEvidence &&
+            usedTools &&
+            !usedMutatingTools &&
+            repl.responseIndicatesUnfinishedAction?.(turn.finalContent)
+          ) {
+            unfinishedActionRetries++;
+            if (unfinishedActionRetries > 3) {
+              finalContent = 'Chưa hoàn thành: model chỉ trả lời trạng thái sau khi inspect, chưa thực hiện thay đổi. Winter đã dừng để tránh báo tiến độ giả.';
+              console.log(`\n${colors.yellow}${finalContent}${colors.reset}\n`);
+              reachedToolLimit = false;
+              break;
+            }
+            messages.push({
+              role: 'assistant',
+              content: assistantMsg.content || '',
+            });
+            messages.push({
+              role: 'user',
+              content: repl.buildUnfinishedActionCorrection(messages, turn.finalContent),
+            });
+            forceTextToolFallback = true;
+            finalContent = '';
+            continue;
           }
           if (turn.finalContent) {
             finalContent = turn.finalContent;

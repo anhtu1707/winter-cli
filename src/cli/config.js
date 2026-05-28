@@ -121,11 +121,11 @@ export class ConfigLoader {
         enabled: true,
         restrictToWorkspace: true,
         allowedCommands: [
-          'git', 'npm', 'npx', 'node', 'python',
+          'git', 'npm', 'npx', 'node', 'python', 'powershell', 'pwsh', 'cmd',
           'ping', 'test-connection', 'curl', 'wget', 'iwr', 'irm',
           'invoke-webrequest', 'invoke-restmethod', 'nslookup', 'resolve-dnsname',
           'tracert', 'traceroute', 'pathping', 'dig', 'ipconfig', 'ifconfig',
-          'ip', 'netstat', 'speedtest', 'speedtest-cli', 'measure-command',
+          'ip', 'netstat', 'speedtest', 'speedtest-cli', 'measure-command', 'where',
         ],
       },
       session: {

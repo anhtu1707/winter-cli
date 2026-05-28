@@ -1963,7 +1963,10 @@ ${colors.reset}
     if (this.isBrowserInteractionRequest(rawText)) return true;
     
     // Even without explicit target, some verbs are strong enough on their own
-    const strongActionAlone = /\b(fix|debug|deploy|build|test|commit|install|run|refactor|sửa|chạy|cài|triển khai|xây dựng)\b/i;
+    const continuationAction = /\b(continue|resume|start|begin|tiep|tiếp|bat dau|bắt đầu)\b/i;
+    if (continuationAction.test(text)) return true;
+
+    const strongActionAlone = /\b(fix|debug|deploy|build|test|commit|install|run|refactor|start|begin|sửa|chạy|cài|triển khai|xây dựng|bắt đầu|bat dau)\b/i;
     if (strongActionAlone.test(text)) return true;
     
     return actionPattern.test(text) && targetPattern.test(text);
@@ -1988,6 +1991,38 @@ ${colors.reset}
     if (clarification.test(text)) return false;
 
     return true;
+  }
+
+  responseIndicatesUnfinishedAction(content = '') {
+    const raw = String(content || '').trim();
+    if (!raw) return false;
+    const text = `${raw}\n${this.normalizeIntentText(raw)}`.toLowerCase();
+
+    const inProgress = /\b(đang|dang|sẽ|se|tiếp theo|tiep theo|next(?:,|\s+i|\s+step)?|i(?:'ll| will| am going to)|going to|để tôi|de toi|let me|cần (?:thêm|sửa|tạo|viết)|can (?:add|create|implement)|need to (?:add|create|implement|edit|write|fix)|thiếu .*?(?:endpoint|api|view|ui|frontend|backend|route|function)|missing .*?(?:endpoint|api|view|ui|frontend|backend|route|function))\b/i;
+    const workVerb = /\b(làm|lam|sửa|sua|thêm|them|tạo|tao|viết|viet|cập nhật|cap nhat|implement|add|create|write|edit|update|patch|fix|build|wire|connect|endpoint|api|view|ui|frontend|backend)\b/i;
+    const onlyInspection = /\b(đọc|doc|read|grep|search|inspect|kiểm tra|kiem tra|found|thấy|thay|xác định|xac dinh)\b/i;
+
+    if (inProgress.test(text) && (workVerb.test(text) || onlyInspection.test(text))) return true;
+    if (/đang làm tiếp|dang lam tiep|doing next|working on it|đang sửa|dang sua|đang thêm|dang them/i.test(text)) return true;
+    return false;
+  }
+
+  buildUnfinishedActionCorrection(messages = [], content = '') {
+    const request = this.getLatestUserText(messages);
+    return [
+      'RUNTIME ENFORCEMENT: Your previous response was only progress/status, not completion.',
+      '',
+      'You already inspected, but the user asked you to continue/do the work. Keep going with tool calls now:',
+      '1. If you identified missing backend/frontend pieces, call Read/Grep for the exact files still needed.',
+      '2. Call Edit/Write/InsertText/StrReplaceAll to make the code changes.',
+      '3. Call Bash to run the closest test/build/smoke check.',
+      '4. Only then give the final answer.',
+      '',
+      'Do not answer with "đang làm", "sẽ thêm", "cần thêm", or a plan. Use tools.',
+      '',
+      `Original user request: ${request}`,
+      content ? `Blocked progress response: ${String(content).slice(0, 1000)}` : '',
+    ].filter(Boolean).join('\n');
   }
 
   isBrowserInteractionRequest(text = '') {

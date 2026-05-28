@@ -32,8 +32,9 @@ export class ToolExecutor {
     this.projectPath = repl?.projectPath || process.cwd();
     this.allowedCommands = [
       'git', 'npm', 'npx', 'node', 'python', 'code', 'pnpm', 'yarn', 'bun', 'pip', 'cargo', 'rustc',
+      'powershell', 'pwsh', 'cmd',
       'echo', 'printf', 'cat', 'ls', 'dir', 'type', 'copy', 'mkdir', 'get-childitem', 'set-content',
-      'get-content', 'test-path', 'get-date',
+      'get-content', 'test-path', 'get-date', 'where',
       'ping', 'test-connection', 'curl', 'wget', 'iwr', 'irm', 'invoke-webrequest', 'invoke-restmethod',
       'nslookup', 'resolve-dnsname', 'tracert', 'traceroute', 'pathping', 'dig', 'ipconfig', 'ifconfig',
       'ip', 'netstat', 'speedtest', 'speedtest-cli', 'measure-command',
@@ -1620,10 +1621,11 @@ export class ToolExecutor {
   async execWindowsCommand(command, cwd, timeout, requestedShell = 'auto') {
     const shell = requestedShell === 'auto' ? this.detectWindowsShell(command) : requestedShell;
     if (shell === 'cmd') {
-      return await execFileAsync('cmd.exe', ['/d', '/s', '/c', command], {
+      return await execFileAsync('cmd.exe', ['/d', '/c', command], {
         cwd,
         timeout,
         windowsHide: true,
+        windowsVerbatimArguments: true,
         maxBuffer: 10 * 1024 * 1024,
       });
     }
@@ -1649,7 +1651,7 @@ export class ToolExecutor {
 
   looksLikeCmd(command) {
     return /\s(&&|\|\|)\s/.test(command)
-      || /(^|[&]\s*)(dir|copy|xcopy|del|erase|move|ren|type|echo|set|if|for|mkdir|rmdir)\b/i.test(command)
+      || /(^|[&]\s*)(dir|copy|xcopy|del|erase|move|ren|type|echo|set|if|for|mkdir|rmdir|where)\b/i.test(command)
       || /^\s*@?echo\s+/i.test(command)
       || /(^|\s)(\/b|\/s|\/q|\/y)\b/i.test(command);
   }

@@ -673,7 +673,6 @@ export async function handleSlashCommand(repl, input) {
       break;
 
     // Planning
-    case '/plan':
     case '/plans':
       const plans = repl.session.getPlans();
       if (plans.length === 0) {
@@ -683,6 +682,14 @@ export async function handleSlashCommand(repl, input) {
         plans.forEach(p => console.log(`  [${p.status}] ${p.title}`));
       }
       break;
+    case '/plan':
+      if (args.length === 0) {
+        console.log(`${colors.yellow}Usage: /plan <task>${colors.reset}`);
+        console.log(`${colors.dim}Use /plans to list active plans.${colors.reset}`);
+        return;
+      }
+      await repl.generateInteractivePlan(args.join(' '));
+      return;
     case '/task':
     case '/tasks':
       console.log(`${colors.cyan}Tasks:${colors.reset}`);
@@ -848,7 +855,6 @@ export async function handleSlashCommand(repl, input) {
       }
       console.log(`${colors.yellow}Usage: /doctor [full|tools|context|scorecard]${colors.reset}`);
       return;
-    case '/plan:':
     case '/plan-gen':
       if (args.length === 0) {
         console.log(`${colors.yellow}Usage: /plan <task>${colors.reset}`);

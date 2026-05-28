@@ -78,6 +78,19 @@ test('Bash safe mode allows common network diagnostics', async () => {
   assert.equal((await tools.validateBashCommandSafety('Invoke-WebRequest https://example.com')).success, true);
   assert.equal((await tools.validateBashCommandSafety('speedtest')).success, true);
   assert.equal((await tools.validateBashCommandSafety('Measure-Command { Test-Connection 1.1.1.1 -Count 1 }')).success, true);
+  assert.equal((await tools.validateBashCommandSafety('where node')).success, true);
+  assert.equal((await tools.validateBashCommandSafety('powershell')).success, true);
+  assert.equal((await tools.validateBashCommandSafety('powershell -NoProfile -Command "Get-Date"')).success, true);
+  assert.equal((await tools.validateBashCommandSafety('pwsh -NoProfile -Command "Get-Date"')).success, true);
+  assert.equal((await tools.validateBashCommandSafety('cmd /d /c dir /b')).success, true);
+});
+
+test('Bash blocks destructive commands even when wrapped in PowerShell', async () => {
+  const tools = createTools();
+  const result = await tools.validateBashCommandSafety('powershell -NoProfile -Command "Remove-Item -LiteralPath .\\dist -Recurse -Force"');
+
+  assert.equal(result.success, false);
+  assert.match(result.error, /Remove-Item -Recurse -Force/);
 });
 
 test('Bash full access disables command allowlist but keeps destructive blocks', async () => {
