@@ -55,6 +55,38 @@ test('VisibleBrowser is exposed for real visible browser control', async () => {
   assert.equal(preflight.args.selector, 'button');
 });
 
+test('DesignToCode is exposed for Figma URLs and validates token before running', async () => {
+  const oldToken = process.env.FIGMA_TOKEN;
+  const oldAccessToken = process.env.FIGMA_ACCESS_TOKEN;
+  delete process.env.FIGMA_TOKEN;
+  delete process.env.FIGMA_ACCESS_TOKEN;
+  try {
+    const tools = new ToolExecutor({ projectPath: process.cwd() });
+    const definition = tools.getToolDefinitions().find(tool => tool.name === 'DesignToCode');
+
+    assert.ok(definition);
+    assert.match(definition.description, /Figma/);
+    assert.equal(tools.normalizeToolName('figma_to_code'), 'DesignToCode');
+    assert.equal(tools.normalizeToolName('vibefigma'), 'DesignToCode');
+    assert.deepEqual(tools.normalizeToolInput('DesignToCode', 'https://www.figma.com/design/FILE/Name?node-id=1-2'), {
+      url: 'https://www.figma.com/design/FILE/Name?node-id=1-2',
+    });
+
+    const result = await tools.execute('DesignToCode', {
+      url: 'https://www.figma.com/design/FILE/Name?node-id=1-2',
+      output_path: 'src/components/FigmaDesign.tsx',
+    });
+    assert.equal(result.success, false);
+    assert.match(result.error, /FIGMA_TOKEN/);
+    assert.match(result.recovery, /project \.env/);
+  } finally {
+    if (oldToken === undefined) delete process.env.FIGMA_TOKEN;
+    else process.env.FIGMA_TOKEN = oldToken;
+    if (oldAccessToken === undefined) delete process.env.FIGMA_ACCESS_TOKEN;
+    else process.env.FIGMA_ACCESS_TOKEN = oldAccessToken;
+  }
+});
+
 test('Bash rejects npm run scripts that are not defined in package.json', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'winter-missing-script-'));
   await writeFile(path.join(root, 'package.json'), JSON.stringify({

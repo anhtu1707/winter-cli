@@ -17,6 +17,8 @@ test('slash suggestions include provider, model, and bundled resources', () => {
   assert(commands.includes('/model'));
   assert(commands.includes('/resources'));
   assert(commands.includes('/codex'));
+  assert(commands.includes('/figma'));
+  assert(commands.includes('/design-to-code'));
   assert(commands.includes('/auto'));
   assert(commands.includes('/debug'));
   assert(commands.includes('/history'));
@@ -51,6 +53,8 @@ test('action detection handles Vietnamese accents without mojibake variants', ()
   assert.equal(repl.actionRequiresTools([{ role: 'user', content: 'đọc lại toàn dự án xem' }]), true);
   assert.equal(repl.actionRequiresTools([{ role: 'user', content: 'ok bắt đầu' }]), true);
   assert.equal(repl.actionRequiresTools([{ role: 'user', content: 'bat dau di' }]), true);
+  assert.equal(repl.actionRequiresTools([{ role: 'user', content: 'ừ làm đi' }]), true);
+  assert.equal(repl.actionRequiresTools([{ role: 'user', content: 'làm đi' }]), true);
 });
 
 test('tool routing sends open chrome requests to OpenBrowser, not Bash', () => {
@@ -60,6 +64,14 @@ test('tool routing sends open chrome requests to OpenBrowser, not Bash', () => {
   assert.match(hint, /OpenBrowser/);
   assert.match(hint, /about:blank/);
   assert.match(hint, /Do NOT call Bash/);
+});
+
+test('tool routing sends Figma design-to-code requests to DesignToCode', () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  const hint = repl.buildToolRoutingHint('convert figma design to code https://www.figma.com/design/FILE/Name?node-id=1-2');
+
+  assert.match(hint, /DesignToCode/);
+  assert.match(hint, /Figma design-to-code/);
 });
 
 test('processInputTask opens Chrome directly instead of asking the model', async () => {
@@ -166,6 +178,31 @@ test('/browser slash command calls VisibleBrowser with concrete actions', async 
   assert.match(logs.join('\n'), /VisibleBrowser:/);
 });
 
+test('/figma slash command calls DesignToCode with concrete output path', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  const calls = [];
+  repl.tools = {
+    execute: async (tool, args) => {
+      calls.push({ tool, args });
+      return { success: true, outputPath: args.output_path, stdout: 'generated' };
+    },
+  };
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+  try {
+    await handleSlashCommand(repl, '/figma https://www.figma.com/design/FILE/Name?node-id=1-2 src/components/FigmaDesign.tsx --force');
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert.equal(calls[0].tool, 'DesignToCode');
+  assert.equal(calls[0].args.url, 'https://www.figma.com/design/FILE/Name?node-id=1-2');
+  assert.equal(calls[0].args.output_path, 'src/components/FigmaDesign.tsx');
+  assert.equal(calls[0].args.force, true);
+  assert(logs.some(line => line.includes('OK DesignToCode')));
+});
+
 test('/paste slash command reads clipboard text and image payloads', async () => {
   const repl = new WinterREPL({ projectPath: process.cwd() });
   const handledInputs = [];
@@ -245,6 +282,63 @@ test('/plan without a task shows usage instead of listing plans', async () => {
 
   assert(logs.some(line => line.includes('Usage: /plan <task>')));
   assert(!logs.some(line => line.includes('Existing plan')));
+});
+
+test('showInteractiveChecklist ignores the first Enter that opens it', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+  const originalWrite = process.stdout.write;
+  const originalStdoutIsTTY = process.stdout.isTTY;
+  const originalStdinIsTTY = process.stdin.isTTY;
+  const originalStdinOn = process.stdin.on;
+  const originalStdinResume = process.stdin.resume;
+  const originalStdinPause = process.stdin.pause;
+  const originalSetRawMode = process.stdin.setRawMode;
+  let keypressHandler = null;
+
+  process.stdout.write = () => true;
+  Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+  Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+  process.stdin.on = function(event, handler) {
+    if (event === 'keypress') {
+      keypressHandler = handler;
+      return this;
+    }
+    return originalStdinOn.call(this, event, handler);
+  };
+  process.stdin.resume = () => {};
+  process.stdin.pause = () => {};
+  process.stdin.setRawMode = () => {};
+
+  try {
+    const resultPromise = repl.showInteractiveChecklist('KẾ HOẠCH THỰC HIỆN:', ['Bước 1', 'Bước 2']);
+
+    assert.equal(repl.interactiveChecklistOpen, true);
+    assert.equal(typeof keypressHandler, 'function');
+
+    let resolved = false;
+    resultPromise.then(() => {
+      resolved = true;
+    });
+
+    keypressHandler('', { name: 'return' });
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.equal(resolved, false);
+
+    keypressHandler('', { name: 'return' });
+    const result = await resultPromise;
+
+    assert.deepEqual(result, ['Bước 1', 'Bước 2']);
+    assert.equal(repl.interactiveChecklistOpen, false);
+  } finally {
+    process.stdout.write = originalWrite;
+    Object.defineProperty(process.stdout, 'isTTY', { value: originalStdoutIsTTY, configurable: true });
+    Object.defineProperty(process.stdin, 'isTTY', { value: originalStdinIsTTY, configurable: true });
+    process.stdin.on = originalStdinOn;
+    process.stdin.resume = originalStdinResume;
+    process.stdin.pause = originalStdinPause;
+    process.stdin.setRawMode = originalSetRawMode;
+  }
 });
 
 test('slash suggestions expose direct browser control command', () => {
@@ -916,6 +1010,8 @@ test('getAgentTools scopes tool access by agent role', () => {
   assert(debugTools.includes('VisibleBrowser'));
   assert(debugTools.includes('BrowserDebug'));
   assert(debugTools.includes('MCP'));
+  const designTools = repl.getAgentTools('design').map(tool => tool.name);
+  assert(designTools.includes('DesignToCode'));
 });
 
 test('parseDataUrlImage supports direct pasted image payloads', () => {
@@ -954,6 +1050,7 @@ test('general chat tools stay focused for weaker models', () => {
   assert(toolNames.includes('OpenBrowser'));
   assert(toolNames.includes('VisibleBrowser'));
   assert(toolNames.includes('BrowserDebug'));
+  assert(toolNames.includes('DesignToCode'));
   assert(toolNames.includes('MCP'));
   assert(toolNames.includes('Agent'));
 });
@@ -964,6 +1061,7 @@ test('browser interaction requests require tools and block fake browser claims',
   assert.equal(repl.actionRequiresTools([{ role: 'user', content: 'Vào xem luôn không cần Đăng ký' }]), true);
   assert.equal(repl.actionRequiresTools([{ role: 'user', content: 'tự fill form rồi xem dữ liệu từng trang đi' }]), true);
   assert.equal(repl.detectFakeCompletion('Đã bấm “Vào xem luôn không cần Đăng ký”.'), true);
+  assert.equal(repl.detectFakeCompletion('Đã làm xong Phase 7!\nFiles tạo/sửa:\n- src/App.tsx\nBuild check: pass (tsc --noEmit)'), true);
   assert.match(repl.buildToolRoutingHint('tự fill form rồi xem dữ liệu từng trang đi'), /live browser interaction/);
 
   const correction = repl.buildToolEvidenceCorrection([
@@ -1361,6 +1459,7 @@ test('runConversation blocks action completion claims without tool evidence and 
     );
 
     assert.equal(answer.finalContent, 'Đã kiểm tra README.md bằng tool.');
+    assert.equal(streamOptions[0]?.toolChoiceRequired, true);
     assert.equal(streamOptions[1]?.toolPromptOnly, true);
     assert.deepEqual(executed, [{ name: 'Read', args: { file_path: 'README.md' } }]);
   } finally {
@@ -1420,6 +1519,124 @@ test('runConversation blocks start-progress answers without tool evidence', asyn
       { name: 'Bash', args: { command: 'npm install pdfjs-dist' } },
       { name: 'Bash', args: { command: 'npm test' } },
     ]);
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+});
+
+test('runConversation blocks do-it progress answers without tool evidence', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+
+  let streamCount = 0;
+  const streamOptions = [];
+  const executed = [];
+  const originalWrite = process.stdout.write;
+  repl.ai = {
+    tools: [],
+    providers: { custom: { model: 'test-model' } },
+    getActiveProvider: () => 'custom',
+    setTools(tools) {
+      this.tools = tools;
+    },
+    async *streamRequest(_messages, options = {}) {
+      streamOptions.push(options);
+      streamCount++;
+      if (streamCount === 1) {
+        yield { content: 'Đang làm! Tạo Settings types + extend store.' };
+        return;
+      }
+      if (streamCount === 2) {
+        yield { content: '<invoke name="Write"><parameter name="file_path">settings.ts</parameter><parameter name="content">export const settings = {};</parameter></invoke>' };
+        return;
+      }
+      yield { content: 'Đã tạo settings.ts.' };
+    },
+  };
+  repl.tools = {
+    normalizeToolName: name => name,
+    normalizeToolInput: (_name, input) => input,
+    async execute(name, args) {
+      executed.push({ name, args });
+      if (name === 'Bash') return { success: true, stdout: 'tests passed' };
+      return { success: true, file_path: args.file_path };
+    },
+  };
+
+  process.stdout.write = () => true;
+
+  try {
+    const answer = await repl.runConversation(
+      [{ role: 'user', content: 'ừ làm đi' }],
+      'Test',
+      [{ name: 'Write' }, { name: 'Bash' }]
+    );
+
+    assert.equal(answer.finalContent, 'Đã tạo settings.ts.');
+    assert.equal(streamOptions[1]?.toolPromptOnly, true);
+    assert.deepEqual(executed.map(call => call.name), ['Write', 'Bash']);
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+});
+
+test('runConversation blocks fake phase completion without tool evidence', async () => {
+  const repl = new WinterREPL({ projectPath: process.cwd() });
+
+  let streamCount = 0;
+  const streamOptions = [];
+  const executed = [];
+  const originalWrite = process.stdout.write;
+  repl.ai = {
+    tools: [],
+    providers: { custom: { model: 'test-model' } },
+    getActiveProvider: () => 'custom',
+    setTools(tools) {
+      this.tools = tools;
+    },
+    async *streamRequest(_messages, options = {}) {
+      streamOptions.push(options);
+      streamCount++;
+      if (streamCount === 1) {
+        yield {
+          content: [
+            'Đã làm xong Phase 7!',
+            'Files tạo/sửa:',
+            '- src/components/WindowControls.tsx',
+            '- src/App.tsx',
+            'Build check: pass (tsc --noEmit)',
+          ].join('\n'),
+        };
+        return;
+      }
+      if (streamCount === 2) {
+        yield { content: '<invoke name="Write"><parameter name="file_path">src/components/WindowControls.tsx</parameter><parameter name="content">export function WindowControls(){ return null; }</parameter></invoke>' };
+        return;
+      }
+      yield { content: 'Đã tạo WindowControls.tsx bằng tool.' };
+    },
+  };
+  repl.tools = {
+    normalizeToolName: name => name,
+    normalizeToolInput: (_name, input) => input,
+    async execute(name, args) {
+      executed.push({ name, args });
+      if (name === 'Bash') return { success: true, stdout: 'tests passed' };
+      return { success: true, file_path: args.file_path };
+    },
+  };
+
+  process.stdout.write = () => true;
+
+  try {
+    const answer = await repl.runConversation(
+      [{ role: 'user', content: 'làm đi' }],
+      'Test',
+      [{ name: 'Write' }, { name: 'Bash' }]
+    );
+
+    assert.equal(answer.finalContent, 'Đã tạo WindowControls.tsx bằng tool.');
+    assert.equal(streamOptions[1]?.toolPromptOnly, true);
+    assert.deepEqual(executed.map(call => call.name), ['Write', 'Bash']);
   } finally {
     process.stdout.write = originalWrite;
   }

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   buildChromeDevtoolsArgs,
   createChromeDevtoolsMcpServer,
+  createFigmaMcpServer,
   getMcpPreset,
   upsertMcpServer,
 } from './presets.js';
@@ -38,6 +39,19 @@ test('chrome-devtools preset validates option values', () => {
   );
 });
 
+test('figma preset bridges the local Dev Mode MCP server through mcp-remote', () => {
+  const server = createFigmaMcpServer([], 'win32', {
+    SystemRoot: 'C:\\Windows',
+    PROGRAMFILES: 'C:\\Program Files',
+  });
+
+  assert.equal(server.name, 'figma');
+  assert.equal(server.command, 'cmd');
+  assert.deepEqual(server.args, ['/c', 'npx', '-y', 'mcp-remote@latest', 'http://127.0.0.1:3845/mcp']);
+  assert.equal(server.enabled, true);
+  assert.equal(server.requestTimeoutMs, 60000);
+});
+
 test('mcp preset upsert also allowlists the server', () => {
   const config = {
     mcp: { servers: [{ name: 'chrome-devtools', command: 'old', args: [], enabled: true }] },
@@ -50,4 +64,11 @@ test('mcp preset upsert also allowlists the server', () => {
   assert.equal(config.mcp.servers.length, 1);
   assert.equal(config.mcp.servers[0].command, process.platform === 'win32' ? 'cmd' : 'npx');
   assert.deepEqual(config.permissions.allowlist.mcpServers, ['chrome-devtools']);
+});
+
+test('mcp preset accepts figma aliases', () => {
+  const server = getMcpPreset('figma-dev-mode');
+
+  assert.equal(server.name, 'figma');
+  assert.ok(server.args.includes('http://127.0.0.1:3845/mcp'));
 });

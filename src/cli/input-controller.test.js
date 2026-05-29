@@ -8,6 +8,7 @@ function createReplStub(overrides = {}) {
     running: true,
     readlineClosed: false,
     useUnicodeUi: false,
+    interactiveChecklistOpen: false,
     slashMenu: { open: false, line: '', items: [], selected: 0, printedLines: 0 },
     taskQueue: [],
     inputQueue: Promise.resolve(),
@@ -238,4 +239,39 @@ test('WinterInputController slash menu scrolls selected item into view', () => {
 
   assert.equal(repl.slashMenu.selected, 10);
   assert.equal(repl.slashMenu.offset, 5);
+});
+
+test('WinterInputController ignores keypresses while checklist modal is open', () => {
+  let prompted = 0;
+  let slashMenuClosed = 0;
+  const repl = createReplStub({
+    interactiveChecklistOpen: true,
+    slashMenu: {
+      open: true,
+      line: '/plan build auth flow',
+      items: [{ cmd: '/plan', desc: 'Plan a task' }],
+      selected: 0,
+      printedLines: 0,
+    },
+    rl: {
+      line: '/plan build auth flow',
+      prompt() {
+        prompted++;
+      },
+      write() {
+        throw new Error('should not write while checklist is open');
+      },
+    },
+    closeSlashMenu() {
+      slashMenuClosed++;
+    },
+  });
+  const input = new WinterInputController(repl);
+
+  const handled = input.handleGlobalKeypress(' ', { name: 'space' });
+
+  assert.equal(handled, true);
+  assert.equal(prompted, 0);
+  assert.equal(slashMenuClosed, 0);
+  assert.equal(repl.slashMenu.open, true);
 });

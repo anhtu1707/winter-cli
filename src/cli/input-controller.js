@@ -82,58 +82,69 @@ export class WinterInputController {
     readline.emitKeypressEvents(process.stdin, repl.rl);
 
     process.stdin.on('keypress', (str, key = {}) => {
-      if (key.ctrl && key.name === 'v') {
-        void this.handleDirectClipboardPaste();
-        return;
-      }
-
-      if (key.name === 'return' && (key.shift || key.meta)) {
-        repl.rl.write('\\\n');
-        return;
-      }
-
-      if (key.ctrl || key.meta) return;
-
-      if (typeof str === 'string' && str.length > 1) {
-        return;
-      }
-
-      if (repl.slashMenu.open && this.handleSlashMenuKey(key)) {
-        return;
-      }
-
-      if (key.name === 'escape') {
-        if (repl.isProcessing) {
-          // Cancel current AI turn
-          repl.isCancelled = true;
-          if (repl.spinner) repl.spinner.stop();
-          console.log(`\n${colors.red}[ Đã nhận lệnh HỦY... AI sẽ kết thúc ở thao tác tiếp theo ]${colors.reset}`);
-        } else {
-          // Double-ESC to end session
-          const now = Date.now();
-          if (this._lastEscTime && (now - this._lastEscTime) < 500) {
-            console.log(`\n\n${colors.cyan}Cảm ơn đã sử dụng Winter!${colors.reset}`);
-            console.log(`${colors.yellow}Tiếp tục phiên làm việc:${colors.reset}`);
-            console.log(`${colors.bright}${colors.green}winter --session ${repl.session?.getSessionId?.() || ''}${colors.reset}\n`);
-            process.exit(0);
-          }
-          this._lastEscTime = now;
-          console.log(`${colors.dim}Press ESC again to end session${colors.reset}`);
-        }
-        return;
-      }
-
-      queueMicrotask(() => {
-        const line = repl.rl?.line || '';
-        if (!line.startsWith('/')) {
-          this.closeSlashMenu();
-          repl.rl?.prompt?.(true);
-          return;
-        }
-
-        this.openSlashMenu(line);
-      });
+      this.handleGlobalKeypress(str, key);
     });
+  }
+
+  handleGlobalKeypress(str, key = {}) {
+    const repl = this.repl;
+
+    if (repl.interactiveChecklistOpen) {
+      return true;
+    }
+
+    if (key.ctrl && key.name === 'v') {
+      void this.handleDirectClipboardPaste();
+      return true;
+    }
+
+    if (key.name === 'return' && (key.shift || key.meta)) {
+      repl.rl.write('\\\n');
+      return true;
+    }
+
+    if (key.ctrl || key.meta) return false;
+
+    if (typeof str === 'string' && str.length > 1) {
+      return false;
+    }
+
+    if (repl.slashMenu.open && this.handleSlashMenuKey(key)) {
+      return true;
+    }
+
+    if (key.name === 'escape') {
+      if (repl.isProcessing) {
+        // Cancel current AI turn
+        repl.isCancelled = true;
+        if (repl.spinner) repl.spinner.stop();
+        console.log(`\n${colors.red}[ Đã nhận lệnh HỦY... AI sẽ kết thúc ở thao tác tiếp theo ]${colors.reset}`);
+      } else {
+        // Double-ESC to end session
+        const now = Date.now();
+        if (this._lastEscTime && (now - this._lastEscTime) < 500) {
+          console.log(`\n\n${colors.cyan}Cảm ơn đã sử dụng Winter!${colors.reset}`);
+          console.log(`${colors.yellow}Tiếp tục phiên làm việc:${colors.reset}`);
+          console.log(`${colors.bright}${colors.green}winter --session ${repl.session?.getSessionId?.() || ''}${colors.reset}\n`);
+          process.exit(0);
+        }
+        this._lastEscTime = now;
+        console.log(`${colors.dim}Press ESC again to end session${colors.reset}`);
+      }
+      return true;
+    }
+
+    queueMicrotask(() => {
+      const line = repl.rl?.line || '';
+      if (!line.startsWith('/')) {
+        this.closeSlashMenu();
+        repl.rl?.prompt?.(true);
+        return;
+      }
+
+      this.openSlashMenu(line);
+    });
+    return true;
   }
 
   async handleDirectClipboardPaste() {

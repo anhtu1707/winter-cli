@@ -927,6 +927,48 @@ test('streamRequestToProvider converts internal tool definitions to OpenAI tool 
   }
 });
 
+test('toolChoiceRequired requests a tool call for OpenAI-compatible providers', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies = [];
+
+  globalThis.fetch = async (_url, options) => {
+    bodies.push(JSON.parse(options.body));
+    return {
+      ok: true,
+      async json() {
+        return { choices: [{ message: { content: '' } }] };
+      },
+    };
+  };
+
+  try {
+    const ai = new AIProviderManager({
+      async load() {
+        return {
+          defaultProvider: 'custom',
+          custom: {
+            baseURL: 'http://custom.test/v1',
+            apiKey: 'not-required',
+            model: 'lm-model',
+          },
+        };
+      },
+    });
+    ai.loadAuthToken = async () => null;
+    await ai.init();
+    ai.setTools([{ type: 'function', name: 'Read', description: 'Read a file', parameters: { type: 'object', properties: {} } }]);
+
+    await ai.sendRequestToProvider(ai.providers.custom, [{ role: 'user', content: 'read it' }], {
+      enableTools: true,
+      toolChoiceRequired: true,
+    });
+
+    assert.equal(bodies[0].tool_choice, 'required');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('toolPromptOnly keeps tools in the prompt path without sending API tool schema', async () => {
   const originalFetch = globalThis.fetch;
   const bodies = [];

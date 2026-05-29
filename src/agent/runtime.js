@@ -64,6 +64,7 @@ export class AgentRuntime {
           model: executionProfile.model,
           enableTools: true,
           toolPromptOnly: forceTextToolFallback,
+          toolChoiceRequired: requireToolEvidence && !usedTools && !forceTextToolFallback,
           requireToolEvidence: requireToolEvidence && !usedTools,
           usedMutatingTools: usedMutatingTools,
           deferFinalContent: this.shouldVerifyBeforeFinal(messages, usedMutatingTools, autoVerificationPassed),

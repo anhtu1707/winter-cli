@@ -15,33 +15,73 @@ export class DesignCommands {
     this.repl = repl;
     this.session = repl.session;
     this.config = repl.config;
+    this.projectPath = repl.projectPath || null;
     this.brandsDir = path.join(packageRoot, 'resources', 'local', 'awesome-design-md', 'design-md');
   }
 
   async execute(action, args) {
-    switch (action) {
+    const requestedAction = String(action || '').trim();
+    if (!requestedAction) {
+      await this.printHelp();
+      await this.listBrands();
+      return;
+    }
+
+    switch (requestedAction.toLowerCase()) {
       case 'search':
       case 'find':
+      case 'tim':
         await this.search(args[0] || '');
         break;
       case 'add':
+      case 'install':
         await this.addBrand(args[0]);
         break;
       case 'apply':
+      case 'use':
+      case 'set':
         await this.applyBrand(args[0]);
         break;
       case 'list':
+      case 'ls':
         await this.listBrands();
         break;
       case 'preview':
+      case 'show':
+      case 'view':
         await this.previewBrand(args[0]);
         break;
       case 'init':
         await this.initBrandsDir();
         break;
+      case 'help':
+      case '--help':
+      case '-h':
+        await this.printHelp();
+        break;
       default:
-        await this.listBrands();
+        if (await this.brandExists(requestedAction)) {
+          await this.applyBrand(requestedAction);
+        } else {
+          await this.search(requestedAction);
+        }
     }
+  }
+
+  async printHelp() {
+    console.log(`${colors.cyan}/design usage:${colors.reset}`);
+    console.log('  /design <brand>              Apply a design system to the current project');
+    console.log('  /design search <query>       Search bundled design systems');
+    console.log('  /design preview <brand>      Preview DESIGN.md');
+    console.log('  /design add <brand>          Copy DESIGN.md into the current project');
+    console.log('  /design list                 List all bundled brands');
+    console.log('');
+  }
+
+  async brandExists(brand) {
+    if (!brand) return false;
+    const brandDir = path.join(this.brandsDir, brand);
+    return await fs.access(brandDir).then(() => true).catch(() => false);
   }
 
   async search(query) {
@@ -67,7 +107,7 @@ export class DesignCommands {
       });
       console.log('');
 
-      await this.session.addToMemory(`Searched design brands for: ${query}`, 'search');
+      await this.session?.addToMemory?.(`Searched design brands for: ${query}`, 'search');
     } catch (error) {
       console.log(`${colors.red}${statusIcons.error} Error: ${error.message}${colors.reset}`);
       console.log(`${colors.dim}Make sure you have awesome-design-md installed${colors.reset}`);
@@ -103,11 +143,11 @@ export class DesignCommands {
       }
 
       // Write to current project
-      const targetPath = path.join(process.cwd(), fileName);
+      const targetPath = path.join(this.repl?.projectPath || this.projectPath || process.cwd(), fileName);
       await fs.writeFile(targetPath, fileContent);
 
       console.log(`${statusIcons.success} Added ${fileName} for ${brand}`);
-      await this.session.addToMemory(`Added design file: ${brand}`, 'design');
+      await this.session?.addToMemory?.(`Added design file: ${brand}`, 'design');
     } catch (error) {
       console.log(`${colors.red}${statusIcons.error} Error: ${error.message}${colors.reset}`);
     }
@@ -142,7 +182,7 @@ export class DesignCommands {
 
       console.log(`${colors.cyan}${statusIcons.info} Analyzing and applying ${brand} design system...${colors.reset}`);
       
-      const prompt = `Please act as a Senior UI/UX Engineer. Analyze the following design system (${brand}) and completely refactor the UI and styles in this project to match its specifications. Focus on colors, typography, border radiuses, interactive states, and overall visual aesthetics as defined in the document.
+      const prompt = `Please act as a Senior UI/UX Engineer. Analyze the following design system (${brand}) and apply it to this project with real tool calls. Inspect the existing UI files/styles first, then make focused code changes and verify with the closest build/typecheck/smoke command. Do not only describe the design. Focus on colors, typography, border radiuses, interactive states, and overall visual aesthetics as defined in the document.
 
 <design_system>
 ${fileContent}
@@ -229,7 +269,7 @@ Start by reviewing the codebase, especially tailwind configs or global css, then
   }
 
   async initBrandsDir() {
-    const localDir = path.join(process.cwd(), '.design-systems');
+    const localDir = path.join(this.repl?.projectPath || this.projectPath || process.cwd(), '.design-systems');
     await fs.mkdir(localDir, { recursive: true });
     console.log(`${statusIcons.success} Created ${localDir}/`);
   }

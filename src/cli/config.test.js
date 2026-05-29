@@ -74,7 +74,7 @@ test('ConfigLoader load accepts UTF-8 BOM winter.json files', async () => {
   assert.equal(loaded.custom2.baseURL, 'https://api.example.test/v1');
 });
 
-test('ConfigLoader load always includes bundled chrome-devtools MCP preset', async () => {
+test('ConfigLoader load always includes bundled chrome-devtools and figma MCP presets', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'winter-config-'));
   const config = new ConfigLoader();
   config.winterDir = root;
@@ -98,12 +98,17 @@ test('ConfigLoader load always includes bundled chrome-devtools MCP preset', asy
 
   const loaded = await config.load();
   const chrome = loaded.mcp.servers.find(server => server.name === 'chrome-devtools');
+  const figma = loaded.mcp.servers.find(server => server.name === 'figma');
 
   assert.ok(chrome);
+  assert.ok(figma);
   assert.equal(chrome.enabled, true);
+  assert.equal(figma.enabled, true);
   assert.equal(chrome.command, process.platform === 'win32' ? 'cmd' : 'npx');
+  assert(figma.args.includes('mcp-remote@latest'));
   assert(loaded.permissions.allowlist.tools.includes('MCP'));
   assert(loaded.permissions.allowlist.mcpServers.includes('chrome-devtools'));
+  assert(loaded.permissions.allowlist.mcpServers.includes('figma'));
 });
 
 test('ConfigLoader load preserves existing chrome-devtools MCP server settings', async () => {
@@ -135,10 +140,13 @@ test('ConfigLoader load preserves existing chrome-devtools MCP server settings',
 
   const loaded = await config.load();
 
-  assert.equal(loaded.mcp.servers.length, 1);
-  assert.equal(loaded.mcp.servers[0].command, 'custom-cmd');
-  assert.deepEqual(loaded.mcp.servers[0].args, ['custom-arg']);
+  const chrome = loaded.mcp.servers.find(server => server.name === 'chrome-devtools');
+  const figma = loaded.mcp.servers.find(server => server.name === 'figma');
+  assert.equal(chrome.command, 'custom-cmd');
+  assert.deepEqual(chrome.args, ['custom-arg']);
+  assert.ok(figma);
   assert(loaded.permissions.allowlist.mcpServers.includes('chrome-devtools'));
+  assert(loaded.permissions.allowlist.mcpServers.includes('figma'));
 });
 
 test('applyEnv falls back to raw apiKeyEnv value when no matching env variable exists', async () => {

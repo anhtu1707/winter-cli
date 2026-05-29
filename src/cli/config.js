@@ -7,7 +7,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { homedir } from 'os';
 import { loadEnvFile, stripInlineSecrets } from './secret-env.js';
-import { CHROME_DEVTOOLS_MCP_NAME, createChromeDevtoolsMcpServer, ensureMcpConfigShape } from '../mcp/presets.js';
+import { CHROME_DEVTOOLS_MCP_NAME, FIGMA_MCP_NAME, createChromeDevtoolsMcpServer, createFigmaMcpServer, ensureMcpConfigShape } from '../mcp/presets.js';
 
 export class ConfigLoader {
   constructor() {
@@ -36,11 +36,14 @@ export class ConfigLoader {
     if (!next.mcp.servers.some(server => server?.name === CHROME_DEVTOOLS_MCP_NAME)) {
       next.mcp.servers.push(createChromeDevtoolsMcpServer(['--isolated']));
     }
+    if (!next.mcp.servers.some(server => server?.name === FIGMA_MCP_NAME)) {
+      next.mcp.servers.push(createFigmaMcpServer());
+    }
     next.permissions.allowlist.tools = [
       ...new Set([...(next.permissions.allowlist.tools || []), 'MCP']),
     ];
     next.permissions.allowlist.mcpServers = [
-      ...new Set([...(next.permissions.allowlist.mcpServers || []), CHROME_DEVTOOLS_MCP_NAME]),
+      ...new Set([...(next.permissions.allowlist.mcpServers || []), CHROME_DEVTOOLS_MCP_NAME, FIGMA_MCP_NAME]),
     ];
     return next;
   }
@@ -79,11 +82,11 @@ export class ConfigLoader {
         allowlist: {
           tools: ['Read', 'Glob', 'Grep', 'LSP', 'TaskCreate', 'TaskUpdate', 'TaskList', 'WebFetch', 'WebSearch', 'Parallel', 'MCP'],
           commands: [],
-          mcpServers: [CHROME_DEVTOOLS_MCP_NAME],
+          mcpServers: [CHROME_DEVTOOLS_MCP_NAME, FIGMA_MCP_NAME],
         },
       },
       mcp: {
-        servers: [createChromeDevtoolsMcpServer(['--isolated'])],
+        servers: [createChromeDevtoolsMcpServer(['--isolated']), createFigmaMcpServer()],
       },
       routing: {
         strategy: 'heuristic',

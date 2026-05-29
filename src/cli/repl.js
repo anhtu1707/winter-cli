@@ -93,6 +93,7 @@ export class WinterREPL {
     this.history = [];
     this.maxHistory = 500;
     this.slashMenu = { open: false, line: '', items: [], selected: 0 };
+    this.interactiveChecklistOpen = false;
     this.inputQueue = Promise.resolve();
     this.readlineClosed = false;
     this.taskQueue = [];
@@ -1443,11 +1444,22 @@ export class WinterREPL {
   async showInteractiveChecklist(title, items) {
     if (!items || items.length === 0) return [];
 
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      console.log(`\n\x1b[36m${title}\x1b[0m`);
+      console.log(`\x1b[2mNon-interactive terminal detected; selecting all steps.\x1b[0m`);
+      items.forEach(item => console.log(`  \x1b[32m[x]\x1b[0m ${item}`));
+      this.interactiveChecklistOpen = false;
+      return [...items];
+    }
+
     return new Promise((resolve) => {
       let cursor = 0;
       const selected = new Set(items.map((_, i) => i)); // default select all
+      let ignoreInitialReturn = true;
 
       let printedLines = 0;
+      const wasRaw = Boolean(process.stdin.isRaw);
+      const wasPaused = process.stdin.isPaused?.() ?? false;
       const render = () => {
         // Xóa những dòng đã in trước đó.
         if (printedLines > 0) {
@@ -1475,6 +1487,11 @@ export class WinterREPL {
           if (selected.has(cursor)) selected.delete(cursor);
           else selected.add(cursor);
         } else if (key.name === 'return') {
+          if (ignoreInitialReturn) {
+            ignoreInitialReturn = false;
+            render();
+            return;
+          }
           cleanup();
           const result = items.filter((_, i) => selected.has(i));
           resolve(result);
@@ -1489,18 +1506,37 @@ export class WinterREPL {
 
       const cleanup = () => {
         process.stdin.removeListener('keypress', onKeyPress);
-        if (process.stdin.isTTY) process.stdin.setRawMode(false);
-        this.rl.resume();
+        if (process.stdin.isTTY && typeof process.stdin.setRawMode === 'function') {
+          process.stdin.setRawMode(wasRaw);
+        }
+        if (wasPaused && typeof process.stdin.pause === 'function') {
+          process.stdin.pause();
+        }
+        this.interactiveChecklistOpen = false;
+        this.rl?.resume?.();
         process.stdout.write('\n');
       };
 
-      this.rl.pause();
-      if (process.stdin.isTTY) process.stdin.setRawMode(true);
+      try {
+        this.interactiveChecklistOpen = true;
+        this.rl?.pause?.();
+        if (process.stdin.isTTY && typeof process.stdin.setRawMode === 'function') {
+          process.stdin.setRawMode(true);
+        }
+        process.stdin.resume();
 
-      readline.emitKeypressEvents(process.stdin);
-      process.stdin.on('keypress', onKeyPress);
+        readline.emitKeypressEvents(process.stdin);
+        process.stdin.on('keypress', onKeyPress);
 
-      render();
+        setImmediate(() => {
+          ignoreInitialReturn = false;
+        });
+
+        render();
+      } catch (error) {
+        cleanup();
+        throw error;
+      }
     });
   }
 
@@ -1832,9 +1868,9 @@ ${colors.reset}
         return byName(['Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch', 'Parallel']);
       case 'design':
       case 'ui':
-        return byName(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'OpenBrowser', 'VisibleBrowser', 'BrowserDebug', 'WebFetch', 'MCP']);
+        return byName(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'OpenBrowser', 'VisibleBrowser', 'BrowserDebug', 'DesignToCode', 'WebFetch', 'MCP']);
       default:
-        return byName(['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'OpenBrowser', 'VisibleBrowser', 'BrowserDebug', 'WebFetch', 'WebSearch', 'MCP', 'Parallel', 'Agent', 'DelegateTask', 'ParallelAgent']);
+        return byName(['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'OpenBrowser', 'VisibleBrowser', 'BrowserDebug', 'DesignToCode', 'WebFetch', 'WebSearch', 'MCP', 'Parallel', 'Agent', 'DelegateTask', 'ParallelAgent']);
     }
   }
 
@@ -1963,10 +1999,10 @@ ${colors.reset}
     if (this.isBrowserInteractionRequest(rawText)) return true;
     
     // Even without explicit target, some verbs are strong enough on their own
-    const continuationAction = /\b(continue|resume|start|begin|tiep|tiếp|bat dau|bắt đầu)\b/i;
+    const continuationAction = /\b(continue|resume|start|begin|do it|go ahead|tiep|tiếp|bat dau|bắt đầu|lam di|làm đi)\b/i;
     if (continuationAction.test(text)) return true;
 
-    const strongActionAlone = /\b(fix|debug|deploy|build|test|commit|install|run|refactor|start|begin|sửa|chạy|cài|triển khai|xây dựng|bắt đầu|bat dau)\b/i;
+    const strongActionAlone = /\b(fix|debug|deploy|build|test|commit|install|run|refactor|start|begin|do|sửa|chạy|cài|triển khai|xây dựng|bắt đầu|bat dau|làm|lam)\b/i;
     if (strongActionAlone.test(text)) return true;
     
     return actionPattern.test(text) && targetPattern.test(text);
@@ -2039,7 +2075,7 @@ ${colors.reset}
     if (!text.trim()) return false;
 
     // Detect fake completion claims - model says it did something without using tools
-    const fakeCompletionClaims = /(?:đã (?:sửa|tạo|viết|xóa|cập nhật|thêm|chỉnh|xong|hoàn thành|fix|update|edit|write|create|delete|remove|modify|change|apply|deploy|push)|i(?:'ve| have) (?:fixed|created|written|updated|added|modified|changed|edited|applied|deployed|deleted|removed|patched|implemented|refactored)|done!|xong rồi|hoàn thành|đã hoàn tất|hoàn tất|the (?:fix|change|update|edit|modification) (?:has been|is) (?:applied|done|completed|made)|here(?:'s| is) the (?:fix|update|change|solution|implementation|code)|file (?:has been|was) (?:updated|created|modified|written|changed)|changes? (?:have been|has been|were) (?:made|applied|saved)|successfully (?:updated|created|modified|fixed|applied|changed|written))/i;
+    const fakeCompletionClaims = /(?:đã (?:làm|sửa|tạo|viết|xóa|cập nhật|thêm|chỉnh|xong|hoàn thành|fix|update|edit|write|create|delete|remove|modify|change|apply|deploy|push)|i(?:'ve| have) (?:done|fixed|created|written|updated|added|modified|changed|edited|applied|deployed|deleted|removed|patched|implemented|refactored)|done!|xong rồi|hoàn thành|đã hoàn tất|hoàn tất|phase \d+ done|build check:\s*pass|files? (?:tạo|sửa|created|modified|changed)|the (?:fix|change|update|edit|modification) (?:has been|is) (?:applied|done|completed|made)|here(?:'s| is) the (?:fix|update|change|solution|implementation|code)|file (?:has been|was) (?:updated|created|modified|written|changed)|changes? (?:have been|has been|were) (?:made|applied|saved)|successfully (?:updated|created|modified|fixed|applied|changed|written))/i;
     if (fakeCompletionClaims.test(text)) return true;
 
     const fakeBrowserClaims = /(?:đã|da|i(?:'ve| have))\s+(?:bấm|bam|click(?:ed)?|mở|mo|open(?:ed)?|điền|dien|fill(?:ed)?|chọn|chon|select(?:ed)?|submit(?:ted)?|vào|vao|navigate(?:d)?)/i;
@@ -2149,6 +2185,10 @@ ${colors.reset}
 
     if (/\b(chrome|devtools|browser debug|debug browser|screenshot|console|network|lcp|performance|perf|web vitals|localhost|127\.0\.0\.1)\b/i.test(text)) {
       hints.push('TOOL HINT: For "open Chrome" / "mở chrome", call OpenBrowser {"browser":"chrome","url":"about:blank"}. Do NOT call Bash/Get-Command/Start-Process. If configured, use MCP {"server":"chrome-devtools","tool":"list"} for page state, console, network, screenshots, and performance.');
+    }
+
+    if (/\b(figma|vibefigma|design[- ]?to[- ]?code|design to code|frame|node-id)\b/i.test(text)) {
+      hints.push('TOOL HINT: For Figma design-to-code, call DesignToCode with {"url":"<Figma frame URL>","output_path":"src/components/Name.tsx"}. Do NOT only describe the design. If the user asks direct Figma canvas manipulation, use MCP server "figma" when configured; otherwise explain that Winter needs the Figma MCP server connected.');
     }
 
     if (hints.length === 0) return null;
@@ -2404,7 +2444,7 @@ ${colors.reset}
           '/provider', '/model', '/models', '/providers',
           '/theme:toggle', '/tui',
           '/auto', '/debug', '/doctor', '/context', '/scorecard', '/swe',
-          '/read', '/write', '/glob', '/grep', '/bash', '/browser', '/paste',
+          '/read', '/write', '/glob', '/grep', '/bash', '/browser', '/paste', '/figma', '/design-to-code',
         '/codex', '/claude', '/karpathy', '/agents',
         '/resources', '/designs', '/skills',
         '/ecc',

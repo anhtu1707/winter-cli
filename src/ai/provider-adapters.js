@@ -124,6 +124,7 @@ function buildOpenAIRequest(provider, messages, options) {
   if (options.reasoning?.reasoning_effort) body.reasoning_effort = options.reasoning.reasoning_effort;
   if (options.reasoning?.thinking) body.thinking = options.reasoning.thinking;
   if (options.tools?.length) body.tools = options.tools;
+  if (options.toolChoiceRequired && options.tools?.length) body.tool_choice = 'required';
 
   return {
     url: `${trimTrailingSlash(provider.baseURL)}/chat/completions`,
@@ -147,6 +148,7 @@ function buildAnthropicRequest(provider, messages, options) {
   if (options.stream) body.stream = true;
   if (options.reasoning?.thinking) body.thinking = options.reasoning.thinking;
   if (options.tools?.length) body.tools = options.tools.map(toAnthropicTool).filter(Boolean);
+  if (options.toolChoiceRequired && body.tools?.length) body.tool_choice = { type: 'any' };
 
   const headers = {
     'Content-Type': 'application/json',

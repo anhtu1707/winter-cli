@@ -219,6 +219,38 @@ async function handleBrowserCommand(repl, args = []) {
   if (result.recovery) console.log(`${colors.dim}${result.recovery}${colors.reset}`);
 }
 
+async function handleFigmaCommand(repl, args = []) {
+  const parsed = parseFlagArgs(args);
+  const [urlArg, outputArg] = parsed.positional;
+  const url = parsed.url || parsed.figmaUrl || urlArg;
+  if (!url || url === 'help' || url === '--help') {
+    console.log(`${colors.cyan}/figma usage:${colors.reset}`);
+    console.log('  /figma <figma-frame-url> [output.tsx] --force');
+    console.log('  /design-to-code <figma-frame-url> --output src/components/FigmaDesign.tsx');
+    console.log(`${colors.dim}Requires FIGMA_TOKEN in project .env, environment, or --token.${colors.reset}`);
+    return;
+  }
+
+  const payload = {
+    url: String(url).replace(/^['"]|['"]$/g, ''),
+    output_path: parsed.output || parsed.out || parsed.component || outputArg,
+    assets_dir: parsed.assets || parsed.assetsDir,
+    force: parsed.force === true,
+    no_tailwind: parsed.noTailwind === true || parsed.noTailwind === 'true',
+    token: parsed.token,
+  };
+  console.log(`${colors.cyan}DesignToCode:${colors.reset} ${payload.url}`);
+  const result = await repl.tools.execute('DesignToCode', payload, { cwd: repl.projectPath });
+  if (result.success) {
+    console.log(`${colors.green}OK DesignToCode${result.outputPath ? ` -> ${result.outputPath}` : ''}${colors.reset}`);
+    const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
+    if (output) console.log(output.length > 4000 ? `${output.slice(0, 4000)}...` : output);
+    return;
+  }
+  console.log(`${colors.red}FAIL DesignToCode: ${result.error || 'unknown error'}${colors.reset}`);
+  if (result.recovery) console.log(`${colors.dim}${result.recovery}${colors.reset}`);
+}
+
 /**
  * Handle slash commands in the Winter REPL.
  * Delegated from WinterREPL.handleSlashCommand to reduce file size.
@@ -465,6 +497,12 @@ export async function handleSlashCommand(repl, input) {
 
     case '/browser':
       await handleBrowserCommand(repl, args);
+      return;
+
+    case '/figma':
+    case '/design-to-code':
+    case '/vibefigma':
+      await handleFigmaCommand(repl, args);
       return;
 
     // Inline Completion

@@ -259,6 +259,19 @@ test('PromptBuilder tells models to prefer chrome-devtools MCP for live browser 
   assert.match(result, /MCP/);
 });
 
+test('PromptBuilder tells models to use DesignToCode for Figma URLs', () => {
+  const builder = new PromptBuilder({
+    session: createMockSession(),
+    projectPath: '/test',
+    compactText: (text, maxChars) => String(text).slice(0, maxChars),
+  });
+
+  const result = builder.buildSystemPrompt('');
+
+  assert.match(result, /DesignToCode/);
+  assert.match(result, /Figma/);
+});
+
 test('PromptBuilder tells models to use OpenBrowser for visible Chrome launch', () => {
   const builder = new PromptBuilder({
     session: createMockSession(),

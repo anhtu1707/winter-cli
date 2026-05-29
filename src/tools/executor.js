@@ -479,6 +479,23 @@ export class ToolExecutor {
       },
       {
         type: 'function',
+        name: 'DesignToCode',
+        description: 'Convert a selected Figma design/frame URL into project code using the bundled vibefigma workflow. Use when the user gives a Figma URL, asks for Figma design-to-code, or asks to implement a selected Figma frame. Requires FIGMA_TOKEN in env/.env or a token argument.',
+        parameters: {
+          type: 'object',
+          properties: {
+            url: { type: 'string', description: 'Figma design/file URL. Best results require a selected node-id in the URL.' },
+            output_path: { type: 'string', description: 'Optional React component output path, e.g. src/components/FigmaDesign.tsx' },
+            assets_dir: { type: 'string', description: 'Optional asset output directory, default handled by vibefigma.' },
+            force: { type: 'boolean', description: 'Overwrite existing generated files without prompting.' },
+            no_tailwind: { type: 'boolean', description: 'Generate regular CSS instead of Tailwind.' },
+            token: { type: 'string', description: 'Optional Figma access token. Prefer FIGMA_TOKEN env/.env instead.' },
+          },
+          required: ['url']
+        }
+      },
+      {
+        type: 'function',
         name: 'WebFetch',
         description: 'Fetch web page content.',
         parameters: {
@@ -625,6 +642,8 @@ export class ToolExecutor {
         return await this.visibleBrowser(input, cwd);
       case 'OpenBrowser':
         return await this.openBrowser(input.url ?? input.uri ?? input.href, input.browser);
+      case 'DesignToCode':
+        return await this.designToCode(input, cwd);
       case 'WebFetch':
         return await this.webFetch(input.url ?? input.uri ?? input.href, input.prompt ?? input.query ?? input.extract);
       case 'WebSearch':
@@ -693,7 +712,7 @@ export class ToolExecutor {
         return {
           success: false,
           error: `Unknown tool: ${toolName}`,
-          availableTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'TaskCreate', 'TaskUpdate', 'TaskList', 'MCP', 'Parallel', 'OpenBrowser', 'VisibleBrowser', 'BrowserDebug', 'WebFetch', 'WebSearch', 'WebArchive', 'HtmlEffectiveness', 'NotebookRead', 'NotebookEdit', 'TodoWrite', 'TodoList', 'ScheduleWakeup', 'AskUserQuestion', 'Agent', 'DelegateTask', 'ParallelAgent', 'InsertText', 'StrReplaceAll'],
+          availableTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'TaskCreate', 'TaskUpdate', 'TaskList', 'MCP', 'Parallel', 'OpenBrowser', 'VisibleBrowser', 'BrowserDebug', 'DesignToCode', 'WebFetch', 'WebSearch', 'WebArchive', 'HtmlEffectiveness', 'NotebookRead', 'NotebookEdit', 'TodoWrite', 'TodoList', 'ScheduleWakeup', 'AskUserQuestion', 'Agent', 'DelegateTask', 'ParallelAgent', 'InsertText', 'StrReplaceAll'],
           recovery: 'Call one of the available tools. For file writes use Write with { "file_path": "...", "content": "..." }. For shell commands use Bash with { "command": "..." }.',
         };
     }
@@ -850,6 +869,44 @@ export class ToolExecutor {
       const url = pick('url', 'uri', 'href') || 'about:blank';
       const browser = pick('browser', 'app') || 'chrome';
       return { success: true, coerced: true, args: { ...args, url, browser } };
+    }
+
+    if (toolName === 'DesignToCode') {
+      const url = pick('url', 'figmaUrl', 'figma_url', 'href', 'uri', 'input');
+      if (!url) {
+        return {
+          success: false,
+          error: 'Figma url is required',
+          recovery: 'Example: DesignToCode {"url":"https://www.figma.com/design/FILE/Name?node-id=1-2","output_path":"src/components/FigmaDesign.tsx"}',
+        };
+      }
+      if (!/^https:\/\/(?:www\.)?figma\.com\/(?:design|file)\//i.test(url)) {
+        return {
+          success: false,
+          error: 'DesignToCode requires a Figma design/file URL',
+          recovery: 'Copy a Figma frame/component link such as https://www.figma.com/design/FILE/Name?node-id=1-2.',
+        };
+      }
+      const outputPath = pick('output_path', 'outputPath', 'component', 'path', 'file');
+      const assetsDir = pick('assets_dir', 'assetsDir', 'assets');
+      if (outputPath) {
+        const outputSafety = await this.validateWorkspacePath(this.resolveInputPath(outputPath, cwd), 'DesignToCode output path');
+        if (outputSafety?.success === false) return outputSafety;
+      }
+      if (assetsDir) {
+        const assetsSafety = await this.validateWorkspacePath(this.resolveInputPath(assetsDir, cwd), 'DesignToCode assets directory');
+        if (assetsSafety?.success === false) return assetsSafety;
+      }
+      return {
+        success: true,
+        coerced: true,
+        args: {
+          ...args,
+          url,
+          output_path: outputPath,
+          assets_dir: assetsDir,
+        },
+      };
     }
 
     if (toolName === 'Agent' || toolName === 'DelegateTask') {
@@ -1171,6 +1228,13 @@ export class ToolExecutor {
       browserdebug: 'BrowserDebug',
       browser: 'BrowserDebug',
       browserinspect: 'BrowserDebug',
+      designtocode: 'DesignToCode',
+      designcode: 'DesignToCode',
+      figma: 'DesignToCode',
+      figmatocode: 'DesignToCode',
+      figmacode: 'DesignToCode',
+      vibefigma: 'DesignToCode',
+      figmadesign: 'DesignToCode',
       parallel: 'Parallel',
       parallelexecute: 'Parallel',
       paralleltools: 'Parallel',
@@ -1247,6 +1311,7 @@ export class ToolExecutor {
       case 'WebArchive':
       case 'BrowserDebug':
       case 'VisibleBrowser':
+      case 'DesignToCode':
         return { url: value };
       case 'TaskCreate':
       case 'TodoWrite':
@@ -2149,6 +2214,84 @@ export class ToolExecutor {
       parallel: true,
       results,
     };
+  }
+
+  async readProjectEnvValue(name, cwd = this.projectPath) {
+    if (process.env[name]) return process.env[name];
+    try {
+      const envPath = path.join(cwd || this.projectPath, '.env');
+      const raw = await fs.readFile(envPath, 'utf8');
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const pattern = new RegExp(`^\\s*${escaped}\\s*=\\s*(.*)\\s*$`, 'm');
+      const match = raw.match(pattern);
+      if (!match) return '';
+      return String(match[1] || '').trim().replace(/^['"]|['"]$/g, '');
+    } catch {
+      return '';
+    }
+  }
+
+  async designToCode(input = {}, cwd = this.projectPath) {
+    const url = String(input.url || input.figmaUrl || input.figma_url || input.href || input.uri || '').trim();
+    if (!url) {
+      return {
+        success: false,
+        error: 'Figma url is required',
+        recovery: 'Use DesignToCode {"url":"https://www.figma.com/design/FILE/Name?node-id=1-2","output_path":"src/components/FigmaDesign.tsx"}.',
+      };
+    }
+
+    const token = String(input.token || input.access_token || input.accessToken || await this.readProjectEnvValue('FIGMA_TOKEN', cwd) || await this.readProjectEnvValue('FIGMA_ACCESS_TOKEN', cwd) || '').trim();
+    if (!token) {
+      return {
+        success: false,
+        error: 'FIGMA_TOKEN is required for Figma design-to-code',
+        url,
+        recovery: 'Add FIGMA_TOKEN to your project .env or pass token to DesignToCode. Then retry with a selected frame URL that includes node-id.',
+      };
+    }
+
+    const args = ['-y', 'vibefigma', url];
+    const outputPath = input.output_path || input.outputPath || input.component || input.path || input.file;
+    const assetsDir = input.assets_dir || input.assetsDir || input.assets;
+    if (outputPath) args.push('-c', String(outputPath));
+    if (assetsDir) args.push('-a', String(assetsDir));
+    if (input.force) args.push('--force');
+    if (input.no_tailwind || input.noTailwind) args.push('--no-tailwind');
+
+    const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+    try {
+      const { stdout, stderr } = await execFileAsync(command, args, {
+        cwd,
+        env: { ...process.env, FIGMA_TOKEN: token },
+        timeout: Number(input.timeout || input.timeout_ms || input.timeoutMs || 180000),
+        maxBuffer: 20 * 1024 * 1024,
+        windowsHide: true,
+      });
+      return {
+        success: true,
+        tool: 'DesignToCode',
+        url,
+        outputPath: outputPath || null,
+        assetsDir: assetsDir || null,
+        command: `npx -y vibefigma "${url}"${outputPath ? ` -c ${outputPath}` : ''}${assetsDir ? ` -a ${assetsDir}` : ''}${input.force ? ' --force' : ''}${input.no_tailwind || input.noTailwind ? ' --no-tailwind' : ''}`,
+        stdout,
+        stderr,
+        recovery: 'Review the generated component, then run the project typecheck/build and clean up responsiveness if needed.',
+      };
+    } catch (error) {
+      return {
+        success: false,
+        tool: 'DesignToCode',
+        url,
+        outputPath: outputPath || null,
+        error: error.message,
+        exitCode: error.code,
+        stdout: error.stdout || '',
+        stderr: error.stderr || '',
+        recovery: 'Check that the Figma URL is a selected frame/component, FIGMA_TOKEN is valid, and network access can reach Figma. Then retry DesignToCode.',
+      };
+    }
   }
 
   async webFetch(url, prompt) {
